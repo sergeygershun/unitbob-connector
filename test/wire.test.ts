@@ -56,6 +56,38 @@ test('putGraph hits PUT /repos/:id/graph and returns the digest', async () => {
   );
 });
 
+test('putMapBuild hits PUT /repos/:id/map_build and returns the version payload', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        map_version_id: 9,
+        map_digest: 'map',
+        graph_digest: 'graph',
+        map_url: 'http://host/repos/3/map',
+        reused: false,
+      }),
+    async (config, hits) => {
+      const result = await new Wire(config).putMapBuild({ graph: { nodes: [] }, map_document: { version: 3 } });
+      assert.equal(result.map_url, 'http://host/repos/3/map');
+      assert.equal(hits[0].method, 'PUT');
+      assert.equal(hits[0].url, '/repos/3/map_build');
+      assert.deepEqual(JSON.parse(hits[0].body), { graph: { nodes: [] }, map_document: { version: 3 } });
+    },
+  );
+});
+
+test('putMapBuild surfaces validation errors as WireError', async () => {
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'blocks must not be empty' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putMapBuild({ graph: {}, map_document: {} }),
+        (err: unknown) => err instanceof WireError && /422/.test((err as Error).message),
+      );
+    },
+  );
+});
+
 test('getRecipe hits GET /recipes/:name', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { name: 'decompose', version: 'v1', text: '# recipe' }),

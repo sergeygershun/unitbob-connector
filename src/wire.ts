@@ -23,6 +23,14 @@ export interface RunSummary {
   lamps: unknown;
 }
 
+export interface MapBuildUploadResult {
+  map_version_id: number;
+  map_digest: string;
+  graph_digest: string;
+  map_url: string;
+  reused: boolean;
+}
+
 // Raised when the server cannot be reached or answers with an error status.
 // Verbs surface its message and exit non-zero; they never fabricate a result.
 export class WireError extends Error {}
@@ -39,6 +47,14 @@ export class Wire {
     const res = await this.sendRawJson('PUT', this.repoPath('graph'), rawGraphJson);
     await this.ensureOk(res, `PUT ${this.repoPath('graph')}`);
     return (await res.json()) as { graph_digest: string };
+  }
+
+  // PUT /repos/:id/map_build — upload the fresh graph and host-built map as one
+  // atomic blob. Rails validates, versions, and computes all digests.
+  async putMapBuild(payload: { graph: unknown; map_document: unknown }): Promise<MapBuildUploadResult> {
+    const res = await this.send('PUT', this.repoPath('map_build'), payload);
+    await this.ensureOk(res, `PUT ${this.repoPath('map_build')}`);
+    return (await res.json()) as MapBuildUploadResult;
   }
 
   // GET /recipes/:name — fetch a recipe at call time. Recipes live on Rails so
