@@ -1,0 +1,23 @@
+{
+  "name": "unitbob",
+  "version": "0.1.0",
+  "description": "Unitbob connector — thin local hands for the Unitbob Rails brain. Owns no domain logic: it runs tools, relays bytes over the wire, and prints what the server returns.",
+  "type": "module",
+  "bin": {
+    "unitbob": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
