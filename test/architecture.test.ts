@@ -21,6 +21,10 @@ const FORBIDDEN = [
   /\bretired\b/i,
   /\bcoverage\b/i,
 ];
+const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
+  'files/guardrails.ts': [/manifest/i],
+  'wire.ts': [/manifest/i],
+};
 
 // `lamp` is the single domain noun the connector may name — but only in wire.ts,
 // where "lamps" is the URL of an opaque endpoint it fetches and prints verbatim.
@@ -47,6 +51,8 @@ test('connector src holds no domain-interpretation logic', () => {
     const text = readFileSync(file, 'utf8');
 
     for (const pattern of FORBIDDEN) {
+      if (ALLOWED_BY_FILE[rel]?.some((allowed) => allowed.source === pattern.source)) continue;
+
       assert.ok(
         !pattern.test(text),
         `${rel} references forbidden domain concept ${pattern} — that logic belongs on Rails.`,

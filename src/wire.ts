@@ -9,11 +9,18 @@
 // "lamps" is just the URL of a blob the connector fetches and prints verbatim —
 // not something it reasons about.
 import type { Config } from './config.ts';
+import type { SuiteBlob } from './files/guardrails.ts';
 
 export interface Recipe {
   name: string;
   version: string;
   text: string;
+}
+
+export interface RunSummary {
+  summary: string;
+  map_url: string;
+  lamps: unknown;
 }
 
 // Raised when the server cannot be reached or answers with an error status.
@@ -48,20 +55,20 @@ export class Wire {
 
   // GET /repos/:id/suite — the current suite blob, or null when none exists yet
   // (the server answers 204). Returned opaque; materializing it is spec 18.
-  async getSuite(): Promise<unknown | null> {
+  async getSuite(): Promise<SuiteBlob | null> {
     const res = await this.send('GET', this.repoPath('suite'));
     if (res.status === 204) return null;
     await this.ensureOk(res, `GET ${this.repoPath('suite')}`);
-    return await res.json();
+    return this.decodeSuiteBlob(await res.json());
   }
 
   // POST /repos/:id/runs — ship the raw runner output; the server parses it and
   // returns the run summary. The connector neither builds nor reads the payload
   // body beyond passing it along.
-  async postRun(payload: unknown): Promise<unknown> {
+  async postRun(payload: unknown): Promise<RunSummary> {
     const res = await this.send('POST', this.repoPath('runs'), payload);
     await this.ensureOk(res, `POST ${this.repoPath('runs')}`);
-    return await res.json();
+    return (await res.json()) as RunSummary;
   }
 
   // GET /repos/:id/lamps — the server's current run summary, printed verbatim.
@@ -73,6 +80,26 @@ export class Wire {
 
   private repoPath(suffix: string): string {
     return `${this.config.server}/repos/${this.config.repoId}/${suffix}`;
+  }
+
+  private decodeSuiteBlob(payload: unknown): SuiteBlob {
+    if (!payload || typeof payload !== 'object') {
+      throw new WireError(`GET ${this.repoPath('suite')} returned a malformed suite payload.`);
+    }
+
+    const suite = payload as Record<string, unknown>;
+    if (
+      typeof suite.suite_digest !== 'string' ||
+      typeof suite.spec_rb !== 'string' ||
+      !Object.hasOwn(suite, 'manifest')
+    ) {
+      throw new WireError(
+        `GET ${this.repoPath('suite')} returned a malformed suite payload: ` +
+          'expected suite_digest, spec_rb, and manifest.',
+      );
+    }
+
+    return suite as unknown as SuiteBlob;
   }
 
   private async send(method: string, url: string, body?: unknown): Promise<Response> {

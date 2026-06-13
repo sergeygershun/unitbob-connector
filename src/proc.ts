@@ -16,10 +16,10 @@ export const GRAPHIFY_TIMEOUT_MS = 10 * 60 * 1000;
 export function runProcess(
   command: string,
   args: string[] = [],
-  options: { cwd?: string; timeoutMs?: number } = {},
+  options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<ProcResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: options.cwd });
+    const child = spawn(command, args, { cwd: options.cwd, env: options.env });
     let stdout = '';
     let stderr = '';
     let finished = false;

@@ -79,13 +79,16 @@ test('getRecipe maps 404 to a WireError', async () => {
 
 test('getSuite returns the blob, and null on 204', async () => {
   await withServer(
-    (hit, res) => {
-      if (hit.url === '/repos/3/suite') json(res, 200, { suite_digest: 'd1' });
-      else res.writeHead(404).end();
+    (_hit, res) => {
+      json(res, 200, { suite_digest: 'd1', spec_rb: 'RSpec.describe("x") {}', manifest: { guardrails_id: 'g1' } });
     },
     async (config) => {
       const suite = await new Wire(config).getSuite();
-      assert.deepEqual(suite, { suite_digest: 'd1' });
+      assert.deepEqual(suite, {
+        suite_digest: 'd1',
+        spec_rb: 'RSpec.describe("x") {}',
+        manifest: { guardrails_id: 'g1' },
+      });
     },
   );
 
@@ -93,6 +96,21 @@ test('getSuite returns the blob, and null on 204', async () => {
     (_hit, res) => res.writeHead(204).end(),
     async (config) => {
       assert.equal(await new Wire(config).getSuite(), null);
+    },
+  );
+});
+
+test('getSuite rejects malformed suite payloads before materialization', async () => {
+  await withServer(
+    (hit, res) => {
+      if (hit.url === '/repos/3/suite') json(res, 200, { suite_digest: 'd1' });
+      else res.writeHead(404).end();
+    },
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).getSuite(),
+        (err: unknown) => err instanceof WireError && /malformed suite payload/.test((err as Error).message),
+      );
     },
   );
 });

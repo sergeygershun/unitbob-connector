@@ -18,7 +18,8 @@ Verbs:
   recipe <name>        Fetch and print a recipe from the server.
   show                 Print the link to this project's map.
   map                  Extract the code graph and upload it. Full map build lands in spec 19.
-  run                  Run the guardrail suite and report.     (spec 18)
+  check                Run the guardrail suite locally and report.
+  run                  Alias for check.
 
 Config: .unitbob.json at your project root — { "server": "...", "repo_id": <number> }.`;
 
@@ -45,6 +46,7 @@ async function main(argv: string[]): Promise<number> {
         await map(loadConfig(), args);
         return 0;
       case 'run':
+      case 'check':
         await run(loadConfig(), args);
         return 0;
       default:
