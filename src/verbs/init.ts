@@ -5,6 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const CONFIG_FILE = '.unitbob.json';
+const ARTIFACT_DIR = '.unitbob/';
 const GITIGNORE = '.gitignore';
 
 export async function init(_args: string[]): Promise<void> {
@@ -27,12 +28,13 @@ function ensureGitignored(cwd: string): void {
   let current = '';
   if (existsSync(gitignorePath)) {
     current = readFileSync(gitignorePath, 'utf8');
-    const alreadyListed = current
-      .split('\n')
-      .some((line) => line.trim() === CONFIG_FILE);
-    if (alreadyListed) return;
   }
+
+  const lines = current.split('\n').map((line) => line.trim());
+  const additions = [CONFIG_FILE, ARTIFACT_DIR].filter((line) => !lines.includes(line));
+  if (additions.length === 0) return;
+
   const prefix = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
-  writeFileSync(gitignorePath, `${current}${prefix}${CONFIG_FILE}\n`);
-  process.stdout.write(`Added ${CONFIG_FILE} to ${GITIGNORE}.\n`);
+  writeFileSync(gitignorePath, `${current}${prefix}${additions.join('\n')}\n`);
+  process.stdout.write(`Added ${additions.join(', ')} to ${GITIGNORE}.\n`);
 }

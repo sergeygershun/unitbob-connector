@@ -29,7 +29,7 @@ async function withServer(
 
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const { port } = server.address() as AddressInfo;
-  const config: Config = { server: `http://127.0.0.1:${port}`, repoId: 3 };
+  const config: Config = { server: `http://127.0.0.1:${port}`, repoId: 3, projectRoot: '/project' };
   try {
     await fn(config, hits);
   } finally {
@@ -46,11 +46,12 @@ test('putGraph hits PUT /repos/:id/graph and returns the digest', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { graph_digest: 'abc' }),
     async (config, hits) => {
-      const result = await new Wire(config).putGraph({ nodes: [] });
+      const rawGraphJson = '{\n  "nodes": []\n}\n';
+      const result = await new Wire(config).putGraph(rawGraphJson);
       assert.deepEqual(result, { graph_digest: 'abc' });
       assert.equal(hits[0].method, 'PUT');
       assert.equal(hits[0].url, '/repos/3/graph');
-      assert.deepEqual(JSON.parse(hits[0].body), { nodes: [] });
+      assert.equal(hits[0].body, rawGraphJson);
     },
   );
 });
@@ -120,7 +121,7 @@ test('getLamps hits GET /repos/:id/lamps', async () => {
 
 test('an unreachable server throws an actionable WireError, never a fabricated result', async () => {
   // Port 1 is reserved and nothing listens there → connection refused.
-  const config: Config = { server: 'http://127.0.0.1:1', repoId: 3 };
+  const config: Config = { server: 'http://127.0.0.1:1', repoId: 3, projectRoot: '/project' };
   await assert.rejects(
     () => new Wire(config).getLamps(),
     (err: unknown) => err instanceof WireError && /Cannot reach the Unitbob server/.test((err as Error).message),

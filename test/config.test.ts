@@ -12,7 +12,7 @@ function tmpProject(): string {
 test('loads a valid .unitbob.json', () => {
   const dir = tmpProject();
   writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server: 'https://host', repo_id: 3 }));
-  assert.deepEqual(loadConfig(dir), { server: 'https://host', repoId: 3 });
+  assert.deepEqual(loadConfig(dir), { server: 'https://host', repoId: 3, projectRoot: dir });
 });
 
 test('trims a trailing slash on server', () => {
@@ -26,7 +26,7 @@ test('finds the config by walking up from a subdirectory', () => {
   writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server: 'https://host', repo_id: 7 }));
   const nested = join(dir, 'a', 'b');
   mkdirSync(nested, { recursive: true });
-  assert.equal(loadConfig(nested).repoId, 7);
+  assert.deepEqual(loadConfig(nested), { server: 'https://host', repoId: 7, projectRoot: dir });
 });
 
 test('missing config fails with a setup message, not a stack trace', () => {

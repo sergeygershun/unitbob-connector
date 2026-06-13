@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 export interface Config {
   server: string;
   repoId: number;
+  projectRoot: string;
 }
 
 const CONFIG_FILE = '.unitbob.json';
@@ -60,5 +61,5 @@ export function loadConfig(startDir: string = process.cwd()): Config {
   }
 
   // Trim a trailing slash so callers can join paths without doubling up.
-  return { server: server.trim().replace(/\/+$/, ''), repoId };
+  return { server: server.trim().replace(/\/+$/, ''), repoId, projectRoot: dirname(path) };
 }

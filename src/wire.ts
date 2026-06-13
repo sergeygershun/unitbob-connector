@@ -27,9 +27,9 @@ export class Wire {
     this.config = config;
   }
 
-  // PUT /repos/:id/graph — upload the graphify extract, get its digest back.
-  async putGraph(graph: unknown): Promise<{ graph_digest: string }> {
-    const res = await this.send('PUT', this.repoPath('graph'), graph);
+  // PUT /repos/:id/graph — upload graphify's raw graph.json, get its digest back.
+  async putGraph(rawGraphJson: string): Promise<{ graph_digest: string }> {
+    const res = await this.sendRawJson('PUT', this.repoPath('graph'), rawGraphJson);
     await this.ensureOk(res, `PUT ${this.repoPath('graph')}`);
     return (await res.json()) as { graph_digest: string };
   }
@@ -81,6 +81,22 @@ export class Wire {
         method,
         headers: body === undefined ? undefined : { 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      throw new WireError(
+        `Cannot reach the Unitbob server at ${this.config.server} ` +
+          `(${(err as Error).message}). Check that the server is running and that ` +
+          `"server" in .unitbob.json is correct.`,
+      );
+    }
+  }
+
+  private async sendRawJson(method: string, url: string, body: string): Promise<Response> {
+    try {
+      return await fetch(url, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body,
       });
     } catch (err) {
       throw new WireError(
