@@ -143,6 +143,82 @@ test('putSuiteBuild surfaces validation errors as WireError', async () => {
   );
 });
 
+test('getFixPacket hits GET /repos/:id/fix_packet?test_id= and relays the packet', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        headline: 'Billing can still take a payment',
+        test_body: 'expect(true).to be true',
+        failure_message: 'boom',
+        anchor: 'BillingService#charge',
+        message: 'Ready to fix «Billing can still take a payment».',
+      }),
+    async (config, hits) => {
+      const packet = await new Wire(config).getFixPacket('guard-1');
+      assert.equal(packet.anchor, 'BillingService#charge');
+      assert.equal(hits[0].method, 'GET');
+      assert.equal(hits[0].url, '/repos/3/fix_packet?test_id=guard-1');
+    },
+  );
+});
+
+test('getFixPacket surfaces a 422 (non-failed) as a WireError', async () => {
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'That check is not failing.' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).getFixPacket('guard-1'),
+        (err: unknown) => err instanceof WireError && /not failing/.test((err as Error).message),
+      );
+    },
+  );
+});
+
+test('getReshapePacket relays recipe + packet + suite_digest, and maps 409 to a clean WireError', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        recipe: { name: 'generate', version: 'g1', text: 'g' },
+        packet: { block: { id: 'block:billing' } },
+        suite_digest: 'sha256-suite',
+      }),
+    async (config, hits) => {
+      const packet = await new Wire(config).getReshapePacket('guard-1');
+      assert.equal(packet.suite_digest, 'sha256-suite');
+      assert.equal(hits[0].url, '/repos/3/reshape_packet?test_id=guard-1');
+    },
+  );
+
+  await withServer(
+    (_hit, res) => json(res, 409, { error: 'The code is gone — retire instead.' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).getReshapePacket('guard-1'),
+        (err: unknown) => err instanceof WireError && /retire instead/.test((err as Error).message),
+      );
+    },
+  );
+});
+
+test('postReshapeCandidate and postReshapeCommit hit the right endpoints', async () => {
+  await withServer(
+    (hit, res) => {
+      if (hit.url === '/repos/3/reshape_candidate') json(res, 200, { candidate_spec: 'spec', red_message: 'nope' });
+      else json(res, 200, { suite_version_id: 1, suite_digest: 'd', map_url: 'u', message: 'ok' });
+    },
+    async (config, hits) => {
+      const c = await new Wire(config).postReshapeCandidate({ test_id: 'g' });
+      assert.equal(c.candidate_spec, 'spec');
+      const commit = await new Wire(config).postReshapeCommit({ test_id: 'g', gate: 'green' });
+      assert.equal(commit.message, 'ok');
+      assert.deepEqual(hits.map((h) => `${h.method} ${h.url}`), [
+        'POST /repos/3/reshape_candidate',
+        'POST /repos/3/reshape',
+      ]);
+    },
+  );
+});
+
 test('getRecipe hits GET /recipes/:name', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { name: 'decompose', version: 'v1', text: '# recipe' }),

@@ -48,6 +48,41 @@ export interface SuiteBuildUploadResult {
   counts: Record<string, number>;
 }
 
+// The per-test Fix data packet (spec 21). Carries no source — the host reads its
+// own checkout; the connector relays the packet down and prints `message`.
+export interface FixPacket {
+  headline: string;
+  test_body: string;
+  failure_message: string;
+  anchor: string | null;
+  message: string;
+}
+
+// The reshape task the host regenerates one body from (spec 21): the bundled
+// generate recipe, a single-element packet (opaque to the connector), and the
+// current suite_digest the host must echo back.
+export interface ReshapePacket {
+  recipe: Recipe;
+  packet: unknown;
+  suite_digest: string;
+}
+
+// The Rails-assembled candidate the connector runs as the local gate. Rails owns
+// the suite header; `red_message` is the business string to print if the gate is
+// red. Nothing is committed yet.
+export interface ReshapeCandidateResult {
+  candidate_spec: string;
+  red_message: string;
+}
+
+// The committed reshape (a new versioned snapshot). `message` is printed verbatim.
+export interface ReshapeCommitResult {
+  suite_version_id: number;
+  suite_digest: string;
+  map_url: string;
+  message: string;
+}
+
 // Raised when the server cannot be reached or answers with an error status.
 // Verbs surface its message and exit non-zero; they never fabricate a result.
 export class WireError extends Error {}
@@ -91,6 +126,42 @@ export class Wire {
     return (await res.json()) as SuiteBuildUploadResult;
   }
 
+  // GET /repos/:id/fix_packet?test_id= — the per-test Fix data packet. Relayed
+  // down for the host to repair local code; 422 (non-failed / stale / no suite)
+  // surfaces as a WireError carrying the server's business reason.
+  async getFixPacket(testId: string): Promise<FixPacket> {
+    const url = this.repoQueryPath('fix_packet', testId);
+    const res = await this.send('GET', url);
+    await this.ensureOk(res, `GET ${url}`);
+    return (await res.json()) as FixPacket;
+  }
+
+  // GET /repos/:id/reshape_packet?test_id= — the reshape task. A 409 (the code is
+  // gone) surfaces as a WireError carrying the server's "retire instead" message.
+  async getReshapePacket(testId: string): Promise<ReshapePacket> {
+    const url = this.repoQueryPath('reshape_packet', testId);
+    const res = await this.send('GET', url);
+    if (res.status === 409) throw new WireError(await this.errorMessage(res, url));
+    await this.ensureOk(res, `GET ${url}`);
+    return (await res.json()) as ReshapePacket;
+  }
+
+  // POST /repos/:id/reshape_candidate — upload the host's one new body; get back
+  // the Rails-assembled candidate spec (not committed) to run as the local gate.
+  async postReshapeCandidate(payload: unknown): Promise<ReshapeCandidateResult> {
+    const res = await this.send('POST', this.repoPath('reshape_candidate'), payload);
+    await this.ensureOk(res, `POST ${this.repoPath('reshape_candidate')}`);
+    return (await res.json()) as ReshapeCandidateResult;
+  }
+
+  // POST /repos/:id/reshape — commit a reshape that passed the local gate. Sends
+  // the same body it ran plus gate: "green"; Rails re-assembles and versions it.
+  async postReshapeCommit(payload: unknown): Promise<ReshapeCommitResult> {
+    const res = await this.send('POST', this.repoPath('reshape'), payload);
+    await this.ensureOk(res, `POST ${this.repoPath('reshape')}`);
+    return (await res.json()) as ReshapeCommitResult;
+  }
+
   // GET /recipes/:name — fetch a recipe at call time. Recipes live on Rails so
   // the connector and Skill carry no recipe text (spec 15, acceptance criteria).
   async getRecipe(name: string): Promise<Recipe> {
@@ -130,6 +201,22 @@ export class Wire {
 
   private repoPath(suffix: string): string {
     return `${this.config.server}/repos/${this.config.repoId}/${suffix}`;
+  }
+
+  private repoQueryPath(suffix: string, testId: string): string {
+    return `${this.repoPath(suffix)}?test_id=${encodeURIComponent(testId)}`;
+  }
+
+  // The server's business-language error from a JSON `{ error }` body, falling
+  // back to the raw status when the body is not the shape we expect.
+  private async errorMessage(res: Response, url: string): Promise<string> {
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body.error === 'string' && body.error.trim()) return body.error;
+    } catch {
+      // fall through to the generic status message
+    }
+    return `GET ${url} failed: ${res.status} ${res.statusText}`;
   }
 
   private decodeSuiteBlob(payload: unknown): SuiteBlob {
