@@ -9,6 +9,8 @@ import { run } from './verbs/run.ts';
 import { init } from './verbs/init.ts';
 import { mapPrepare } from './verbs/mapPrepare.ts';
 import { putMapBuild } from './verbs/putMapBuild.ts';
+import { suitePrepare } from './verbs/suitePrepare.ts';
+import { putSuiteBuild } from './verbs/putSuiteBuild.ts';
 
 const USAGE = `unitbob — thin local hands for the Unitbob server.
 
@@ -20,6 +22,8 @@ Verbs:
   show                 Print the link to this project's map.
   map-prepare          Internal: extract graph and write the host map-build request.
   put-map-build        Internal: upload the host-built map and graph.
+  suite-prepare        Internal: fetch the recipe and packets, write the host suite-build request.
+  put-suite-build      Internal: upload the host-built guardrail suite.
   check                Run the guardrail suite locally and report.
   run                  Alias for check.
 
@@ -49,6 +53,12 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case 'put-map-build':
         await putMapBuild(loadConfig(), args);
+        return 0;
+      case 'suite-prepare':
+        await suitePrepare(loadConfig(), args);
+        return 0;
+      case 'put-suite-build':
+        await putSuiteBuild(loadConfig(), args);
         return 0;
       case 'run':
       case 'check':
