@@ -94,13 +94,6 @@ export class Wire {
     this.config = config;
   }
 
-  // PUT /repos/:id/graph — upload graphify's raw graph.json, get its digest back.
-  async putGraph(rawGraphJson: string): Promise<{ graph_digest: string }> {
-    const res = await this.sendRawJson('PUT', this.repoPath('graph'), rawGraphJson);
-    await this.ensureOk(res, `PUT ${this.repoPath('graph')}`);
-    return (await res.json()) as { graph_digest: string };
-  }
-
   // PUT /repos/:id/map_build — upload the fresh graph and host-built map as one
   // atomic blob. Rails validates, versions, and computes all digests.
   async putMapBuild(payload: { graph: unknown; map_document: unknown }): Promise<MapBuildUploadResult> {
@@ -245,22 +238,6 @@ export class Wire {
         method,
         headers: body === undefined ? undefined : { 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
-      });
-    } catch (err) {
-      throw new WireError(
-        `Cannot reach the Unitbob server at ${this.config.server} ` +
-          `(${(err as Error).message}). Check that the server is running and that ` +
-          `"server" in .unitbob.json is correct.`,
-      );
-    }
-  }
-
-  private async sendRawJson(method: string, url: string, body: string): Promise<Response> {
-    try {
-      return await fetch(url, {
-        method,
-        headers: { 'content-type': 'application/json' },
-        body,
       });
     } catch (err) {
       throw new WireError(
