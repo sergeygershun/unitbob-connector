@@ -88,6 +88,61 @@ test('putMapBuild surfaces validation errors as WireError', async () => {
   );
 });
 
+test('getSuitePackets hits GET /repos/:id/suite_packets and relays the payload', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { map_digest: 'sha256-map', packets: [{ block: { id: 'block:billing' } }] }),
+    async (config, hits) => {
+      const result = await new Wire(config).getSuitePackets();
+      assert.equal(result.map_digest, 'sha256-map');
+      assert.equal(hits[0].method, 'GET');
+      assert.equal(hits[0].url, '/repos/3/suite_packets');
+    },
+  );
+});
+
+test('getSuitePackets surfaces a 409 (no current map) as a WireError', async () => {
+  await withServer(
+    (_hit, res) => json(res, 409, { error: 'No current map — run `/unitbob map` first.' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).getSuitePackets(),
+        (err: unknown) => err instanceof WireError && /unitbob map/.test((err as Error).message),
+      );
+    },
+  );
+});
+
+test('putSuiteBuild hits PUT /repos/:id/suite_build and returns the new suite identity', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        suite_version_id: 9,
+        suite_digest: 'sha256-suite',
+        map_url: 'http://host/repos/3',
+        counts: { covered: 2 },
+      }),
+    async (config, hits) => {
+      const result = await new Wire(config).putSuiteBuild({ map_digest: 'sha256-map', blocks: [] });
+      assert.equal(result.suite_version_id, 9);
+      assert.equal(hits[0].method, 'PUT');
+      assert.equal(hits[0].url, '/repos/3/suite_build');
+      assert.deepEqual(JSON.parse(hits[0].body), { map_digest: 'sha256-map', blocks: [] });
+    },
+  );
+});
+
+test('putSuiteBuild surfaces validation errors as WireError', async () => {
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'map_digest does not match the current map' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putSuiteBuild({ map_digest: 'stale', blocks: [] }),
+        (err: unknown) => err instanceof WireError && /422/.test((err as Error).message),
+      );
+    },
+  );
+});
+
 test('getRecipe hits GET /recipes/:name', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { name: 'decompose', version: 'v1', text: '# recipe' }),

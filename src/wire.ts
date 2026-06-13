@@ -31,6 +31,23 @@ export interface MapBuildUploadResult {
   reused: boolean;
 }
 
+// The per-block packets the server cuts from the current map. The connector
+// relays them down to the host untouched — `packets` is an opaque list it never
+// reads into.
+export interface SuitePackets {
+  map_digest: string;
+  packets: unknown[];
+}
+
+export interface SuiteBuildUploadResult {
+  suite_version_id: number;
+  suite_digest: string;
+  map_url: string;
+  // The server-computed tallies, printed verbatim. Kept as a loose map so the
+  // connector names none of the server's domain buckets.
+  counts: Record<string, number>;
+}
+
 // Raised when the server cannot be reached or answers with an error status.
 // Verbs surface its message and exit non-zero; they never fabricate a result.
 export class WireError extends Error {}
@@ -55,6 +72,23 @@ export class Wire {
     const res = await this.send('PUT', this.repoPath('map_build'), payload);
     await this.ensureOk(res, `PUT ${this.repoPath('map_build')}`);
     return (await res.json()) as MapBuildUploadResult;
+  }
+
+  // GET /repos/:id/suite_packets — the per-block packets the host writes the
+  // suite from. Relayed opaque; 409 (no current map) surfaces as a WireError
+  // carrying the server's "run /unitbob map first" guidance.
+  async getSuitePackets(): Promise<SuitePackets> {
+    const res = await this.send('GET', this.repoPath('suite_packets'));
+    await this.ensureOk(res, `GET ${this.repoPath('suite_packets')}`);
+    return (await res.json()) as SuitePackets;
+  }
+
+  // PUT /repos/:id/suite_build — upload the host's structured suite output. The
+  // server validates, assembles, versions, and returns the new suite's identity.
+  async putSuiteBuild(payload: { map_digest: string; blocks: unknown[] }): Promise<SuiteBuildUploadResult> {
+    const res = await this.send('PUT', this.repoPath('suite_build'), payload);
+    await this.ensureOk(res, `PUT ${this.repoPath('suite_build')}`);
+    return (await res.json()) as SuiteBuildUploadResult;
   }
 
   // GET /recipes/:name — fetch a recipe at call time. Recipes live on Rails so
