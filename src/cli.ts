@@ -33,6 +33,11 @@ Verbs:
   check                Run the guardrail suite locally and report.
   run                  Alias for check.
 
+Pipeline: map and suite are built on your machine. \`*-prepare\` writes a request
+packet (with the recipe and paths); you build the artifact at the packet's
+output_path from your local source; \`put-*\` uploads only the structured result.
+\`check\` runs the guardrails locally and reports results to the server.
+
 Config: .unitbob.json at your project root — { "server": "...", "repo_id": <number> }.`;
 
 async function main(argv: string[]): Promise<number> {

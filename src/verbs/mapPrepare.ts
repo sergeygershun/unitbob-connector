@@ -34,4 +34,8 @@ export async function mapPrepare(config: Config, _args: string[] = [], deps?: Pa
   const packet = writeMapBuildRequest(config.projectRoot, { decompose, relate });
 
   process.stdout.write(`Map build request written to ${packet.project_root}/.unitbob/map-build/request.json\n`);
+  process.stdout.write(
+    `Next: build the Map Document at ${packet.output_path} following recipes.decompose and ` +
+      'recipes.relate inside that request, then run `unitbob put-map-build`.\n',
+  );
 }

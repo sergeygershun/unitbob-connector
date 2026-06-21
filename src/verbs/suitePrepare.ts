@@ -28,4 +28,8 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
   });
 
   process.stdout.write(`Suite build request written to ${request.project_root}/.unitbob/suite-build/request.json\n`);
+  process.stdout.write(
+    `Next: build the guardrail suite at ${request.output_path} following \`recipe\` and the ` +
+      'per-block `packets` inside that request, then run `unitbob put-suite-build`.\n',
+  );
 }

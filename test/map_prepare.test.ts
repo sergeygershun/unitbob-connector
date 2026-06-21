@@ -46,6 +46,36 @@ test('map-prepare runs graphify, fetches recipes, and writes request.json', asyn
   assert.equal(packet.recipes.relate.text, 'relate recipe');
 });
 
+test('map-prepare prints a next-step naming the recipes, output_path, and put-map-build', async () => {
+  const projectRoot = tmpProject();
+  let output = '';
+  const original = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string) => {
+    output += chunk;
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    await mapPrepare(config(projectRoot), [], {
+      ensureUnitbobIgnored: () => {},
+      requireGraphify: async () => {},
+      runGraphifyExtract: async () => {
+        mkdirSync(join(projectRoot, '.unitbob', 'graphify-out'), { recursive: true });
+        writeFileSync(join(projectRoot, '.unitbob', 'graphify-out', 'graph.json'), '{ "nodes": [] }\n');
+        return { stdout: '', stderr: '', code: 0 };
+      },
+      getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
+    });
+  } finally {
+    process.stdout.write = original;
+  }
+
+  const outputPath = join(projectRoot, '.unitbob', 'map-build', 'map_document.json');
+  assert.match(output, /Next: build the Map Document at/);
+  assert.ok(output.includes(outputPath), 'names the output_path');
+  assert.match(output, /recipes\.decompose and recipes\.relate/);
+  assert.match(output, /`unitbob put-map-build`/);
+});
+
 test('map-prepare exits before recipes when graphify fails', async () => {
   const projectRoot = tmpProject();
   let fetchedRecipe = false;

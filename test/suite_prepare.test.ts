@@ -37,6 +37,31 @@ test('suite-prepare fetches the generate recipe and packets, then writes request
   assert.deepEqual(request.packets, [{ block: { id: 'block:billing' } }]);
 });
 
+test('suite-prepare prints a next-step naming the recipe, output_path, and put-suite-build', async () => {
+  const projectRoot = tmpProject();
+  let output = '';
+  const original = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string) => {
+    output += chunk;
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    await suitePrepare(config(projectRoot), [], {
+      getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
+      getSuitePackets: async () => ({ map_digest: 'sha256-map', packets: [] }),
+    });
+  } finally {
+    process.stdout.write = original;
+  }
+
+  const outputPath = join(projectRoot, '.unitbob', 'suite-build', 'suite_output.json');
+  assert.match(output, /Next: build the guardrail suite at/);
+  assert.ok(output.includes(outputPath), 'names the output_path');
+  assert.match(output, /`recipe`/);
+  assert.match(output, /per-block `packets`/);
+  assert.match(output, /`unitbob put-suite-build`/);
+});
+
 test('suite-prepare surfaces a no-current-map error and writes nothing', async () => {
   const projectRoot = tmpProject();
 
