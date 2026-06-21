@@ -23,7 +23,7 @@ Verbs:
   init                 Write a .unitbob.json template and git-ignore it.
   recipe <name>        Fetch and print a recipe from the server.
   show                 Print the link to this project's map.
-  map-prepare          Internal: extract graph and write the host map-build request.
+  map-prepare          Internal: keylessly update the graph (no API key) and write the host map-build request.
   put-map-build        Internal: upload the host-built map and graph.
   suite-prepare        Internal: fetch the recipe and packets, write the host suite-build request.
   put-suite-build      Internal: upload the host-built guardrail suite.
@@ -37,6 +37,8 @@ Pipeline: map and suite are built on your machine. \`*-prepare\` writes a reques
 packet (with the recipe and paths); you build the artifact at the packet's
 output_path from your local source; \`put-*\` uploads only the structured result.
 \`check\` runs the guardrails locally and reports results to the server.
+Graph extraction is keyless: the connector needs no LLM API key. Inference is the
+host-LLM's job; any semantic graph enrichment is host-LLM work (the /graphify skill).
 
 Config: .unitbob.json at your project root — { "server": "...", "repo_id": <number> }.`;
 

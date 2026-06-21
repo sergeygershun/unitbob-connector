@@ -17,7 +17,7 @@ function config(projectRoot: string): Config {
 
 test('put-map-build reads request and host output, then uploads graph plus map', async () => {
   const projectRoot = tmpProject();
-  mkdirSync(join(projectRoot, '.unitbob', 'graphify-out'), { recursive: true });
+  mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
   mkdirSync(join(projectRoot, '.unitbob', 'map-build'), { recursive: true });
   writeFileSync(graphPath(projectRoot), '{ "nodes": [] }\n');
   writeFileSync(outputPath(projectRoot), '{ "version": 3 }\n');
@@ -45,7 +45,7 @@ test('put-map-build reads request and host output, then uploads graph plus map',
 
 test('put-map-build rejects missing or invalid host output before upload', async () => {
   const projectRoot = tmpProject();
-  mkdirSync(join(projectRoot, '.unitbob', 'graphify-out'), { recursive: true });
+  mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
   writeFileSync(graphPath(projectRoot), '{ "nodes": [] }\n');
   writeMapBuildRequest(projectRoot, {
     decompose: { name: 'decompose', version: 'd1', text: 'd' },

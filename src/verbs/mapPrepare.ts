@@ -1,12 +1,12 @@
 import type { Config } from '../config.ts';
-import { ensureUnitbobIgnored, requireGraphify, runGraphifyExtract } from '../proc.ts';
+import { ensureUnitbobIgnored, requireGraphify, runGraphifyExtractKeyless } from '../proc.ts';
 import { readFreshGraph, writeMapBuildRequest } from '../files/mapBuild.ts';
 import { Wire, type Recipe } from '../wire.ts';
 
 interface MapPrepareDeps {
   requireGraphify: () => Promise<void>;
   ensureUnitbobIgnored: (projectRoot: string) => void;
-  runGraphifyExtract: (projectRoot: string) => Promise<{ stdout: string; stderr: string; code: number | null }>;
+  runGraphifyExtractKeyless: (projectRoot: string) => Promise<{ stdout: string; stderr: string; code: number | null }>;
   getRecipe: (name: string) => Promise<Recipe>;
 }
 
@@ -15,7 +15,7 @@ export async function mapPrepare(config: Config, _args: string[] = [], deps?: Pa
   const actual: MapPrepareDeps = {
     requireGraphify,
     ensureUnitbobIgnored,
-    runGraphifyExtract,
+    runGraphifyExtractKeyless,
     getRecipe: (name) => wire.getRecipe(name),
     ...deps,
   };
@@ -23,10 +23,12 @@ export async function mapPrepare(config: Config, _args: string[] = [], deps?: Pa
   actual.ensureUnitbobIgnored(config.projectRoot);
   await actual.requireGraphify();
 
-  const result = await actual.runGraphifyExtract(config.projectRoot);
+  // Keyless: refresh the one canonical graph in place. No inference secret and no
+  // graph flags — semantic enrichment is host-LLM work, not a keyed LLM here.
+  const result = await actual.runGraphifyExtractKeyless(config.projectRoot);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim() || `graphify exited ${result.code}`;
-    throw new Error(`graphify extract failed: ${detail}`);
+    throw new Error(`graphify update failed: ${detail}`);
   }
 
   readFreshGraph(config.projectRoot);

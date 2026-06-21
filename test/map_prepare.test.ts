@@ -15,17 +15,17 @@ function config(projectRoot: string): Config {
   return { server: 'https://host', repoId: 3, projectRoot };
 }
 
-test('map-prepare runs graphify, fetches recipes, and writes request.json', async () => {
+test('map-prepare keylessly updates the canonical graph, fetches recipes, and writes request.json', async () => {
   const projectRoot = tmpProject();
   const calls: string[] = [];
 
   await mapPrepare(config(projectRoot), [], {
     ensureUnitbobIgnored: (root) => calls.push(`ignore:${root}`),
     requireGraphify: async () => calls.push('requireGraphify'),
-    runGraphifyExtract: async () => {
+    runGraphifyExtractKeyless: async () => {
       calls.push('graphify');
-      mkdirSync(join(projectRoot, '.unitbob', 'graphify-out'), { recursive: true });
-      writeFileSync(join(projectRoot, '.unitbob', 'graphify-out', 'graph.json'), '{ "nodes": [] }\n');
+      mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
+      writeFileSync(join(projectRoot, 'graphify-out', 'graph.json'), '{ "nodes": [] }\n');
       return { stdout: '', stderr: '', code: 0 };
     },
     getRecipe: async (name) => {
@@ -42,8 +42,35 @@ test('map-prepare runs graphify, fetches recipes, and writes request.json', asyn
     'recipe:relate',
   ]);
   const packet = readMapBuildRequest(projectRoot);
+  // The request references the one canonical graph, never a `.unitbob` copy.
+  assert.equal(packet.graph_path, join(projectRoot, 'graphify-out', 'graph.json'));
   assert.equal(packet.recipes.decompose.text, 'decompose recipe');
   assert.equal(packet.recipes.relate.text, 'relate recipe');
+});
+
+test('map-prepare succeeds with no LLM API key in the environment', async () => {
+  const projectRoot = tmpProject();
+  const before = { ...process.env };
+  for (const key of Object.keys(process.env)) {
+    if (/_API_KEY$/.test(key)) delete process.env[key];
+  }
+
+  try {
+    await mapPrepare(config(projectRoot), [], {
+      ensureUnitbobIgnored: () => {},
+      requireGraphify: async () => {},
+      runGraphifyExtractKeyless: async () => {
+        mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
+        writeFileSync(join(projectRoot, 'graphify-out', 'graph.json'), '{ "nodes": [] }\n');
+        return { stdout: '', stderr: '', code: 0 };
+      },
+      getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
+    });
+  } finally {
+    Object.assign(process.env, before);
+  }
+
+  assert.equal(readMapBuildRequest(projectRoot).graph_path, join(projectRoot, 'graphify-out', 'graph.json'));
 });
 
 test('map-prepare prints a next-step naming the recipes, output_path, and put-map-build', async () => {
@@ -58,9 +85,9 @@ test('map-prepare prints a next-step naming the recipes, output_path, and put-ma
     await mapPrepare(config(projectRoot), [], {
       ensureUnitbobIgnored: () => {},
       requireGraphify: async () => {},
-      runGraphifyExtract: async () => {
-        mkdirSync(join(projectRoot, '.unitbob', 'graphify-out'), { recursive: true });
-        writeFileSync(join(projectRoot, '.unitbob', 'graphify-out', 'graph.json'), '{ "nodes": [] }\n');
+      runGraphifyExtractKeyless: async () => {
+        mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
+        writeFileSync(join(projectRoot, 'graphify-out', 'graph.json'), '{ "nodes": [] }\n');
         return { stdout: '', stderr: '', code: 0 };
       },
       getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
@@ -85,13 +112,13 @@ test('map-prepare exits before recipes when graphify fails', async () => {
       mapPrepare(config(projectRoot), [], {
         ensureUnitbobIgnored: () => {},
         requireGraphify: async () => {},
-        runGraphifyExtract: async () => ({ stdout: '', stderr: 'boom', code: 1 }),
+        runGraphifyExtractKeyless: async () => ({ stdout: '', stderr: 'boom', code: 1 }),
         getRecipe: async (name) => {
           fetchedRecipe = true;
           return { name, version: 'v1', text: 'recipe' };
         },
       }),
-    /graphify extract failed: boom/,
+    /graphify update failed: boom/,
   );
 
   assert.equal(fetchedRecipe, false);

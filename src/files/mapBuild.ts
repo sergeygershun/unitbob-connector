@@ -13,7 +13,9 @@ export interface MapBuildRequest {
 }
 
 export function graphPath(projectRoot: string): string {
-  return join(projectRoot, '.unitbob', 'graphify-out', 'graph.json');
+  // The one canonical local graph, shared with Graphify and any host-LLM
+  // enrichment. The connector keeps no second `.unitbob` copy.
+  return join(projectRoot, 'graphify-out', 'graph.json');
 }
 
 export function requestPath(projectRoot: string): string {
@@ -27,7 +29,7 @@ export function outputPath(projectRoot: string): string {
 export function readFreshGraph(projectRoot: string): string {
   const path = graphPath(projectRoot);
   if (!existsSync(path)) {
-    throw new Error(`graphify extract did not write ${path}`);
+    throw new Error(`graphify update did not write ${path}`);
   }
 
   const rawGraphJson = readFileSync(path, 'utf8');

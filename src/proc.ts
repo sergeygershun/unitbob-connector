@@ -67,6 +67,7 @@ export async function requireGraphify(): Promise<void> {
 
 export function ensureUnitbobIgnored(projectRoot: string): void {
   ensureLine(join(projectRoot, '.gitignore'), '.unitbob/');
+  ensureLine(join(projectRoot, '.gitignore'), 'graphify-out/');
   ensureLine(join(projectRoot, '.graphifyignore'), '.unitbob/');
 }
 
@@ -81,10 +82,14 @@ function ensureLine(path: string, line: string): void {
   writeFileSync(path, `${current}${prefix}${line}\n`);
 }
 
-export async function runGraphifyExtract(projectRoot: string): Promise<ProcResult> {
+export async function runGraphifyExtractKeyless(projectRoot: string): Promise<ProcResult> {
+  // Deterministic AST-only graph; no LLM, no API key. `update --force` re-extracts
+  // the code and refreshes <root>/graphify-out/graph.json in place, replacing
+  // removed nodes. Semantic enrichment, if wanted, is host-LLM work (the
+  // /graphify skill on the client), never a keyed LLM here.
   return await runProcess(
     'graphify',
-    ['extract', projectRoot, '--out', join(projectRoot, '.unitbob')],
+    ['update', projectRoot, '--force'],
     { cwd: projectRoot, timeoutMs: GRAPHIFY_TIMEOUT_MS },
   );
 }

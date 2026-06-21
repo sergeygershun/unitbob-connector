@@ -19,7 +19,7 @@ function tmpProject(): string {
 
 test('reads the fresh graph and writes the map build request packet', () => {
   const projectRoot = tmpProject();
-  mkdirSync(join(projectRoot, '.unitbob', 'graphify-out'), { recursive: true });
+  mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
   writeFileSync(graphPath(projectRoot), '{ "nodes": [] }\n');
 
   const rawGraph = readFreshGraph(projectRoot);
@@ -37,7 +37,7 @@ test('reads the fresh graph and writes the map build request packet', () => {
 
 test('rejects invalid graph or host output JSON', () => {
   const projectRoot = tmpProject();
-  mkdirSync(join(projectRoot, '.unitbob', 'graphify-out'), { recursive: true });
+  mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
   writeFileSync(graphPath(projectRoot), 'not json');
 
   assert.throws(() => readFreshGraph(projectRoot), /graph\.json is not valid JSON/);
