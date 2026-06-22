@@ -17,19 +17,19 @@ function config(projectRoot: string): Config {
 }
 
 const packet: FixPacket = {
+  interface_id: 'billing_charge',
   headline: 'Billing can still take a payment',
-  test_body: 'expect(true).to be true',
-  failure_message: 'expected /charge/ to match',
+  failure_message: 'expected a captured payment',
   anchor: 'BillingService#charge',
-  message: 'Ready to fix «Billing can still take a payment».',
+  message: 'Ready to work on «Billing can still take a payment».',
 };
 
-test('fix-prepare fetches the per-test packet and writes the task with no output file', async () => {
+test('fix-prepare fetches the per-capability packet and writes the task with no output file', async () => {
   const projectRoot = tmpProject();
   const out: string[] = [];
   let requestedId = '';
 
-  await fixPrepare(config(projectRoot), ['guard-1'], {
+  await fixPrepare(config(projectRoot), ['billing_charge'], {
     getFixPacket: async (id) => {
       requestedId = id;
       return packet;
@@ -37,20 +37,22 @@ test('fix-prepare fetches the per-test packet and writes the task with no output
     stdout: { write: (chunk) => out.push(String(chunk)) },
   });
 
-  assert.equal(requestedId, 'guard-1');
+  assert.equal(requestedId, 'billing_charge');
   const written = JSON.parse(readFileSync(requestPath(projectRoot), 'utf8'));
   assert.equal(written.project_root, projectRoot);
-  assert.equal(written.test_id, 'guard-1');
+  assert.equal(written.interface_id, 'billing_charge');
   assert.equal(written.headline, packet.headline);
-  assert.equal(written.test_body, packet.test_body);
+  assert.equal(written.failure_message, packet.failure_message);
   assert.equal(written.anchor, 'BillingService#charge');
+  // No test body crosses the wire — the host has the whole local spec file.
+  assert.equal(written.test_body, undefined);
   // Rails authors the user-facing line; the connector echoes it verbatim.
   assert.ok(out.join('').includes(packet.message));
   // No answer/output file path exists for Fix — the host edits code in place.
   assert.ok(!existsSync(join(projectRoot, '.unitbob', 'fix', 'fix_output.json')));
 });
 
-test('fix-prepare requires a test_id', async () => {
+test('fix-prepare requires an interface_id', async () => {
   const projectRoot = tmpProject();
   await assert.rejects(() => fixPrepare(config(projectRoot), [], { getFixPacket: async () => packet }), /Usage/);
 });
@@ -59,7 +61,7 @@ test('fix-prepare writes nothing when the server refuses the target', async () =
   const projectRoot = tmpProject();
   await assert.rejects(
     () =>
-      fixPrepare(config(projectRoot), ['guard-1'], {
+      fixPrepare(config(projectRoot), ['billing_charge'], {
         getFixPacket: async () => {
           throw new Error('GET /repos/3/fix_packet failed: 422 — That check is not failing.');
         },

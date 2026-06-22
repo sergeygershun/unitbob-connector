@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 const mapCommandPath = fileURLToPath(new URL('../../plugin/commands/map.md', import.meta.url));
 const suiteCommandPath = fileURLToPath(new URL('../../plugin/commands/suite.md', import.meta.url));
 const fixCommandPath = fileURLToPath(new URL('../../plugin/commands/fix.md', import.meta.url));
-const reshapeCommandPath = fileURLToPath(new URL('../../plugin/commands/reshape.md', import.meta.url));
 const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
 const connectorVersion = JSON.parse(readFileSync(packageJsonPath, 'utf8')).version as string;
 const unitbob = `npx unitbob@${connectorVersion}`;
@@ -35,22 +34,12 @@ test('/unitbob suite command stitches suite-prepare, the host agent, and put-sui
   assert.doesNotMatch(text, /npx unitbob(?!@).* suite(?!-)/);
 });
 
-test('/unitbob fix command stitches fix-prepare and the host fixer, with no put step', () => {
+test('/unitbob fix command stitches fix-prepare and covers both fix and accept', () => {
   const text = readFileSync(fixCommandPath, 'utf8');
 
   assert.match(text, new RegExp(`${unitbobPattern} fix-prepare \\$ARGUMENTS`));
   assert.match(text, /Read `\.unitbob\/fix\/request\.json`/);
   assert.doesNotMatch(text, /ai\/agents\/fixer\.md/);
-  // Fix has no upload step — the next check shows the result.
-  assert.doesNotMatch(text, /put-/);
-});
-
-test('/unitbob reshape command stitches reshape-prepare, the host reshaper, and put-reshape', () => {
-  const text = readFileSync(reshapeCommandPath, 'utf8');
-
-  assert.match(text, new RegExp(`${unitbobPattern} reshape-prepare \\$ARGUMENTS`));
-  assert.match(text, new RegExp(`${unitbobPattern} put-reshape`));
-  assert.match(text, /Read `\.unitbob\/reshape\/request\.json`/);
-  assert.doesNotMatch(text, /ai\/agents\/reshaper\.md/);
-  assert.match(text, /Write strict JSON only/);
+  // Fix edits code (no upload); accept republishes the whole suite via put-suite-build.
+  assert.match(text, new RegExp(`${unitbobPattern} put-suite-build`));
 });

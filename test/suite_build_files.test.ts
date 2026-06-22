@@ -21,7 +21,7 @@ test('writes and round-trips the suite build request', () => {
   const request = writeSuiteBuildRequest(projectRoot, {
     map_digest: 'sha256-map',
     recipe: { name: 'generate', version: 'g1', text: 'generate recipe' },
-    packets: [{ block: { id: 'block:billing' } }],
+    blocks: [{ block_id: 'billing', interfaces: [] }],
   });
 
   assert.equal(request.map_digest, 'sha256-map');
@@ -30,18 +30,36 @@ test('writes and round-trips the suite build request', () => {
   assert.deepEqual(readSuiteBuildRequest(projectRoot), request);
 });
 
-test('reads the host output blocks and rejects malformed output', () => {
+test('reads the host output (spec_rb + test_metadata) and rejects malformed output', () => {
   const projectRoot = tmpProject();
   mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
 
-  writeFileSync(outputPath(projectRoot), '{ "blocks": [{ "block_id": "block:billing" }] }\n');
-  assert.deepEqual(readHostSuiteOutput(outputPath(projectRoot)), { blocks: [{ block_id: 'block:billing' }] });
+  const good = { spec_rb: "require 'rails_helper'\n", test_metadata: { capabilities: [] } };
+  writeFileSync(outputPath(projectRoot), JSON.stringify(good));
+  assert.deepEqual(readHostSuiteOutput(outputPath(projectRoot), projectRoot), good);
 
   writeFileSync(outputPath(projectRoot), 'I wrote some tests for you');
-  assert.throws(() => readHostSuiteOutput(outputPath(projectRoot)), /is not valid JSON/);
+  assert.throws(() => readHostSuiteOutput(outputPath(projectRoot), projectRoot), /is not valid JSON/);
 
-  writeFileSync(outputPath(projectRoot), '{ "notblocks": [] }\n');
-  assert.throws(() => readHostSuiteOutput(outputPath(projectRoot)), /expected an object with a "blocks" array/);
+  writeFileSync(outputPath(projectRoot), '{ "test_metadata": {} }\n');
+  assert.throws(() => readHostSuiteOutput(outputPath(projectRoot), projectRoot), /non-empty spec_rb/);
+
+  writeFileSync(outputPath(projectRoot), '{ "spec_rb": "x" }\n');
+  assert.throws(() => readHostSuiteOutput(outputPath(projectRoot), projectRoot), /missing test_metadata/);
+});
+
+test('reads spec_rb from a spec_rb_path when provided', () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  mkdirSync(join(projectRoot, '.unitbob', 'guardrails'), { recursive: true });
+  const specPath = join('.unitbob', 'guardrails', 'architecture_map_contracts_spec.rb');
+  writeFileSync(join(projectRoot, specPath), "require 'rails_helper'\n");
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ spec_rb_path: specPath, test_metadata: { capabilities: [] } }));
+
+  assert.deepEqual(readHostSuiteOutput(outputPath(projectRoot), projectRoot), {
+    spec_rb: "require 'rails_helper'\n",
+    test_metadata: { capabilities: [] },
+  });
 });
 
 test('readSuiteBuildRequest errors with guidance when the task is missing', () => {

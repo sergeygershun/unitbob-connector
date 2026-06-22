@@ -15,18 +15,21 @@ function config(projectRoot: string): Config {
   return { server: 'https://host', repoId: 3, projectRoot };
 }
 
-test('suite-prepare fetches the generate recipe and packets, then writes request.json', async () => {
+const okPrecheck = () => ({ ok: true });
+
+test('suite-prepare fetches the generate recipe and the capability assignment, then writes request.json', async () => {
   const projectRoot = tmpProject();
   const calls: string[] = [];
 
   await suitePrepare(config(projectRoot), [], {
+    precheck: okPrecheck,
     getRecipe: async (name) => {
       calls.push(`recipe:${name}`);
       return { name, version: `${name}-v1`, text: `${name} recipe` };
     },
     getSuitePackets: async () => {
       calls.push('packets');
-      return { map_digest: 'sha256-map', packets: [{ block: { id: 'block:billing' } }] };
+      return { map_digest: 'sha256-map', blocks: [{ block_id: 'billing', interfaces: [] }] };
     },
   });
 
@@ -34,7 +37,7 @@ test('suite-prepare fetches the generate recipe and packets, then writes request
   const request = readSuiteBuildRequest(projectRoot);
   assert.equal(request.map_digest, 'sha256-map');
   assert.equal(request.recipe.text, 'generate recipe');
-  assert.deepEqual(request.packets, [{ block: { id: 'block:billing' } }]);
+  assert.deepEqual(request.blocks, [{ block_id: 'billing', interfaces: [] }]);
 });
 
 test('suite-prepare prints a next-step naming the recipe, output_path, and put-suite-build', async () => {
@@ -47,19 +50,41 @@ test('suite-prepare prints a next-step naming the recipe, output_path, and put-s
   }) as typeof process.stdout.write;
   try {
     await suitePrepare(config(projectRoot), [], {
+      precheck: okPrecheck,
       getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
-      getSuitePackets: async () => ({ map_digest: 'sha256-map', packets: [] }),
+      getSuitePackets: async () => ({ map_digest: 'sha256-map', blocks: [] }),
     });
   } finally {
     process.stdout.write = original;
   }
 
   const outputPath = join(projectRoot, '.unitbob', 'suite-build', 'suite_output.json');
-  assert.match(output, /Next: build the guardrail suite at/);
+  assert.match(output, /Next: write the complete guardrail spec/);
   assert.ok(output.includes(outputPath), 'names the output_path');
   assert.match(output, /`recipe`/);
-  assert.match(output, /per-block `packets`/);
+  assert.match(output, /capability `blocks`/);
   assert.match(output, /`unitbob put-suite-build`/);
+});
+
+test('suite-prepare stops on an unsupported runtime and writes nothing', async () => {
+  const projectRoot = tmpProject();
+  let fetched = false;
+
+  await assert.rejects(
+    () =>
+      suitePrepare(config(projectRoot), [], {
+        precheck: () => ({ ok: false, message: 'This project does not look like Rails + RSpec.' }),
+        getRecipe: async () => {
+          fetched = true;
+          return { name: 'generate', version: 'v1', text: 'recipe' };
+        },
+        getSuitePackets: async () => ({ map_digest: 'm', blocks: [] }),
+      }),
+    /Rails \+ RSpec/,
+  );
+
+  assert.equal(fetched, false);
+  assert.throws(() => readSuiteBuildRequest(projectRoot), /run `npx unitbob suite-prepare` first/);
 });
 
 test('suite-prepare surfaces a no-current-map error and writes nothing', async () => {
@@ -68,6 +93,7 @@ test('suite-prepare surfaces a no-current-map error and writes nothing', async (
   await assert.rejects(
     () =>
       suitePrepare(config(projectRoot), [], {
+        precheck: okPrecheck,
         getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
         getSuitePackets: async () => {
           throw new Error('GET /repos/3/suite_packets failed: 409 — run `/unitbob map` first.');

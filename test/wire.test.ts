@@ -76,10 +76,11 @@ test('putMapBuild surfaces validation errors as WireError', async () => {
 
 test('getSuitePackets hits GET /repos/:id/suite_packets and relays the payload', async () => {
   await withServer(
-    (_hit, res) => json(res, 200, { map_digest: 'sha256-map', packets: [{ block: { id: 'block:billing' } }] }),
+    (_hit, res) => json(res, 200, { map_digest: 'sha256-map', blocks: [{ block_id: 'billing', interfaces: [] }] }),
     async (config, hits) => {
       const result = await new Wire(config).getSuitePackets();
       assert.equal(result.map_digest, 'sha256-map');
+      assert.equal(result.blocks.length, 1);
       assert.equal(hits[0].method, 'GET');
       assert.equal(hits[0].url, '/repos/3/suite_packets');
     },
@@ -108,11 +109,19 @@ test('putSuiteBuild hits PUT /repos/:id/suite_build and returns the new suite id
         counts: { covered: 2 },
       }),
     async (config, hits) => {
-      const result = await new Wire(config).putSuiteBuild({ map_digest: 'sha256-map', blocks: [] });
+      const result = await new Wire(config).putSuiteBuild({
+        map_digest: 'sha256-map',
+        spec_rb: "require 'rails_helper'\n",
+        test_metadata: { capabilities: [] },
+      });
       assert.equal(result.suite_version_id, 9);
       assert.equal(hits[0].method, 'PUT');
       assert.equal(hits[0].url, '/repos/3/suite_build');
-      assert.deepEqual(JSON.parse(hits[0].body), { map_digest: 'sha256-map', blocks: [] });
+      assert.deepEqual(JSON.parse(hits[0].body), {
+        map_digest: 'sha256-map',
+        spec_rb: "require 'rails_helper'\n",
+        test_metadata: { capabilities: [] },
+      });
     },
   );
 });
@@ -122,28 +131,29 @@ test('putSuiteBuild surfaces validation errors as WireError', async () => {
     (_hit, res) => json(res, 422, { error: 'map_digest does not match the current map' }),
     async (config) => {
       await assert.rejects(
-        () => new Wire(config).putSuiteBuild({ map_digest: 'stale', blocks: [] }),
+        () => new Wire(config).putSuiteBuild({ map_digest: 'stale', spec_rb: 'x', test_metadata: {} }),
         (err: unknown) => err instanceof WireError && /422/.test((err as Error).message),
       );
     },
   );
 });
 
-test('getFixPacket hits GET /repos/:id/fix_packet?test_id= and relays the packet', async () => {
+test('getFixPacket hits GET /repos/:id/fix_packet?interface_id= and relays the packet', async () => {
   await withServer(
     (_hit, res) =>
       json(res, 200, {
+        interface_id: 'billing_charge',
         headline: 'Billing can still take a payment',
-        test_body: 'expect(true).to be true',
         failure_message: 'boom',
         anchor: 'BillingService#charge',
-        message: 'Ready to fix «Billing can still take a payment».',
+        message: 'Ready to work on «Billing can still take a payment».',
       }),
     async (config, hits) => {
-      const packet = await new Wire(config).getFixPacket('guard-1');
+      const packet = await new Wire(config).getFixPacket('billing_charge');
       assert.equal(packet.anchor, 'BillingService#charge');
+      assert.equal(packet.interface_id, 'billing_charge');
       assert.equal(hits[0].method, 'GET');
-      assert.equal(hits[0].url, '/repos/3/fix_packet?test_id=guard-1');
+      assert.equal(hits[0].url, '/repos/3/fix_packet?interface_id=billing_charge');
     },
   );
 });
@@ -156,51 +166,6 @@ test('getFixPacket surfaces a 422 (non-failed) as a WireError', async () => {
         () => new Wire(config).getFixPacket('guard-1'),
         (err: unknown) => err instanceof WireError && /not failing/.test((err as Error).message),
       );
-    },
-  );
-});
-
-test('getReshapePacket relays recipe + packet + suite_digest, and maps 409 to a clean WireError', async () => {
-  await withServer(
-    (_hit, res) =>
-      json(res, 200, {
-        recipe: { name: 'generate', version: 'g1', text: 'g' },
-        packet: { block: { id: 'block:billing' } },
-        suite_digest: 'sha256-suite',
-      }),
-    async (config, hits) => {
-      const packet = await new Wire(config).getReshapePacket('guard-1');
-      assert.equal(packet.suite_digest, 'sha256-suite');
-      assert.equal(hits[0].url, '/repos/3/reshape_packet?test_id=guard-1');
-    },
-  );
-
-  await withServer(
-    (_hit, res) => json(res, 409, { error: 'The code is gone — retire instead.' }),
-    async (config) => {
-      await assert.rejects(
-        () => new Wire(config).getReshapePacket('guard-1'),
-        (err: unknown) => err instanceof WireError && /retire instead/.test((err as Error).message),
-      );
-    },
-  );
-});
-
-test('postReshapeCandidate and postReshapeCommit hit the right endpoints', async () => {
-  await withServer(
-    (hit, res) => {
-      if (hit.url === '/repos/3/reshape_candidate') json(res, 200, { candidate_spec: 'spec', red_message: 'nope' });
-      else json(res, 200, { suite_version_id: 1, suite_digest: 'd', map_url: 'u', message: 'ok' });
-    },
-    async (config, hits) => {
-      const c = await new Wire(config).postReshapeCandidate({ test_id: 'g' });
-      assert.equal(c.candidate_spec, 'spec');
-      const commit = await new Wire(config).postReshapeCommit({ test_id: 'g', gate: 'green' });
-      assert.equal(commit.message, 'ok');
-      assert.deepEqual(hits.map((h) => `${h.method} ${h.url}`), [
-        'POST /repos/3/reshape_candidate',
-        'POST /repos/3/reshape',
-      ]);
     },
   );
 });
@@ -229,14 +194,13 @@ test('getRecipe maps 404 to a WireError', async () => {
 test('getSuite returns the blob, and null on 204', async () => {
   await withServer(
     (_hit, res) => {
-      json(res, 200, { suite_digest: 'd1', spec_rb: 'RSpec.describe("x") {}', manifest: { guardrails_id: 'g1' } });
+      json(res, 200, { suite_digest: 'd1', spec_rb: 'RSpec.describe("x") {}' });
     },
     async (config) => {
       const suite = await new Wire(config).getSuite();
       assert.deepEqual(suite, {
         suite_digest: 'd1',
         spec_rb: 'RSpec.describe("x") {}',
-        manifest: { guardrails_id: 'g1' },
       });
     },
   );

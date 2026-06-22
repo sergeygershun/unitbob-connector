@@ -21,10 +21,10 @@ const FORBIDDEN = [
   /\bretired\b/i,
   /\bcoverage\b/i,
 ];
-const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
-  'files/guardrails.ts': [/manifest/i],
-  'wire.ts': [/manifest/i],
-};
+// Spec 26 dropped the manifest entirely (the host uploads the whole spec file +
+// capability test_metadata, stored verbatim), so no file needs a manifest
+// exemption any more.
+const ALLOWED_BY_FILE: Record<string, RegExp[]> = {};
 
 // `lamp` is the single domain noun the connector may name — but only in wire.ts,
 // where "lamps" is the URL of an opaque endpoint it fetches and prints verbatim.

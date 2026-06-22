@@ -31,12 +31,12 @@ export interface MapBuildUploadResult {
   reused: boolean;
 }
 
-// The per-block packets the server cuts from the current map. The connector
-// relays them down to the host untouched — `packets` is an opaque list it never
-// reads into.
+// The host's assignment: per block, the capabilities (interfaces) to guard, cut
+// from the current map. The connector relays it down to the host untouched —
+// `blocks` is an opaque list it never reads into.
 export interface SuitePackets {
   map_digest: string;
-  packets: unknown[];
+  blocks: unknown[];
 }
 
 export interface SuiteBuildUploadResult {
@@ -48,38 +48,14 @@ export interface SuiteBuildUploadResult {
   counts: Record<string, number>;
 }
 
-// The per-test Fix data packet (spec 21). Carries no source — the host reads its
-// own checkout; the connector relays the packet down and prints `message`.
+// The per-capability repair data packet (spec 26). Carries no source and no test
+// body — the host reads its own checkout and the whole local spec file. The
+// connector relays the packet down and prints `message`.
 export interface FixPacket {
+  interface_id: string;
   headline: string;
-  test_body: string;
   failure_message: string;
   anchor: string | null;
-  message: string;
-}
-
-// The reshape task the host regenerates one body from (spec 21): the bundled
-// generate recipe, a single-element packet (opaque to the connector), and the
-// current suite_digest the host must echo back.
-export interface ReshapePacket {
-  recipe: Recipe;
-  packet: unknown;
-  suite_digest: string;
-}
-
-// The Rails-assembled candidate the connector runs as the local gate. Rails owns
-// the suite header; `red_message` is the business string to print if the gate is
-// red. Nothing is committed yet.
-export interface ReshapeCandidateResult {
-  candidate_spec: string;
-  red_message: string;
-}
-
-// The committed reshape (a new versioned snapshot). `message` is printed verbatim.
-export interface ReshapeCommitResult {
-  suite_version_id: number;
-  suite_digest: string;
-  map_url: string;
   message: string;
 }
 
@@ -102,57 +78,37 @@ export class Wire {
     return (await res.json()) as MapBuildUploadResult;
   }
 
-  // GET /repos/:id/suite_packets — the per-block packets the host writes the
-  // suite from. Relayed opaque; 409 (no current map) surfaces as a WireError
-  // carrying the server's "run /unitbob map first" guidance.
+  // GET /repos/:id/suite_packets — the host's assignment (the capabilities to
+  // guard). Relayed opaque; 409 (no current map) surfaces as a WireError carrying
+  // the server's "run /unitbob map first" guidance.
   async getSuitePackets(): Promise<SuitePackets> {
     const res = await this.send('GET', this.repoPath('suite_packets'));
     await this.ensureOk(res, `GET ${this.repoPath('suite_packets')}`);
     return (await res.json()) as SuitePackets;
   }
 
-  // PUT /repos/:id/suite_build — upload the host's structured suite output. The
-  // server validates, assembles, versions, and returns the new suite's identity.
-  async putSuiteBuild(payload: { map_digest: string; blocks: unknown[] }): Promise<SuiteBuildUploadResult> {
+  // PUT /repos/:id/suite_build — upload the host's complete, locally-validated
+  // suite: the verbatim spec file plus the capability-keyed test_metadata. The
+  // server validates the classification, stores the bytes verbatim, versions, and
+  // returns the new suite's identity.
+  async putSuiteBuild(payload: {
+    map_digest: string;
+    spec_rb: string;
+    test_metadata: unknown;
+  }): Promise<SuiteBuildUploadResult> {
     const res = await this.send('PUT', this.repoPath('suite_build'), payload);
     await this.ensureOk(res, `PUT ${this.repoPath('suite_build')}`);
     return (await res.json()) as SuiteBuildUploadResult;
   }
 
-  // GET /repos/:id/fix_packet?test_id= — the per-test Fix data packet. Relayed
-  // down for the host to repair local code; 422 (non-failed / stale / no suite)
-  // surfaces as a WireError carrying the server's business reason.
-  async getFixPacket(testId: string): Promise<FixPacket> {
-    const url = this.repoQueryPath('fix_packet', testId);
+  // GET /repos/:id/fix_packet?interface_id= — the per-capability repair packet.
+  // Relayed down for the host to fix code or accept the change; 422 (non-failed /
+  // stale / no suite) surfaces as a WireError carrying the server's business reason.
+  async getFixPacket(interfaceId: string): Promise<FixPacket> {
+    const url = this.repoQueryPath('fix_packet', 'interface_id', interfaceId);
     const res = await this.send('GET', url);
     await this.ensureOk(res, `GET ${url}`);
     return (await res.json()) as FixPacket;
-  }
-
-  // GET /repos/:id/reshape_packet?test_id= — the reshape task. A 409 (the code is
-  // gone) surfaces as a WireError carrying the server's "retire instead" message.
-  async getReshapePacket(testId: string): Promise<ReshapePacket> {
-    const url = this.repoQueryPath('reshape_packet', testId);
-    const res = await this.send('GET', url);
-    if (res.status === 409) throw new WireError(await this.errorMessage(res, url));
-    await this.ensureOk(res, `GET ${url}`);
-    return (await res.json()) as ReshapePacket;
-  }
-
-  // POST /repos/:id/reshape_candidate — upload the host's one new body; get back
-  // the Rails-assembled candidate spec (not committed) to run as the local gate.
-  async postReshapeCandidate(payload: unknown): Promise<ReshapeCandidateResult> {
-    const res = await this.send('POST', this.repoPath('reshape_candidate'), payload);
-    await this.ensureOk(res, `POST ${this.repoPath('reshape_candidate')}`);
-    return (await res.json()) as ReshapeCandidateResult;
-  }
-
-  // POST /repos/:id/reshape — commit a reshape that passed the local gate. Sends
-  // the same body it ran plus gate: "green"; Rails re-assembles and versions it.
-  async postReshapeCommit(payload: unknown): Promise<ReshapeCommitResult> {
-    const res = await this.send('POST', this.repoPath('reshape'), payload);
-    await this.ensureOk(res, `POST ${this.repoPath('reshape')}`);
-    return (await res.json()) as ReshapeCommitResult;
   }
 
   // GET /recipes/:name — fetch a recipe at call time. Recipes live on Rails so
@@ -196,20 +152,8 @@ export class Wire {
     return `${this.config.server}/repos/${this.config.repoId}/${suffix}`;
   }
 
-  private repoQueryPath(suffix: string, testId: string): string {
-    return `${this.repoPath(suffix)}?test_id=${encodeURIComponent(testId)}`;
-  }
-
-  // The server's business-language error from a JSON `{ error }` body, falling
-  // back to the raw status when the body is not the shape we expect.
-  private async errorMessage(res: Response, url: string): Promise<string> {
-    try {
-      const body = (await res.json()) as { error?: unknown };
-      if (typeof body.error === 'string' && body.error.trim()) return body.error;
-    } catch {
-      // fall through to the generic status message
-    }
-    return `GET ${url} failed: ${res.status} ${res.statusText}`;
+  private repoQueryPath(suffix: string, key: string, value: string): string {
+    return `${this.repoPath(suffix)}?${key}=${encodeURIComponent(value)}`;
   }
 
   private decodeSuiteBlob(payload: unknown): SuiteBlob {
@@ -218,14 +162,10 @@ export class Wire {
     }
 
     const suite = payload as Record<string, unknown>;
-    if (
-      typeof suite.suite_digest !== 'string' ||
-      typeof suite.spec_rb !== 'string' ||
-      !Object.hasOwn(suite, 'manifest')
-    ) {
+    if (typeof suite.suite_digest !== 'string' || typeof suite.spec_rb !== 'string') {
       throw new WireError(
         `GET ${this.repoPath('suite')} returned a malformed suite payload: ` +
-          'expected suite_digest, spec_rb, and manifest.',
+          'expected suite_digest and spec_rb.',
       );
     }
 

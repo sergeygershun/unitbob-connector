@@ -19,27 +19,30 @@ function writeTask(projectRoot: string, mapDigest: string): void {
   writeSuiteBuildRequest(projectRoot, {
     map_digest: mapDigest,
     recipe: { name: 'generate', version: 'g1', text: 'g' },
-    packets: [{ block: { id: 'block:billing' } }],
+    blocks: [{ block_id: 'billing', interfaces: [] }],
   });
 }
 
-test('put-suite-build uploads blocks with the map_digest taken from the task', async () => {
+test('put-suite-build uploads the whole spec file + test_metadata with the map_digest from the task', async () => {
   const projectRoot = tmpProject();
   mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
   writeTask(projectRoot, 'sha256-task');
-  writeFileSync(outputPath(projectRoot), JSON.stringify({ blocks: [{ block_id: 'block:billing', covered: [], unguarded: [] }] }));
+  const specRb = "require 'rails_helper'\n\nRSpec.describe 'x' do\nend\n";
+  const testMetadata = { capabilities: [{ interface_id: 'billing_charge', status: 'unguarded', reason: 'no boundary' }] };
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ spec_rb: specRb, test_metadata: testMetadata }));
 
   let uploaded: unknown = null;
   await putSuiteBuild(config(projectRoot), [], {
     putSuiteBuild: async (payload) => {
       uploaded = payload;
-      return { suite_version_id: 7, suite_digest: 'sha256-suite', map_url: 'http://host/repos/3', counts: { covered: 1 } };
+      return { suite_version_id: 7, suite_digest: 'sha256-suite', map_url: 'http://host/repos/3', counts: { covered: 0 } };
     },
   });
 
   assert.deepEqual(uploaded, {
     map_digest: 'sha256-task',
-    blocks: [{ block_id: 'block:billing', covered: [], unguarded: [] }],
+    spec_rb: specRb,
+    test_metadata: testMetadata,
   });
 });
 

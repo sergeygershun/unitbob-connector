@@ -5,27 +5,26 @@ import { GUARDRAILS_DIR, SUITE_FILE } from '../files/guardrails.ts';
 
 export const RSPEC_TIMEOUT_MS = 10 * 60 * 1000;
 
+// Spec 26: the Unitbob file runs in a defined order with a fixed seed so a
+// green→red flip can never come from run-order nondeterminism. It does not inherit
+// the project's random ordering.
+export const RSPEC_SEED = '1';
+
 export interface RspecRunResult extends ProcResult {
   command: string;
   args: string[];
 }
 
-// Run the full materialised guardrail suite (spec 18).
+// Run the materialised Unitbob guardrail suite (spec 26). Only this file runs —
+// never the project's full suite — under RAILS_ENV=test with a fixed order/seed.
 export async function runRspecSuite(projectRoot: string): Promise<RspecRunResult> {
   const suitePath = join(GUARDRAILS_DIR, SUITE_FILE);
-  return invokeRspec(projectRoot, [suitePath, '--format', 'json']);
-}
-
-// Run a single example as the reshape gate (spec 21): point RSpec at the
-// Rails-assembled candidate spec and filter to the one example by its [test_id]
-// tag (the same `-e "[id]"` filter the suite descriptions carry). `specPath` is
-// relative to `projectRoot` so the candidate can live under `.unitbob/reshape/`.
-export async function runRspecExample(projectRoot: string, specPath: string, testId: string): Promise<RspecRunResult> {
-  return invokeRspec(projectRoot, [specPath, '-e', `[${testId}]`, '--format', 'json']);
+  return invokeRspec(projectRoot, [suitePath, '--order', 'defined', '--seed', RSPEC_SEED, '--format', 'json']);
 }
 
 // Prefer the project's own `bin/rspec`; fall back to `bundle exec rspec`. Every
-// run sets UNITBOB_REPO_ROOT so the suite header reads the real local source.
+// run sets RAILS_ENV=test so guardrails execute against the Rails test
+// environment the project's `rails_helper` configures.
 async function invokeRspec(projectRoot: string, rspecArgs: string[]): Promise<RspecRunResult> {
   const localRspec = join(projectRoot, 'bin', 'rspec');
   const hasLocalRspec = executable(localRspec);
@@ -35,7 +34,7 @@ async function invokeRspec(projectRoot: string, rspecArgs: string[]): Promise<Rs
   const result = await runProcess(command, args, {
     cwd: projectRoot,
     timeoutMs: RSPEC_TIMEOUT_MS,
-    env: { ...process.env, UNITBOB_REPO_ROOT: projectRoot },
+    env: { ...process.env, RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
   });
 
   return { ...result, command, args };

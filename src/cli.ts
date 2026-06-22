@@ -12,8 +12,6 @@ import { putMapBuild } from './verbs/putMapBuild.ts';
 import { suitePrepare } from './verbs/suitePrepare.ts';
 import { putSuiteBuild } from './verbs/putSuiteBuild.ts';
 import { fixPrepare } from './verbs/fixPrepare.ts';
-import { reshapePrepare } from './verbs/reshapePrepare.ts';
-import { putReshape } from './verbs/putReshape.ts';
 
 const USAGE = `unitbob — thin local hands for the Unitbob server.
 
@@ -25,11 +23,9 @@ Verbs:
   show                 Print the link to this project's map.
   map-prepare          Internal: keylessly update the graph (no API key) and write the host map-build request.
   put-map-build        Internal: upload the host-built map and graph.
-  suite-prepare        Internal: fetch the recipe and packets, write the host suite-build request.
-  put-suite-build      Internal: upload the host-built guardrail suite.
-  fix-prepare <id>     Internal: fetch the per-test Fix data packet for one red guard.
-  reshape-prepare <id> Internal: fetch the reshape task for one red guard.
-  put-reshape          Internal: run the reshaped check locally and commit it on green.
+  suite-prepare        Internal: fetch the recipe and capability assignment, write the host suite-build request.
+  put-suite-build      Internal: upload the host-built guardrail suite (whole spec file + test_metadata).
+  fix-prepare <id>     Internal: fetch the per-capability repair packet for one red guard (by interface_id).
   check                Run the guardrail suite locally and report.
   run                  Alias for check.
 
@@ -75,12 +71,6 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case 'fix-prepare':
         await fixPrepare(loadConfig(), args);
-        return 0;
-      case 'reshape-prepare':
-        await reshapePrepare(loadConfig(), args);
-        return 0;
-      case 'put-reshape':
-        await putReshape(loadConfig(), args);
         return 0;
       case 'run':
       case 'check':

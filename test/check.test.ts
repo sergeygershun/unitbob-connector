@@ -15,15 +15,35 @@ function config(projectRoot: string): Config {
   return { server: 'https://host', repoId: 3, projectRoot };
 }
 
+const okPrecheck = () => ({ ok: true });
+
 function suite(): SuiteBlob {
-  return { suite_digest: 'd1', spec_rb: "RSpec.describe('x') {}\n", manifest: { guardrails_id: 'g1' } };
+  return { suite_digest: 'd1', spec_rb: "require 'rails_helper'\n\nRSpec.describe('x') {}\n" };
 }
+
+test('an unsupported runtime stops the check before fetching the suite', async () => {
+  let fetched = false;
+  await assert.rejects(
+    () =>
+      run(config(tmpProject()), [], {
+        precheck: () => ({ ok: false, message: 'This project does not look like Rails + RSpec.' }),
+        getSuite: async () => {
+          fetched = true;
+          return null;
+        },
+        stdout: { write: () => true },
+      }),
+    /Rails \+ RSpec/,
+  );
+  assert.equal(fetched, false);
+});
 
 test('204 suite response prints a no-suite message and does not run RSpec', async () => {
   let ran = false;
   let output = '';
 
   await run(config(tmpProject()), [], {
+    precheck: okPrecheck,
     getSuite: async () => null,
     runRspecSuite: async () => {
       ran = true;
@@ -43,6 +63,7 @@ test('successful run uploads raw RSpec JSON and prints Rails summary and map URL
   let output = '';
 
   await run(config(projectRoot), [], {
+    precheck: okPrecheck,
     getSuite: async () => suite(),
     materializeGuardrails: (root) => {
       calls.push(`materialize:${root}`);
@@ -65,10 +86,41 @@ test('successful run uploads raw RSpec JSON and prints Rails summary and map URL
   assert.match(output, /https:\/\/host\/repos\/3\/map/);
 });
 
+test('long failure text is size-bounded before upload', async () => {
+  let uploaded: Record<string, unknown> = {};
+  const longMessage = 'x'.repeat(9000);
+
+  await run(config(tmpProject()), [], {
+    precheck: okPrecheck,
+    getSuite: async () => suite(),
+    materializeGuardrails: () => ({ suitePath: 'x' }),
+    runRspecSuite: async () => ({
+      stdout: JSON.stringify({
+        examples: [{ id: './x[1:1]', status: 'failed', exception: { message: longMessage, backtrace: Array(50).fill('frame') } }],
+      }),
+      stderr: '',
+      code: 1,
+      command: 'rspec',
+      args: [],
+    }),
+    postRun: async (payload) => {
+      uploaded = payload as Record<string, unknown>;
+      return { summary: 'attention', map_url: '', lamps: {} };
+    },
+    stdout: { write: () => true },
+  });
+
+  const example = (uploaded.rspec_json as { examples: Array<{ exception: { message: string; backtrace: string[] } }> }).examples[0];
+  assert.ok(example.exception.message.length < longMessage.length, 'message truncated');
+  assert.match(example.exception.message, /truncated/);
+  assert.ok(example.exception.backtrace.length <= 20, 'backtrace capped');
+});
+
 test('non-JSON runner output uploads suite_error', async () => {
   let uploaded = {};
 
   await run(config(tmpProject()), [], {
+    precheck: okPrecheck,
     getSuite: async () => suite(),
     materializeGuardrails: () => ({ suitePath: 'x' }),
     runRspecSuite: async () => ({

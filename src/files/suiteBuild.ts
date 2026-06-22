@@ -1,17 +1,24 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { Recipe } from '../wire.ts';
 
-// The task the host reads: where the project is, which map it was cut from,
-// where to write the answer, the generate recipe, and the per-block packets. The
-// connector carries `map_digest` here so the upload can echo the map it was
-// given rather than trusting the host's answer file.
+// The task the host reads: where the project is, which map it was cut from, where
+// to write the answer, the generate recipe, and its per-block capability
+// assignment. The connector carries `map_digest` here so the upload can echo the
+// map it was given rather than trusting the host's answer file.
 export interface SuiteBuildRequest {
   project_root: string;
   map_digest: string;
   output_path: string;
   recipe: Recipe;
-  packets: unknown[];
+  blocks: unknown[];
+}
+
+// The host's answer: the complete spec file (inline as `spec_rb`, or via a
+// `spec_rb_path` the connector reads) plus the capability-keyed `test_metadata`.
+export interface HostSuiteOutput {
+  spec_rb: string;
+  test_metadata: unknown;
 }
 
 export function requestPath(projectRoot: string): string {
@@ -24,14 +31,14 @@ export function outputPath(projectRoot: string): string {
 
 export function writeSuiteBuildRequest(
   projectRoot: string,
-  task: { map_digest: string; recipe: Recipe; packets: unknown[] },
+  task: { map_digest: string; recipe: Recipe; blocks: unknown[] },
 ): SuiteBuildRequest {
   const request: SuiteBuildRequest = {
     project_root: projectRoot,
     map_digest: task.map_digest,
     output_path: outputPath(projectRoot),
     recipe: task.recipe,
-    packets: task.packets,
+    blocks: task.blocks,
   };
 
   const path = requestPath(projectRoot);
@@ -48,26 +55,44 @@ export function readSuiteBuildRequest(projectRoot: string): SuiteBuildRequest {
 
   const request = parseJson(readFileSync(path, 'utf8'), path);
   if (!isSuiteBuildRequest(request)) {
-    throw new Error(`${path} is malformed: expected project_root, map_digest, output_path, recipe, and packets.`);
+    throw new Error(`${path} is malformed: expected project_root, map_digest, output_path, recipe, and blocks.`);
   }
 
   return request;
 }
 
-// Read and parse the host's answer file. The connector verifies it parses and
-// carries a `blocks` array, then relays it untouched — it never reads inside a
-// block. Anything unparseable means we upload nothing (all-or-nothing).
-export function readHostSuiteOutput(path: string): { blocks: unknown[] } {
+// Read and parse the host's answer. The host wrote and ran the whole spec file;
+// the connector verifies it parses and carries `spec_rb` (inline or via
+// `spec_rb_path`) plus `test_metadata`, then relays it untouched. Anything
+// unparseable or incomplete means nothing is uploaded (all-or-nothing).
+export function readHostSuiteOutput(path: string, projectRoot: string): HostSuiteOutput {
   if (!existsSync(path)) {
     throw new Error(`${path} not found — the host suite builder did not write its output.`);
   }
 
-  const parsed = parseJson(readFileSync(path, 'utf8'), path);
-  if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as Record<string, unknown>).blocks)) {
-    throw new Error(`${path} is malformed: expected an object with a "blocks" array.`);
+  const parsed = parseJson(readFileSync(path, 'utf8'), path) as Record<string, unknown> | null;
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`${path} is malformed: expected an object with spec_rb (or spec_rb_path) and test_metadata.`);
   }
 
-  return parsed as { blocks: unknown[] };
+  if (!('test_metadata' in parsed)) {
+    throw new Error(`${path} is malformed: missing test_metadata.`);
+  }
+
+  const specRb = resolveSpecRb(parsed, projectRoot, path);
+  return { spec_rb: specRb, test_metadata: parsed.test_metadata };
+}
+
+function resolveSpecRb(parsed: Record<string, unknown>, projectRoot: string, path: string): string {
+  if (typeof parsed.spec_rb === 'string' && parsed.spec_rb.trim()) return parsed.spec_rb;
+
+  if (typeof parsed.spec_rb_path === 'string' && parsed.spec_rb_path.trim()) {
+    const specPath = isAbsolute(parsed.spec_rb_path) ? parsed.spec_rb_path : join(projectRoot, parsed.spec_rb_path);
+    if (!existsSync(specPath)) throw new Error(`${path}: spec_rb_path "${parsed.spec_rb_path}" does not exist.`);
+    return readFileSync(specPath, 'utf8');
+  }
+
+  throw new Error(`${path} is malformed: expected a non-empty spec_rb or spec_rb_path.`);
 }
 
 function parseJson(raw: string, path: string): unknown {
@@ -86,7 +111,7 @@ function isSuiteBuildRequest(value: unknown): value is SuiteBuildRequest {
     typeof request.map_digest === 'string' &&
     typeof request.output_path === 'string' &&
     isRecipe(request.recipe) &&
-    Array.isArray(request.packets)
+    Array.isArray(request.blocks)
   );
 }
 
