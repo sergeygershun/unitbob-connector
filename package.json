@@ -1,6 +1,6 @@
 {
   "name": "unitbob",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unitbob connector — thin local hands for the Unitbob Rails brain. Owns no domain logic: it runs tools, relays bytes over the wire, and prints what the server returns.",
   "type": "module",
   "bin": {
@@ -13,7 +13,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/cli.js",
     "prepublishOnly": "npm run build",
     "test": "node --test test/*.test.ts"
   },

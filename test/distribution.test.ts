@@ -46,10 +46,12 @@ test('packed npm tarball includes built CLI output and excludes source and tests
     cwd: connectorRoot,
     encoding: 'utf8',
   });
-  const [pack] = JSON.parse(output) as Array<{ files: Array<{ path: string }> }>;
+  const [pack] = JSON.parse(output) as Array<{ files: Array<{ path: string; mode: number }> }>;
   const paths = pack.files.map((file) => file.path);
+  const cliFile = pack.files.find((file) => file.path === 'dist/cli.js');
 
   assert.ok(paths.includes('dist/cli.js'));
+  assert.equal(cliFile?.mode, 0o755);
   assert.ok(paths.every((path) => !path.startsWith('src/')));
   assert.ok(paths.every((path) => !path.startsWith('test/')));
 
