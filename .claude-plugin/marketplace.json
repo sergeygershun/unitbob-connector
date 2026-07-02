@@ -1,0 +1,16 @@
+{
+  "name": "unitbob",
+  "description": "Claude Code plugin for building and checking Unitbob business maps and guardrails.",
+  "metadata": {
+    "description": "Claude Code plugin for building and checking Unitbob business maps and guardrails."
+  },
+  "owner": {
+    "name": "Unitbob"
+  },
+  "plugins": [
+    {
+      "name": "unitbob",
+      "source": "./plugin"
+    }
+  ]
+}
