@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url';
 const connectorRoot = fileURLToPath(new URL('..', import.meta.url));
 const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
 const cliDistPath = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
-const commandsDir = fileURLToPath(new URL('../../plugin/commands', import.meta.url));
-const pluginJsonPath = fileURLToPath(new URL('../../plugin/.claude-plugin/plugin.json', import.meta.url));
-const marketplaceJsonPath = fileURLToPath(new URL('../../.claude-plugin/marketplace.json', import.meta.url));
+const commandsDir = fileURLToPath(new URL('../plugin/commands', import.meta.url));
+const pluginJsonPath = fileURLToPath(new URL('../plugin/.claude-plugin/plugin.json', import.meta.url));
+const marketplaceJsonPath = fileURLToPath(new URL('../.claude-plugin/marketplace.json', import.meta.url));
 
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
@@ -85,7 +85,7 @@ test('Claude Code plugin commands pin the connector package version', () => {
   }
 });
 
-test('Claude Code marketplace points at the monorepo plugin', () => {
+test('Claude Code marketplace points at the co-located plugin', () => {
   const marketplace = readJson(marketplaceJsonPath);
   const plugin = readJson(pluginJsonPath);
   const plugins = marketplace.plugins as Array<Record<string, unknown>>;

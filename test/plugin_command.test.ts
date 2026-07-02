@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const mapCommandPath = fileURLToPath(new URL('../../plugin/commands/map.md', import.meta.url));
-const suiteCommandPath = fileURLToPath(new URL('../../plugin/commands/suite.md', import.meta.url));
-const fixCommandPath = fileURLToPath(new URL('../../plugin/commands/fix.md', import.meta.url));
+const mapCommandPath = fileURLToPath(new URL('../plugin/commands/map.md', import.meta.url));
+const suiteCommandPath = fileURLToPath(new URL('../plugin/commands/suite.md', import.meta.url));
+const fixCommandPath = fileURLToPath(new URL('../plugin/commands/fix.md', import.meta.url));
 const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
 const connectorVersion = JSON.parse(readFileSync(packageJsonPath, 'utf8')).version as string;
 const unitbob = `npx unitbob@${connectorVersion}`;
