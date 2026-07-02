@@ -21,6 +21,7 @@ const packet: FixPacket = {
   headline: 'Billing can still take a payment',
   failure_message: 'expected a captured payment',
   anchor: 'BillingService#charge',
+  prompt: 'You are fixing a failed Unitbob check.\n\nFailed behavior:\nBilling can still take a payment',
   message: 'Ready to work on «Billing can still take a payment».',
 };
 
@@ -44,6 +45,7 @@ test('fix-prepare fetches the per-capability packet and writes the task with no 
   assert.equal(written.headline, packet.headline);
   assert.equal(written.failure_message, packet.failure_message);
   assert.equal(written.anchor, 'BillingService#charge');
+  assert.equal(written.prompt, packet.prompt);
   // No test body crosses the wire — the host has the whole local spec file.
   assert.equal(written.test_body, undefined);
   // Rails authors the user-facing line; the connector echoes it verbatim.

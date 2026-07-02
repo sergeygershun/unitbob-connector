@@ -146,11 +146,13 @@ test('getFixPacket hits GET /repos/:id/fix_packet?interface_id= and relays the p
         headline: 'Billing can still take a payment',
         failure_message: 'boom',
         anchor: 'BillingService#charge',
+        prompt: 'You are fixing a failed Unitbob check.',
         message: 'Ready to work on «Billing can still take a payment».',
       }),
     async (config, hits) => {
       const packet = await new Wire(config).getFixPacket('billing_charge');
       assert.equal(packet.anchor, 'BillingService#charge');
+      assert.equal(packet.prompt, 'You are fixing a failed Unitbob check.');
       assert.equal(packet.interface_id, 'billing_charge');
       assert.equal(hits[0].method, 'GET');
       assert.equal(hits[0].url, '/repos/3/fix_packet?interface_id=billing_charge');

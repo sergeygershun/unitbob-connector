@@ -56,6 +56,7 @@ export interface FixPacket {
   headline: string;
   failure_message: string;
   anchor: string | null;
+  prompt: string;
   message: string;
 }
 

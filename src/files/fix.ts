@@ -4,18 +4,19 @@ import type { FixPacket } from '../wire.ts';
 
 // The task the host reads to act on one red guard (spec 26). It carries the
 // per-capability substance — the business headline, the latest failure, a
-// where-to-look anchor, and the capability id — plus the project root the host
-// reads its own source from. There is **no** test body: the whole spec file is
-// already on disk at `.unitbob/guardrails/`. There is no output file for a fix:
-// the host edits code in place, and the next `/unitbob check` shows the result.
-// (For an accept, the host re-authors the capability and republishes via
-// suite-build.)
+// where-to-look anchor, the complete repair prompt, and the capability id — plus
+// the project root the host reads its own source from. There is **no** test body:
+// the whole spec file is already on disk at `.unitbob/guardrails/`. There is no
+// output file for a fix: the host edits code in place, and the next `/unitbob
+// check` shows the result. (For an accept, the host re-authors the capability and
+// republishes via suite-build.)
 export interface FixRequest {
   project_root: string;
   interface_id: string;
   headline: string;
   failure_message: string;
   anchor: string | null;
+  prompt: string;
 }
 
 export function requestPath(projectRoot: string): string {
@@ -29,6 +30,7 @@ export function writeFixRequest(projectRoot: string, interfaceId: string, packet
     headline: packet.headline,
     failure_message: packet.failure_message,
     anchor: packet.anchor,
+    prompt: packet.prompt,
   };
 
   const path = requestPath(projectRoot);
