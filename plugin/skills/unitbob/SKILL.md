@@ -10,7 +10,7 @@ between subsystems guarded by an auto-generated test. On the map, those tests sh
 as green or red lamps. A red lamp is the only signal the user needs: something the
 structure depended on just broke.
 
-There is a `unitbob` command-line tool, run via `npx unitbob@0.1.3 <verb>`. It is
+There is a `unitbob` command-line tool, run via `npx unitbob@0.1.4 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
 (Claude Code) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.

@@ -14,8 +14,9 @@ it entirely by chatting with Claude Code — no terminal needed.
   [nodejs.org](https://nodejs.org) and try again.)
 - **Python 3.10 or newer** installed — building the map uses a small local tool
   called `graphify` that Claude installs for you the first time; it needs Python.
-- Two values from whoever runs Unitbob for you: the **server address** and your
-  **repo id** (a number).
+
+That's all. You don't need a server address, an account, or any id — Claude
+links your project for you (see Step 3).
 
 ## Step 1 — Add the Unitbob marketplace (once)
 
@@ -52,24 +53,21 @@ click **Install**.
 
 After installing, start a new session so the new commands load.
 
-## Step 3 — Link your project (once, Claude does it for you)
+## Step 3 — Link your project (automatic — nothing to do)
 
 Open your project in Claude Code and just ask, in plain words:
 
 > build my unitbob map
 
-The first time, Claude Code notices the project isn't linked yet and asks you for
-two things:
-
-- the **server address** (for example `http://localhost:3000`, or the URL you
-  were given)
-- your **repo id** (the number you were given)
-
-Give it those two values. Claude Code sets everything up itself and keeps going.
+The first time, Claude Code links the project by itself — it registers your
+project on the Unitbob server by its folder name and remembers the link. You
+don't type a server address or any id, and there's no form to fill in. Claude
+just replies with one line like *"Linked this project to Unitbob as your-app."*
+and carries on. (This first map may also install `graphify`; let Claude do it.)
 
 > **Don't type `/init`.** That is a different, built-in Claude Code command and
-> has nothing to do with Unitbob. To set up Unitbob, just answer Claude's
-> questions or say "set up unitbob".
+> has nothing to do with Unitbob. To set up Unitbob, just say "build my unitbob
+> map" — Claude handles the rest.
 
 ## Step 4 — Everyday use
 
