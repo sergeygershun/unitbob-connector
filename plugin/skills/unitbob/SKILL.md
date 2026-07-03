@@ -10,7 +10,7 @@ between subsystems guarded by an auto-generated test. On the map, those tests sh
 as green or red lamps. A red lamp is the only signal the user needs: something the
 structure depended on just broke.
 
-There is a `unitbob` command-line tool, run via `npx unitbob@0.1.1 <verb>`. It is
+There is a `unitbob` command-line tool, run via `npx unitbob@0.1.2 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
 (Claude Code) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.
@@ -44,7 +44,7 @@ command and let it fail with a scary error:
 2. Ask them for exactly two values: the **Unitbob server URL** and their
    **repo_id**. Never guess these, recall them from memory, or search the project
    for them — always ask the user.
-3. Run `npx unitbob@0.1.1 init`, write the two values into `.unitbob.json`, then
+3. Run `npx unitbob@0.1.2 init`, write the two values into `.unitbob.json`, then
    continue with what the user originally asked for.
 
 If a command later reports a setup or config problem, surface it calmly and

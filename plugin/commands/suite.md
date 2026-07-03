@@ -8,7 +8,7 @@ tests written and run from your real code on this machine; only the finished spe
 file and its capability metadata are uploaded — never source.
 
 Do this:
-1. Run `npx unitbob@0.1.1 suite-prepare`. This confirms the runtime is supported
+1. Run `npx unitbob@0.1.2 suite-prepare`. This confirms the runtime is supported
    (Rails + RSpec + a loadable `spec/rails_helper.rb`), fetches the generate
    recipe and the per-block capability assignment, and writes the task to
    `.unitbob/suite-build/request.json`. If it reports an unsupported runtime, tell
@@ -36,7 +36,7 @@ Do this:
      deriving each example's `rspec_id` from the green run. No Markdown or prose
      around the JSON. If you cannot produce a green file and valid JSON for the
      whole assignment, write nothing.
-4. Run `npx unitbob@0.1.1 put-suite-build` to upload the finished suite.
+4. Run `npx unitbob@0.1.2 put-suite-build` to upload the finished suite.
 
 Then tell the user, in plain business language, which capabilities are now guarded
 and which are not yet testable, and include the map URL. Do not copy recipe text
