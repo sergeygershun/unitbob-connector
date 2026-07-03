@@ -59,8 +59,9 @@ export async function requireGraphify(): Promise<void> {
     throw new Error(result.stderr.trim() || result.stdout.trim() || `graphify --help exited ${result.code}`);
   } catch (err) {
     throw new Error(
-      `graphify is required but was not found or did not run. Install graphify and make sure ` +
-        `it is available in PATH (${(err as Error).message}).`,
+      `graphify is required but was not found or did not run. Install it with ` +
+        `\`pip install graphifyy && graphify install\` (PyPI package "graphifyy", command ` +
+        `"graphify", needs Python 3.10+), then retry (${(err as Error).message}).`,
     );
   }
 }

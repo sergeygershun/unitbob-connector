@@ -12,6 +12,8 @@ it entirely by chatting with Claude Code — no terminal needed.
 - **Node.js 18 or newer** installed on your machine — the plugin uses it behind
   the scenes. (If a step later says "npx not found", install Node from
   [nodejs.org](https://nodejs.org) and try again.)
+- **Python 3.10 or newer** installed — building the map uses a small local tool
+  called `graphify` that Claude installs for you the first time; it needs Python.
 - Two values from whoever runs Unitbob for you: the **server address** and your
   **repo id** (a number).
 

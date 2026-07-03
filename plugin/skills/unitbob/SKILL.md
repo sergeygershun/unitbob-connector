@@ -50,6 +50,18 @@ command and let it fail with a scary error:
 If a command later reports a setup or config problem, surface it calmly and
 re-check the two values with the user — don't treat it as a bug to debug.
 
+## Building the map needs graphify
+
+The `map` step uses a small local tool, `graphify`, to extract the code graph on
+the user's machine (it runs locally and needs no API key). If `map` reports that
+`graphify` is missing or not on PATH, **install it for the user and retry** — do
+not just surface the error:
+
+- Install with `pip install graphifyy && graphify install`. The PyPI package is
+  `graphifyy` (two y's); the command stays `graphify`. It needs **Python 3.10+**.
+- If Python 3.10+ isn't available, tell the user plainly that graphify needs
+  Python 3.10+ and stop — don't guess another install path.
+
 ## Important
 
 Recipes (how to decompose, relate, and generate) are fetched from the server at
