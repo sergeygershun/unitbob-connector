@@ -15,20 +15,42 @@ it entirely by chatting with Claude Code — no terminal needed.
 - Two values from whoever runs Unitbob for you: the **server address** and your
   **repo id** (a number).
 
-## Step 1 — Install the plugin (once, point-and-click)
+## Step 1 — Add the Unitbob marketplace (once)
 
-In Claude Code, type `/plugin` and press Enter. A panel opens.
+A "marketplace" is just the place a plugin comes from — like adding an app store.
+Adding it installs nothing yet; it only tells Claude where to find the Unitbob
+plugin. You can do it two ways — pick whichever you like.
 
-1. Open the **Marketplaces** tab → **Add** → enter:
-   `sergeygershun/unitbob-connector`
-2. Open the **Discover** tab → pick **unitbob** → **Install**.
+**Option A — by hand (in the app)**
 
-Then start a new chat (or restart Claude Code) so the new commands appear.
+1. Open **Settings** → in the left menu under **Customize**, click **Plugins**.
+2. Top-right, click **Add ▾** → **Add marketplace**.
+3. Enter `sergeygershun/unitbob-connector` and confirm.
 
-> If typing `/plugin` does nothing, update Claude Code to the latest version and
-> try again — the plugin manager lives in recent versions.
+**Option B — just ask in chat**
 
-## Step 2 — Link your project (once, Claude does it for you)
+Open a Claude Code session (the **Code** tab) in any project and say:
+
+> Add the Unitbob plugin marketplace: `sergeygershun/unitbob-connector`
+
+Claude adds it for you and confirms.
+
+## Step 2 — Install the plugin (once)
+
+Now install the plugin from that marketplace. Again, two ways:
+
+**Option A — by hand (in the app)**
+
+In **Settings → Customize → Plugins**, click **Browse**, find **unitbob**, and
+click **Install**.
+
+**Option B — just ask in chat**
+
+> Install the unitbob plugin
+
+After installing, start a new session so the new commands load.
+
+## Step 3 — Link your project (once, Claude does it for you)
 
 Open your project in Claude Code and just ask, in plain words:
 
@@ -47,7 +69,7 @@ Give it those two values. Claude Code sets everything up itself and keeps going.
 > has nothing to do with Unitbob. To set up Unitbob, just answer Claude's
 > questions or say "set up unitbob".
 
-## Step 3 — Everyday use
+## Step 4 — Everyday use
 
 Just talk to Claude Code. Each request also has a matching command if you prefer:
 
