@@ -1,6 +1,6 @@
 {
   "name": "unitbob",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Unitbob connector — thin local hands for the Unitbob Rails brain. Owns no domain logic: it runs tools, relays bytes over the wire, and prints what the server returns.",
   "type": "module",
   "bin": {

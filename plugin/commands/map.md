@@ -5,7 +5,7 @@ description: Rebuild the Unitbob map of this project's business subsystems.
 Rebuild the architecture map for this project.
 
 Do this:
-1. Run `npx unitbob@0.1.2 map-prepare`.
+1. Run `npx unitbob@0.1.3 map-prepare`.
 2. Read `.unitbob/map-build/request.json`.
 3. Build the map locally:
    - Read source files directly from the request packet's `project_root` with
@@ -24,7 +24,7 @@ Do this:
    - Every interface must include at least one `technical_entrypoints` string.
    - Write strict JSON only to the request packet's `output_path`. No Markdown
      or prose around the JSON.
-4. Run `npx unitbob@0.1.2 put-map-build`.
+4. Run `npx unitbob@0.1.3 put-map-build`.
 
 Then tell the user whether the map upload succeeded and include the map URL.
 
