@@ -69,7 +69,32 @@ and carries on. (This first map may also install `graphify`; let Claude do it.)
 > has nothing to do with Unitbob. To set up Unitbob, just say "build my unitbob
 > map" — Claude handles the rest.
 
-## Step 4 — Everyday use
+## Step 4 — Your first run (map → checks → fixes)
+
+The first time, do these four in order — each one builds on the one before. Just
+say the words in chat; Claude does the work.
+
+1. **Build the map.** Say *"build my unitbob map"*. Claude reads your code
+   locally and draws the map of your app's business parts on the server. Takes a
+   couple of minutes.
+2. **Create the checks.** Say *"generate the checks"*. Using that map, Claude
+   writes one small guard (an automatic test) for each important seam and uploads
+   them. A couple of minutes again.
+3. **Run the checks.** Say *"run the checks"*. Claude runs the guards locally and
+   lights each lamp on the map green or red.
+4. **Fix a red lamp.** If a lamp is red, copy the guard id shown on it and say
+   *"fix guard <id>"*. Claude edits the code locally to restore what broke, then
+   asks you to run the checks again.
+
+You only need this full sequence once. After that, see Step 5.
+
+> **A few approval prompts are normal.** Building the map and the checks runs
+> some small commands on your machine, so Claude asks your permission each time —
+> just approve and let it continue. It can also ask to install `graphify` on the
+> first map; say yes. Nothing leaves your machine except the finished map and the
+> check results.
+
+## Step 5 — Everyday use
 
 Just talk to Claude Code. Each request also has a matching command if you prefer:
 
