@@ -20,30 +20,45 @@ First check that the published connector works on this machine:
 npx unitbob@0.1.1 --help
 ```
 
-In Claude Code, add the marketplace and install the plugin:
+Then add the marketplace and install the plugin. The marketplace lives in the
+**public** `unitbob-connector` repo, so no GitHub sign-in or access grant is
+needed.
+
+**In Claude Code** (interactive terminal), type:
 
 ```text
-/plugin marketplace add sergeygershun/unitbob
+/plugin marketplace add sergeygershun/unitbob-connector
 /plugin install unitbob@unitbob
-/reload-plugins
 ```
 
-If the repository is private, sign in to GitHub first with `gh auth login` or set
-up SSH access so Claude Code can clone it. If you do not have access to the
-private repository, ask the Unitbob maintainer to invite your GitHub account or
-publish the plugin marketplace from a public repository.
+**If `/plugin` is not available in your environment** (some IDE/embedded sessions
+report `/plugin isn't available in this environment`), run the equivalent from a
+terminal instead:
+
+```bash
+claude plugin marketplace add sergeygershun/unitbob-connector
+claude plugin install unitbob@unitbob
+```
+
+Both install at `user` scope. After installing, **start a new Claude Code
+session** so the `/unitbob:*` commands and the skill load — they do not appear in
+the session that ran the install. Confirm it is enabled with:
+
+```bash
+claude plugin list        # expect: unitbob@unitbob … Status: ✔ enabled
+```
 
 ## Project Setup
 
 Open Claude Code in the root of the project you want Unitbob to protect.
 
-If `.unitbob.json` does not exist, run:
+You normally do **not** create the config by hand. Just run a command (e.g.
+`/unitbob:map`) or ask in plain language ("build the map"). If the project is not
+linked yet, the command stops with a setup message; Claude Code then runs
+`npx unitbob@0.1.1 init` for you and asks for the two values it needs — the
+server URL and your `repo_id`. You only supply those; the agent runs the tool.
 
-```bash
-npx unitbob@0.1.1 init
-```
-
-Fill in the generated file:
+The result is a `.unitbob.json` at the project root (git-ignored):
 
 ```json
 {
@@ -52,7 +67,8 @@ Fill in the generated file:
 }
 ```
 
-Then check the connection:
+For a locally running server use `"server": "http://localhost:3000"`. Then check
+the connection:
 
 ```text
 /unitbob:show
@@ -60,6 +76,9 @@ Then check the connection:
 
 If setup fails, check that `.unitbob.json` is in the project root and that
 `repo_id` is a number, not a string.
+
+You never open a terminal for the workflow itself: Claude Code runs every
+`npx unitbob …` call through its own tools — you just chat and approve.
 
 ## Workflow
 
