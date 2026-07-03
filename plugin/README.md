@@ -1,108 +1,78 @@
 # Unitbob for Claude Code
 
-Unitbob adds Claude Code commands that build and check a business map for your app.
-Your source stays on your machine. Claude Code reads local files, writes local
-outputs, and the `unitbob` connector sends only generated map, suite, and run
-artifacts to the Unitbob server.
+Unitbob draws a living map of your app's business parts and puts a small guard
+(an automatic test) on each important seam. On the map each guard is a lamp:
+green means fine, red means something the app relied on just broke. You work with
+it entirely by chatting with Claude Code — no terminal needed.
 
-## Install
+## What you need
 
-Prerequisites:
+- The **Claude Code app** (desktop or the IDE extension). You do not use a
+  terminal.
+- **Node.js 18 or newer** installed on your machine — the plugin uses it behind
+  the scenes. (If a step later says "npx not found", install Node from
+  [nodejs.org](https://nodejs.org) and try again.)
+- Two values from whoever runs Unitbob for you: the **server address** and your
+  **repo id** (a number).
 
-- Claude Code with plugin support.
-- Node.js 18 or newer.
-- Access to the Unitbob server and a `repo_id` for your project.
-- For Rails guardrails: Rails + RSpec with `spec/rails_helper.rb` working.
+## Step 1 — Install the plugin (once, point-and-click)
 
-First check that the published connector works on this machine:
+In Claude Code, type `/plugin` and press Enter. A panel opens.
 
-```bash
-npx unitbob@0.1.1 --help
-```
+1. Open the **Marketplaces** tab → **Add** → enter:
+   `sergeygershun/unitbob-connector`
+2. Open the **Discover** tab → pick **unitbob** → **Install**.
 
-Then add the marketplace and install the plugin. The marketplace lives in the
-**public** `unitbob-connector` repo, so no GitHub sign-in or access grant is
-needed.
+Then start a new chat (or restart Claude Code) so the new commands appear.
 
-**In Claude Code** (interactive terminal), type:
+> If typing `/plugin` does nothing, update Claude Code to the latest version and
+> try again — the plugin manager lives in recent versions.
 
-```text
-/plugin marketplace add sergeygershun/unitbob-connector
-/plugin install unitbob@unitbob
-```
+## Step 2 — Link your project (once, Claude does it for you)
 
-**If `/plugin` is not available in your environment** (some IDE/embedded sessions
-report `/plugin isn't available in this environment`), run the equivalent from a
-terminal instead:
+Open your project in Claude Code and just ask, in plain words:
 
-```bash
-claude plugin marketplace add sergeygershun/unitbob-connector
-claude plugin install unitbob@unitbob
-```
+> build my unitbob map
 
-Both install at `user` scope. After installing, **start a new Claude Code
-session** so the `/unitbob:*` commands and the skill load — they do not appear in
-the session that ran the install. Confirm it is enabled with:
+The first time, Claude Code notices the project isn't linked yet and asks you for
+two things:
 
-```bash
-claude plugin list        # expect: unitbob@unitbob … Status: ✔ enabled
-```
+- the **server address** (for example `http://localhost:3000`, or the URL you
+  were given)
+- your **repo id** (the number you were given)
 
-## Project Setup
+Give it those two values. Claude Code sets everything up itself and keeps going.
 
-Open Claude Code in the root of the project you want Unitbob to protect.
+> **Don't type `/init`.** That is a different, built-in Claude Code command and
+> has nothing to do with Unitbob. To set up Unitbob, just answer Claude's
+> questions or say "set up unitbob".
 
-You normally do **not** create the config by hand. Just run a command (e.g.
-`/unitbob:map`) or ask in plain language ("build the map"). If the project is not
-linked yet, the command stops with a setup message; Claude Code then runs
-`npx unitbob@0.1.1 init` for you and asks for the two values it needs — the
-server URL and your `repo_id`. You only supply those; the agent runs the tool.
+## Step 3 — Everyday use
 
-The result is a `.unitbob.json` at the project root (git-ignored):
+Just talk to Claude Code. Each request also has a matching command if you prefer:
 
-```json
-{
-  "server": "https://your-unitbob-server.example.com",
-  "repo_id": 123
-}
-```
+| What you want | Say this | Command |
+| :--- | :--- | :--- |
+| Build or refresh the map | "build the map" | `/unitbob:map` |
+| Create the guardrail checks | "generate the checks" | `/unitbob:suite` |
+| Run the checks | "run the checks" | `/unitbob:check` |
+| Open the map | "open the map" | `/unitbob:show` |
+| Fix a red guard | "fix guard <id>" | `/unitbob:fix <id>` |
 
-For a locally running server use `"server": "http://localhost:3000"`. Then check
-the connection:
+When the map shows a **red lamp**, copy the guard id shown on it and ask Claude to
+fix that guard. Claude edits the code locally, then asks you to run the checks
+again.
 
-```text
-/unitbob:show
-```
+## What you never do
 
-If setup fails, check that `.unitbob.json` is in the project root and that
-`repo_id` is a number, not a string.
+- Open a terminal.
+- Type `npx`, `git`, or install commands.
+- Create or edit config files by hand.
 
-You never open a terminal for the workflow itself: Claude Code runs every
-`npx unitbob …` call through its own tools — you just chat and approve.
+Claude Code does all of that for you — you only chat and approve.
 
-## Workflow
+## Your code stays private
 
-Run these commands from Claude Code:
-
-```text
-/unitbob:map
-/unitbob:suite
-/unitbob:check
-```
-
-Use `/unitbob:map` to rebuild the business map, `/unitbob:suite` to generate the
-local RSpec guardrail suite, and `/unitbob:check` after code changes.
-
-When the map shows a red guard, copy its guard handle and run:
-
-```text
-/unitbob:fix <guard_id>
-```
-
-Claude Code will fetch the focused repair packet, edit local application code,
-and then ask you to run `/unitbob:check` again.
-
-## What Gets Sent
-
-Unitbob does not upload your source tree. The connector sends generated graph/map
-documents, generated guardrail specs and metadata, and raw guardrail run results.
+Unitbob never uploads your source code. Claude Code reads your files locally and
+sends only the generated map, the generated checks, and the check results to the
+Unitbob server.
