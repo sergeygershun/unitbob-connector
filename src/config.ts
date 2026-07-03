@@ -14,8 +14,9 @@ export interface Config {
 const CONFIG_FILE = '.unitbob.json';
 
 const SETUP_HINT =
-  'run `unitbob init`, or create a `.unitbob.json` at your project root with ' +
-  '{ "server": "https://your-unitbob-host", "repo_id": <number> }';
+  'this project is not linked to Unitbob yet. Ask the user for the Unitbob ' +
+  'server URL and repo_id, then run `unitbob init` and put them in ' +
+  '`.unitbob.json` ({ "server": "https://your-unitbob-host", "repo_id": <number> })';
 
 // Walk up from `startDir` to the filesystem root looking for `.unitbob.json`.
 export function findConfigPath(startDir: string = process.cwd()): string | null {

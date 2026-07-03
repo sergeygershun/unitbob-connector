@@ -32,9 +32,23 @@ user which one they mean rather than guessing destructively.
 
 ## Setup
 
-The tool reads `.unitbob.json` at the project root (`{ "server", "repo_id" }`). If
-a command fails with a setup message, run `npx unitbob@0.1.1 init` to write a
-template, then fill in the server URL and repo id.
+Each project links to Unitbob through a `.unitbob.json` file at its root, holding
+`{ "server", "repo_id" }`. A project that has never used Unitbob won't have one.
+
+**Before running any unitbob command in a project, check whether `.unitbob.json`
+exists at the project root.** If it does not, set it up first — do not run the
+command and let it fail with a scary error:
+
+1. Tell the user plainly that this project isn't linked to Unitbob yet. This is
+   normal first-time setup, not a failure.
+2. Ask them for exactly two values: the **Unitbob server URL** and their
+   **repo_id**. Never guess these, recall them from memory, or search the project
+   for them — always ask the user.
+3. Run `npx unitbob@0.1.1 init`, write the two values into `.unitbob.json`, then
+   continue with what the user originally asked for.
+
+If a command later reports a setup or config problem, surface it calmly and
+re-check the two values with the user — don't treat it as a bug to debug.
 
 ## Important
 
