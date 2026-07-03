@@ -1,53 +1,54 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '../src/config.ts';
+import { readLocalRepoId, writeConfigFile } from '../src/config.ts';
 
 function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'unitbob-config-'));
 }
 
-test('loads a valid .unitbob.json', () => {
+test('reads the repo id from a valid .unitbob.json', () => {
   const dir = tmpProject();
   writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server: 'https://host', repo_id: 3 }));
-  assert.deepEqual(loadConfig(dir), { server: 'https://host', repoId: 3, projectRoot: dir });
+  assert.equal(readLocalRepoId(dir), 3);
 });
 
-test('trims a trailing slash on server', () => {
+test('a missing file is no working link', () => {
+  assert.equal(readLocalRepoId(tmpProject()), null);
+});
+
+test('the legacy repo_id: 0 template is no working link', () => {
   const dir = tmpProject();
-  writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server: 'https://host/', repo_id: 1 }));
-  assert.equal(loadConfig(dir).server, 'https://host');
+  writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server: 'https://host', repo_id: 0 }));
+  assert.equal(readLocalRepoId(dir), null);
 });
 
-test('finds the config by walking up from a subdirectory', () => {
+test('a non-integer repo_id is no working link', () => {
+  const dir = tmpProject();
+  writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server: 'https://host', repo_id: 'three' }));
+  assert.equal(readLocalRepoId(dir), null);
+});
+
+test('malformed JSON is no working link', () => {
+  const dir = tmpProject();
+  writeFileSync(join(dir, '.unitbob.json'), '{ not json');
+  assert.equal(readLocalRepoId(dir), null);
+});
+
+test('never adopts a parent directory config (no walk-up)', () => {
   const dir = tmpProject();
   writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server: 'https://host', repo_id: 7 }));
   const nested = join(dir, 'a', 'b');
   mkdirSync(nested, { recursive: true });
-  assert.deepEqual(loadConfig(nested), { server: 'https://host', repoId: 7, projectRoot: dir });
+  assert.equal(readLocalRepoId(nested), null);
 });
 
-test('missing config fails with a setup message, not a stack trace', () => {
+test('writeConfigFile round-trips through readLocalRepoId', () => {
   const dir = tmpProject();
-  assert.throws(() => loadConfig(dir), /No \.unitbob\.json found.*unitbob init/s);
-});
-
-test('malformed JSON fails with an actionable message', () => {
-  const dir = tmpProject();
-  writeFileSync(join(dir, '.unitbob.json'), '{ not json');
-  assert.throws(() => loadConfig(dir), /not valid JSON/);
-});
-
-test('missing server fails with an actionable message', () => {
-  const dir = tmpProject();
-  writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ repo_id: 3 }));
-  assert.throws(() => loadConfig(dir), /missing a "server" string/);
-});
-
-test('non-integer repo_id fails with an actionable message', () => {
-  const dir = tmpProject();
-  writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server: 'https://host', repo_id: 'three' }));
-  assert.throws(() => loadConfig(dir), /missing an integer "repo_id"/);
+  writeConfigFile(dir, { server: 'http://localhost:3000', repo_id: 42 });
+  assert.equal(readLocalRepoId(dir), 42);
+  const raw = JSON.parse(readFileSync(join(dir, '.unitbob.json'), 'utf8'));
+  assert.deepEqual(raw, { server: 'http://localhost:3000', repo_id: 42 });
 });

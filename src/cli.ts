@@ -2,7 +2,7 @@
 // The single entry point. Parse `unitbob <verb> [args]`, dispatch to a hands-verb,
 // and map any thrown error to a non-zero exit with an actionable message — never
 // a raw stack trace. This is the only place that decides process exit codes.
-import { loadConfig } from './config.ts';
+import { ensureLinked } from './link.ts';
 import { recipe } from './verbs/recipe.ts';
 import { show } from './verbs/show.ts';
 import { run } from './verbs/run.ts';
@@ -18,7 +18,7 @@ const USAGE = `unitbob — thin local hands for the Unitbob server.
 Usage: unitbob <verb> [args]
 
 Verbs:
-  init                 Write a .unitbob.json template and git-ignore it.
+  init                 Link this project to Unitbob (also happens automatically).
   recipe <name>        Fetch and print a recipe from the server.
   show                 Print the link to this project's map.
   map-prepare          Internal: keylessly update the graph (no API key) and write the host map-build request.
@@ -36,7 +36,8 @@ output_path from your local source; \`put-*\` uploads only the structured result
 Graph extraction is keyless: the connector needs no LLM API key. Inference is the
 host-LLM's job; any semantic graph enrichment is host-LLM work (the /graphify skill).
 
-Config: .unitbob.json at your project root — { "server": "...", "repo_id": <number> }.`;
+Config: .unitbob.json at your project root, created automatically: the first
+run registers the project on the server by its folder name (spec 28).`;
 
 async function main(argv: string[]): Promise<number> {
   const [verb, ...args] = argv;
@@ -52,29 +53,29 @@ async function main(argv: string[]): Promise<number> {
         await init(args);
         return 0;
       case 'recipe':
-        await recipe(loadConfig(), args);
+        await recipe(await ensureLinked(), args);
         return 0;
       case 'show':
-        await show(loadConfig());
+        await show(await ensureLinked());
         return 0;
       case 'map-prepare':
-        await mapPrepare(loadConfig(), args);
+        await mapPrepare(await ensureLinked(), args);
         return 0;
       case 'put-map-build':
-        await putMapBuild(loadConfig(), args);
+        await putMapBuild(await ensureLinked(), args);
         return 0;
       case 'suite-prepare':
-        await suitePrepare(loadConfig(), args);
+        await suitePrepare(await ensureLinked(), args);
         return 0;
       case 'put-suite-build':
-        await putSuiteBuild(loadConfig(), args);
+        await putSuiteBuild(await ensureLinked(), args);
         return 0;
       case 'fix-prepare':
-        await fixPrepare(loadConfig(), args);
+        await fixPrepare(await ensureLinked(), args);
         return 0;
       case 'run':
       case 'check':
-        await run(loadConfig(), args);
+        await run(await ensureLinked(), args);
         return 0;
       default:
         process.stderr.write(`Unknown verb "${verb}".\n\n${USAGE}\n`);

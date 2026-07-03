@@ -1,9 +1,11 @@
 // Per-project config for the connector. Lives in `.unitbob.json` at the project
-// root: { "server": "https://…", "repo_id": 3 }. No secret — auth is deferred
-// (spec 15, decision #3). Every verb reads it. A missing or malformed file must
-// fail with an actionable setup message, never a raw stack trace.
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+// root: { "server": "http://…", "repo_id": 3 }. No secret — auth is deferred
+// (spec 15, decision #3). Linking is automatic (spec 28): every verb goes
+// through `ensureLinked` (src/link.ts), which registers the project by folder
+// name when there is no working link. Only the project root's own file counts —
+// never a parent directory's (no walk-up).
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export interface Config {
   server: string;
@@ -11,56 +13,26 @@ export interface Config {
   projectRoot: string;
 }
 
-const CONFIG_FILE = '.unitbob.json';
+export const CONFIG_FILE = '.unitbob.json';
 
-const SETUP_HINT =
-  'this project is not linked to Unitbob yet. Ask the user for the Unitbob ' +
-  'server URL and repo_id, then run `unitbob init` and put them in ' +
-  '`.unitbob.json` ({ "server": "https://your-unitbob-host", "repo_id": <number> })';
-
-// Walk up from `startDir` to the filesystem root looking for `.unitbob.json`.
-export function findConfigPath(startDir: string = process.cwd()): string | null {
-  let dir = startDir;
-  for (;;) {
-    const candidate = join(dir, CONFIG_FILE);
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
-export function loadConfig(startDir: string = process.cwd()): Config {
-  const path = findConfigPath(startDir);
-  if (!path) {
-    throw new Error(`No ${CONFIG_FILE} found — ${SETUP_HINT}`);
-  }
-
-  let raw: string;
-  try {
-    raw = readFileSync(path, 'utf8');
-  } catch (err) {
-    throw new Error(`Could not read ${path} (${(err as Error).message}) — ${SETUP_HINT}`);
-  }
+// The repo id stored at `cwd`, or null when there is no working link: file
+// missing, unreadable, malformed JSON, or repo_id absent / 0 / non-integer
+// (the legacy init template wrote repo_id: 0). Callers re-link on null.
+export function readLocalRepoId(cwd: string): number | null {
+  const path = join(cwd, CONFIG_FILE);
+  if (!existsSync(path)) return null;
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
-    throw new Error(`${path} is not valid JSON — ${SETUP_HINT}`);
+    return null;
   }
 
-  const obj = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
-  const server = obj.server;
-  const repoId = obj.repo_id;
+  const repoId = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>).repo_id : undefined;
+  return typeof repoId === 'number' && Number.isInteger(repoId) && repoId > 0 ? repoId : null;
+}
 
-  if (typeof server !== 'string' || server.trim() === '') {
-    throw new Error(`${path} is missing a "server" string — ${SETUP_HINT}`);
-  }
-  if (typeof repoId !== 'number' || !Number.isInteger(repoId)) {
-    throw new Error(`${path} is missing an integer "repo_id" — ${SETUP_HINT}`);
-  }
-
-  // Trim a trailing slash so callers can join paths without doubling up.
-  return { server: server.trim().replace(/\/+$/, ''), repoId, projectRoot: dirname(path) };
+export function writeConfigFile(cwd: string, config: { server: string; repo_id: number }): void {
+  writeFileSync(join(cwd, CONFIG_FILE), `${JSON.stringify(config, null, 2)}\n`);
 }

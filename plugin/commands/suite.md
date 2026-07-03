@@ -41,3 +41,6 @@ Do this:
 Then tell the user, in plain business language, which capabilities are now guarded
 and which are not yet testable, and include the map URL. Do not copy recipe text
 into this project — it is fetched from the server each time.
+
+Linking is automatic: if a command prints `Linked this project to Unitbob as X.`,
+relay that line to the user verbatim. Never ask for or guess a repo_id.

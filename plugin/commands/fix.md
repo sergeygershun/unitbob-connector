@@ -31,3 +31,6 @@ Do this:
      `npx unitbob@0.1.2 put-suite-build`. This makes a new suite version against
      the same map.
 4. Tell the user, in plain business language, what you changed.
+
+Linking is automatic: if a command prints `Linked this project to Unitbob as X.`,
+relay that line to the user verbatim. Never ask for or guess a repo_id.

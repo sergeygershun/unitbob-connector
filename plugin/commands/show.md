@@ -9,3 +9,6 @@ Do this:
 
 Give the user that link and invite them to open it. The map is viewed on the
 server; the connector serves no UI of its own.
+
+Linking is automatic: if a command prints `Linked this project to Unitbob as X.`,
+relay that line to the user verbatim. Never ask for or guess a repo_id.

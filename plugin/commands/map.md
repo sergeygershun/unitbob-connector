@@ -27,3 +27,6 @@ Do this:
 4. Run `npx unitbob@0.1.2 put-map-build`.
 
 Then tell the user whether the map upload succeeded and include the map URL.
+
+Linking is automatic: if a command prints `Linked this project to Unitbob as X.`,
+relay that line to the user verbatim. Never ask for or guess a repo_id.

@@ -13,3 +13,6 @@ Then report the summary to the user in plain business language: which subsystems
 are healthy (green) and which broke (red), and for a red one, what business
 behaviour the broken seam protected. Print the server's summary as-is; do not
 re-interpret raw test output yourself.
+
+Linking is automatic: if a command prints `Linked this project to Unitbob as X.`,
+relay that line to the user verbatim. Never ask for or guess a repo_id.

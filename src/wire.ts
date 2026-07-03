@@ -64,6 +64,42 @@ export interface FixPacket {
 // Verbs surface its message and exit non-zero; they never fabricate a result.
 export class WireError extends Error {}
 
+// POST /repos/register — the linking bootstrap (spec 28). A standalone function
+// rather than a Wire method because at link time there is no Config yet: only a
+// server URL and the project's folder name. Idempotent on the server.
+export async function registerRepo(server: string, name: string): Promise<number> {
+  const url = `${server}/repos/register`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  } catch (err) {
+    throw new WireError(
+      `Cannot reach the Unitbob server at ${server} (${(err as Error).message}). ` +
+        'Check that the server is running.',
+    );
+  }
+
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = (await res.text()).slice(0, 500);
+    } catch {
+      // ignore — the status alone is actionable enough
+    }
+    throw new WireError(`POST ${url} failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`);
+  }
+
+  const payload = (await res.json()) as { id?: unknown };
+  if (typeof payload.id !== 'number' || !Number.isInteger(payload.id)) {
+    throw new WireError(`POST ${url} returned a malformed payload: expected an integer id.`);
+  }
+  return payload.id;
+}
+
 export class Wire {
   private readonly config: Config;
 
