@@ -1,4 +1,5 @@
 import type { Config } from '../config.ts';
+import { materializeHelper } from '../files/guardrails.ts';
 import { writeSuiteBuildRequest } from '../files/suiteBuild.ts';
 import { runtimePrecheck } from '../runner/precheck.ts';
 import { Wire, type Recipe, type SuitePackets } from '../wire.ts';
@@ -9,9 +10,10 @@ interface SuitePrepareDeps {
   precheck: (projectRoot: string) => { ok: boolean; message?: string };
 }
 
-// Confirm the runtime is supported (Rails + RSpec + rails_helper), then fetch the
-// generate recipe and the per-block capability assignment and write the host's
-// task to `.unitbob/suite-build/request.json`. No model is called and no source is
+// Confirm the runtime is supported (Rails + RSpec), materialize the boot helper
+// the generated suite will require, then fetch the generate recipe and the
+// per-block capability assignment and write the host's task to
+// `.unitbob/suite-build/request.json`. No model is called and no source is
 // read here — that is the host's job, framed by ai/agents/suite_builder.md. An
 // unsupported runtime stops with one actionable message and writes nothing; a
 // no-current-map error from the server surfaces (via WireError) with guidance to
@@ -27,6 +29,8 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
 
   const check = actual.precheck(config.projectRoot);
   if (!check.ok) throw new Error(check.message ?? 'Unsupported runtime.');
+
+  materializeHelper(config.projectRoot);
 
   const [recipe, packets] = await Promise.all([actual.getRecipe('generate'), actual.getSuitePackets()]);
   const request = writeSuiteBuildRequest(config.projectRoot, {

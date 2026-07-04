@@ -10,7 +10,8 @@ between subsystems guarded by an auto-generated test. On the map, those tests sh
 as green or red lamps. A red lamp is the only signal the user needs: something the
 structure depended on just broke.
 
-There is a `unitbob` command-line tool, run via `npx unitbob@0.1.4 <verb>`. It is
+There is a `unitbob` command-line tool, run via
+`npx -y --loglevel=error unitbob@0.1.5 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
 (Claude Code) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.
@@ -44,8 +45,9 @@ first time any unitbob command runs. There is no setup step.
   that one line through to the user **verbatim** — don't hide or embellish it.
   When no such line appears, the project was already linked; say nothing about
   linking.
-- Run unitbob commands from the project's root folder (where `.git` is) — the
-  connector refuses to link from anywhere else.
+- Run unitbob commands from the project's root folder (where `.git` or the
+  project files like `Gemfile` are) — the connector refuses to link from
+  anywhere else.
 - If a command reports it cannot reach the Unitbob server, surface that calmly:
   the server isn't running — a prerequisite, not a bug to debug.
 - If a command reports that `.unitbob.json` points at a different repo than the
@@ -63,6 +65,23 @@ not just surface the error:
   `graphifyy` (two y's); the command stays `graphify`. It needs **Python 3.10+**.
 - If Python 3.10+ isn't available, tell the user plainly that graphify needs
   Python 3.10+ and stop — don't guess another install path.
+
+## Generating or running the suite needs a test runtime
+
+The suite is real tests run on the user's machine, so the project's test
+environment must work. Three rules:
+
+- **Never scaffold a test setup** (`rails generate rspec:install` and friends) —
+  unitbob brings its own boot file and writes it inside `.unitbob/` on every
+  run. Nothing needs to be created or committed in the project.
+- **The environment isn't ready** (dependencies not installed, test database
+  not prepared) → fix it with the project's own standard commands (e.g.
+  `bundle install`, `bin/rails db:test:prepare`) and retry. Changing a tracked
+  file (like adding a gem to the Gemfile) needs the user's consent first —
+  offer, don't just do it.
+- **A server the environment depends on isn't running** (the database, the
+  Unitbob server) → surface that calmly as a prerequisite — a message, not a
+  debugging session.
 
 ## Important
 

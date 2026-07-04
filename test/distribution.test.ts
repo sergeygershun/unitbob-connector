@@ -72,14 +72,16 @@ test('built CLI keeps the Node shebang', () => {
 
 test('Claude Code plugin commands pin the connector package version', () => {
   const version = connectorVersion();
-  const pinnedNpx = new RegExp(`npx unitbob@${escapeRegExp(version)}`);
-  const bareNpx = /npx unitbob(?!@)/;
+  // Spec 29: warnings suppressed, npm's own errors stay visible (never --silent).
+  const pinnedNpx = new RegExp(`npx -y --loglevel=error unitbob@${escapeRegExp(version)}`);
+  const bareNpx = /npx(?:\s+--?\S+)*\s+unitbob(?!@)/;
 
   for (const entry of readdirSync(commandsDir)) {
     if (!entry.endsWith('.md')) continue;
 
     const text = readFileSync(`${commandsDir}/${entry}`, 'utf8');
     assert.doesNotMatch(text, bareNpx, `${entry} must not use bare npx unitbob`);
+    assert.doesNotMatch(text, /--silent/, `${entry} must not swallow npm errors with --silent`);
     assert.doesNotMatch(text, /ai\/agents\//, `${entry} must be self-contained for Claude Code installs`);
     assert.match(text, pinnedNpx, `${entry} must pin ${version}`);
   }

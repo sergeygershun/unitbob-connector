@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import { registerRepo, WireError } from '../src/wire.ts';
-import { ensureLinked } from '../src/link.ts';
+import { assertProjectRoot, ensureLinked, projectName } from '../src/link.ts';
 
 interface Hit {
   method: string;
@@ -143,7 +143,7 @@ test('ensureLinked fails early on a mismatched id and leaves the file alone', as
 
 test('ensureLinked refuses to register outside a project root, before any request', async () => {
   await withRegisterServer(2, async (server, hits) => {
-    const dir = mkdtempSync(join(tmpdir(), 'unitbob-not-a-project-')); // no .git
+    const dir = mkdtempSync(join(tmpdir(), 'unitbob-not-a-project-')); // no .git, no marker
     await assert.rejects(
       ensureLinked(dir, server),
       (err: Error) => err instanceof WireError && /project's root folder/.test(err.message),
@@ -151,4 +151,91 @@ test('ensureLinked refuses to register outside a project root, before any reques
     assert.equal(hits.length, 0);
     assert.equal(existsSync(join(dir, '.unitbob.json')), false);
   });
+});
+
+test('ensureLinked links a session worktree under the main checkout name', async () => {
+  await withRegisterServer(4, async (server, hits) => {
+    const base = mkdtempSync(join(tmpdir(), 'unitbob-worktree-link-'));
+    const main = join(base, 'a2time');
+    const worktree = join(main, '.claude', 'worktrees', 'practical-sinoussi');
+    mkdirSync(join(main, '.git', 'worktrees', 'practical-sinoussi'), { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(
+      join(worktree, '.git'),
+      `gitdir: ${join(main, '.git', 'worktrees', 'practical-sinoussi')}\n`,
+    );
+
+    const out = await captureStdout(async () => {
+      await ensureLinked(worktree, server);
+    });
+
+    assert.match(out, /Linked this project to Unitbob as a2time\./);
+    assert.deepEqual(JSON.parse(hits[0].body), { name: 'a2time' });
+  });
+});
+
+// projectName — the .git parse itself, no server involved.
+
+test('projectName of a plain working copy (.git directory) is basename(cwd)', () => {
+  const dir = tmpProject('a2time');
+  assert.equal(projectName(dir), 'a2time');
+});
+
+test('projectName of a worktree with an absolute gitdir is the main checkout name', () => {
+  const base = mkdtempSync(join(tmpdir(), 'unitbob-worktree-'));
+  const main = join(base, 'a2time');
+  const worktree = join(main, '.claude', 'worktrees', 'slug-1234');
+  mkdirSync(join(main, '.git', 'worktrees', 'slug-1234'), { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  writeFileSync(join(worktree, '.git'), `gitdir: ${join(main, '.git', 'worktrees', 'slug-1234')}\n`);
+
+  assert.equal(projectName(worktree), 'a2time');
+});
+
+test('projectName of a worktree with a relative gitdir is the main checkout name', () => {
+  const base = mkdtempSync(join(tmpdir(), 'unitbob-worktree-rel-'));
+  const main = join(base, 'a2time');
+  const worktree = join(base, 'elsewhere', 'slug-5678');
+  mkdirSync(join(main, '.git', 'worktrees', 'slug-5678'), { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  const rel = relative(worktree, join(main, '.git', 'worktrees', 'slug-5678'));
+  writeFileSync(join(worktree, '.git'), `gitdir: ${rel}\n`);
+
+  assert.equal(projectName(worktree), 'a2time');
+});
+
+test('projectName falls back to basename(cwd) without a .git', () => {
+  const base = mkdtempSync(join(tmpdir(), 'unitbob-gitless-'));
+  const dir = join(base, 'my-app');
+  mkdirSync(dir);
+  assert.equal(projectName(dir), 'my-app');
+});
+
+test('projectName falls back to basename(cwd) for a submodule-style gitdir', () => {
+  const base = mkdtempSync(join(tmpdir(), 'unitbob-submodule-'));
+  const dir = join(base, 'engine');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '.git'), `gitdir: ${join(base, '.git', 'modules', 'engine')}\n`);
+
+  assert.equal(projectName(dir), 'engine');
+});
+
+// assertProjectRoot — relaxed for git-less projects (spec 29).
+
+test('assertProjectRoot accepts a Gemfile-only root without .git', () => {
+  const base = mkdtempSync(join(tmpdir(), 'unitbob-gemfile-only-'));
+  const dir = join(base, 'my-app');
+  mkdirSync(dir);
+  writeFileSync(join(dir, 'Gemfile'), "source 'https://rubygems.org'\n");
+
+  assert.doesNotThrow(() => assertProjectRoot(dir));
+});
+
+test('assertProjectRoot still refuses $HOME, the filesystem root, and a marker-less folder', () => {
+  const refusal = (err: Error) =>
+    err instanceof WireError && /no \.git and no project files/.test(err.message);
+
+  assert.throws(() => assertProjectRoot(homedir()), refusal);
+  assert.throws(() => assertProjectRoot('/'), refusal);
+  assert.throws(() => assertProjectRoot(mkdtempSync(join(tmpdir(), 'unitbob-markerless-'))), refusal);
 });

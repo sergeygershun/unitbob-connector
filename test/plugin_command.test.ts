@@ -8,7 +8,8 @@ const suiteCommandPath = fileURLToPath(new URL('../plugin/commands/suite.md', im
 const fixCommandPath = fileURLToPath(new URL('../plugin/commands/fix.md', import.meta.url));
 const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
 const connectorVersion = JSON.parse(readFileSync(packageJsonPath, 'utf8')).version as string;
-const unitbob = `npx unitbob@${connectorVersion}`;
+// Spec 29: warnings suppressed, npm's own errors stay visible (never --silent).
+const unitbob = `npx -y --loglevel=error unitbob@${connectorVersion}`;
 const unitbobPattern = unitbob.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 test('/unitbob map command stitches connector hands and is self-contained', () => {

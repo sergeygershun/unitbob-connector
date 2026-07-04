@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { suitePrepare } from '../src/verbs/suitePrepare.ts';
+import { UNITBOB_HELPER_RB } from '../src/files/guardrails.ts';
 import { readSuiteBuildRequest } from '../src/files/suiteBuild.ts';
 import type { Config } from '../src/config.ts';
 
@@ -66,6 +67,19 @@ test('suite-prepare prints a next-step naming the recipe, output_path, and put-s
   assert.match(output, /`unitbob put-suite-build`/);
 });
 
+test('suite-prepare materializes the boot helper right after the precheck', async () => {
+  const projectRoot = tmpProject();
+
+  await suitePrepare(config(projectRoot), [], {
+    precheck: okPrecheck,
+    getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
+    getSuitePackets: async () => ({ map_digest: 'sha256-map', blocks: [] }),
+  });
+
+  const helperPath = join(projectRoot, '.unitbob', 'guardrails', 'unitbob_helper.rb');
+  assert.equal(readFileSync(helperPath, 'utf8'), UNITBOB_HELPER_RB);
+});
+
 test('suite-prepare stops on an unsupported runtime and writes nothing', async () => {
   const projectRoot = tmpProject();
   let fetched = false;
@@ -85,6 +99,7 @@ test('suite-prepare stops on an unsupported runtime and writes nothing', async (
 
   assert.equal(fetched, false);
   assert.throws(() => readSuiteBuildRequest(projectRoot), /run `npx unitbob suite-prepare` first/);
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'guardrails', 'unitbob_helper.rb')), false);
 });
 
 test('suite-prepare surfaces a no-current-map error and writes nothing', async () => {

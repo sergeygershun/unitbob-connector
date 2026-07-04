@@ -1,10 +1,10 @@
 // Zero-touch linking (spec 28): every verb starts here. A project is identified
-// by its folder name — basename(cwd), nothing else — and resolved on the server
+// by its main checkout's folder name (spec 29) and resolved on the server
 // idempotently each run. The user never supplies a repo_id; it is an internal
 // server key nobody is expected to know.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { CONFIG_FILE, readLocalRepoId, writeConfigFile, type Config } from './config.ts';
 import { registerRepo, WireError } from './wire.ts';
 
@@ -24,7 +24,7 @@ export async function ensureLinked(
   server: string = DEFAULT_SERVER,
 ): Promise<Config> {
   const fileId = readLocalRepoId(cwd); // only cwd's own file — no walk-up
-  const name = basename(cwd);
+  const name = projectName(cwd);
 
   // Refuse before touching the server, so a stray run can't mint a junk repo.
   if (fileId === null) assertProjectRoot(cwd);
@@ -45,14 +45,46 @@ export async function ensureLinked(
   return { server, repoId: authId, projectRoot: cwd };
 }
 
+// The linking name is the *project's* name, not the checkout's (spec 29). A
+// `.git` directory means cwd is the main checkout; a `.git` file is a worktree
+// pointer whose `gitdir:` leads back to the main checkout
+// (`<root>/.git/worktrees/<slug>`). No subprocess — the file is parsed
+// directly, and anything unexpected (no `.git`, submodules, exotic layouts)
+// falls back to basename(cwd): name resolution never fails linking.
+export function projectName(cwd: string): string {
+  const gitPath = join(cwd, '.git');
+  try {
+    if (!statSync(gitPath).isFile()) return basename(cwd); // .git directory — main checkout
+    const pointer = readFileSync(gitPath, 'utf8').match(/^gitdir:\s*(.+?)\s*$/m);
+    if (!pointer) return basename(cwd);
+
+    const gitdir = isAbsolute(pointer[1]) ? pointer[1] : resolve(cwd, pointer[1]);
+    const worktrees = dirname(gitdir); // <root>/.git/worktrees
+    const commonGit = dirname(worktrees); // <root>/.git
+    if (basename(worktrees) === 'worktrees' && basename(commonGit) === '.git') {
+      return basename(dirname(commonGit));
+    }
+    return basename(cwd); // submodule (`.git/modules/…`) or exotic layout
+  } catch {
+    return basename(cwd); // no .git at all — git-less project
+  }
+}
+
+const PROJECT_MARKERS = ['Gemfile', 'gems.rb', 'package.json'];
+
 // Linking writes a file and creates a server row — only do that at a real
-// project root: a `.git` present, and never at $HOME or the filesystem root.
+// project root: never $HOME or the filesystem root, and the folder must be
+// anchored by `.git` or a recognizable project marker (a vibecoder may not use
+// version control at all; the marker still keeps junk folders off the brain).
 export function assertProjectRoot(cwd: string): void {
   const isFsRoot = dirname(cwd) === cwd;
-  if (isFsRoot || cwd === homedir() || !existsSync(join(cwd, '.git'))) {
+  const anchored =
+    existsSync(join(cwd, '.git')) ||
+    PROJECT_MARKERS.some((marker) => existsSync(join(cwd, marker)));
+  if (isFsRoot || cwd === homedir() || !anchored) {
     throw new WireError(
-      `${cwd} does not look like a project root (no .git here) — ` +
-        "run this from your project's root folder.",
+      `${cwd} does not look like a project root (no .git and no project files ` +
+        "(Gemfile/package.json) here) — run this from your project's root folder.",
     );
   }
 }
