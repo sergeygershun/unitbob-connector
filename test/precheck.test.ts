@@ -29,3 +29,9 @@ test('missing rspec-rails instructs the agent to offer the gem, with consent', (
   assert.match(check.message ?? '', /Offer the user to add it and run `bundle install`/);
   assert.match(check.message ?? '', /only with their consent, then retry/);
 });
+
+test('a bare rspec gem is not enough — the boot helper needs rspec-rails', () => {
+  const check = runtimePrecheck(tmpProject("gem 'rails'\ngem 'rspec'\n"));
+  assert.equal(check.ok, false);
+  assert.match(check.message ?? '', /need the rspec-rails gem/);
+});

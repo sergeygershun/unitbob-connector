@@ -211,6 +211,31 @@ test('projectName falls back to basename(cwd) without a .git', () => {
   assert.equal(projectName(dir), 'my-app');
 });
 
+test('projectName resolves a worktree of a bare repo via its commondir file', () => {
+  const base = mkdtempSync(join(tmpdir(), 'unitbob-bare-'));
+  const gitdir = join(base, 'a2time.git', 'worktrees', 'slug-9');
+  const worktree = join(base, 'checkout');
+  mkdirSync(gitdir, { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  writeFileSync(join(gitdir, 'commondir'), '../..\n');
+  writeFileSync(join(worktree, '.git'), `gitdir: ${gitdir}\n`);
+
+  assert.equal(projectName(worktree), 'a2time');
+});
+
+test('projectName prefers commondir over the path shape (separate git dir)', () => {
+  const base = mkdtempSync(join(tmpdir(), 'unitbob-sepgit-'));
+  const gitdir = join(base, 'gitstore', 'worktrees', 'slug-3');
+  const worktree = join(base, 'wt');
+  mkdirSync(gitdir, { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  writeFileSync(join(gitdir, 'commondir'), join(base, 'gitstore'));
+  writeFileSync(join(worktree, '.git'), `gitdir: ${gitdir}\n`);
+
+  // Not the worktree slug: the name is stable per repo, so no junk repo per worktree.
+  assert.equal(projectName(worktree), 'gitstore');
+});
+
 test('projectName falls back to basename(cwd) for a submodule-style gitdir', () => {
   const base = mkdtempSync(join(tmpdir(), 'unitbob-submodule-'));
   const dir = join(base, 'engine');
@@ -238,4 +263,28 @@ test('assertProjectRoot still refuses $HOME, the filesystem root, and a marker-l
   assert.throws(() => assertProjectRoot(homedir()), refusal);
   assert.throws(() => assertProjectRoot('/'), refusal);
   assert.throws(() => assertProjectRoot(mkdtempSync(join(tmpdir(), 'unitbob-markerless-'))), refusal);
+});
+
+test('assertProjectRoot refuses a marker-only folder inside a bigger checkout', () => {
+  const repo = tmpProject('bigapp'); // has .git
+  const sub = join(repo, 'frontend');
+  mkdirSync(sub);
+  writeFileSync(join(sub, 'package.json'), '{}\n');
+
+  assert.throws(
+    () => assertProjectRoot(sub),
+    (err: Error) => err instanceof WireError && err.message.includes(`inside the project at ${repo}`),
+  );
+});
+
+test('assertProjectRoot refuses node_modules even without an enclosing .git', () => {
+  const base = mkdtempSync(join(tmpdir(), 'unitbob-nm-'));
+  const dep = join(base, 'node_modules', 'left-pad');
+  mkdirSync(dep, { recursive: true });
+  writeFileSync(join(dep, 'package.json'), '{}\n');
+
+  assert.throws(
+    () => assertProjectRoot(dep),
+    (err: Error) => err instanceof WireError && /inside a dependency folder/.test(err.message),
+  );
 });

@@ -21,7 +21,9 @@ export function runtimePrecheck(projectRoot: string): PrecheckResult {
   if (!hasGemfileWith(projectRoot, /\brails\b/)) {
     return { ok: false, message: `${SUPPORTED} (no \`rails\` gem found in Gemfile.)` };
   }
-  if (!hasGemfileWith(projectRoot, /\brspec(-rails)?\b/)) {
+  // Specifically rspec-rails: the boot helper requires `rspec/rails`, so a
+  // bare `rspec` gem passes nothing downstream — stop with the honest offer.
+  if (!hasGemfileWith(projectRoot, /\brspec-rails\b/)) {
     return {
       ok: false,
       message:

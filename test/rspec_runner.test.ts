@@ -28,6 +28,8 @@ test('uses executable bin/rspec first with the exact suite path, fixed order/see
   assert.equal(result.command, join(projectRoot, 'bin', 'rspec'));
   assert.deepEqual(result.args, [
     '.unitbob/guardrails/architecture_map_contracts_spec.rb',
+    '--options',
+    '.unitbob/guardrails/rspec.opts',
     '--order',
     'defined',
     '--seed',
@@ -59,6 +61,8 @@ test('falls back to bundle exec rspec when bin/rspec is not executable', async (
       'exec',
       'rspec',
       '.unitbob/guardrails/architecture_map_contracts_spec.rb',
+      '--options',
+      '.unitbob/guardrails/rspec.opts',
       '--order',
       'defined',
       '--seed',

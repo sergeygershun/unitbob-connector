@@ -32,7 +32,8 @@ Do this:
      `require_relative 'unitbob_helper'` (the boot helper materialized next to
      it — never require `rails_helper` directly) at
      `.unitbob/guardrails/architecture_map_contracts_spec.rb`, run it
-     (`bundle exec rspec .unitbob/guardrails/architecture_map_contracts_spec.rb --format json`),
+     (`bundle exec rspec .unitbob/guardrails/architecture_map_contracts_spec.rb --options .unitbob/guardrails/rspec.opts --format json`
+     — the `--options` flag keeps the project's own `.rspec` out of the run),
      and iterate until every non-defect example is green; defect examples must
      fail for their stated defect reason, not from test-setup mistakes.
    - Use plain business language for headlines and scenario descriptions; never

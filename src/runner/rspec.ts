@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProcess, type ProcResult } from '../proc.ts';
-import { GUARDRAILS_DIR, SUITE_FILE } from '../files/guardrails.ts';
+import { GUARDRAILS_DIR, OPTIONS_FILE, SUITE_FILE } from '../files/guardrails.ts';
 
 export const RSPEC_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -17,9 +17,23 @@ export interface RspecRunResult extends ProcResult {
 
 // Run the materialised Unitbob guardrail suite (spec 26). Only this file runs —
 // never the project's full suite — under RAILS_ENV=test with a fixed order/seed.
+// --options points at the materialized empty file so the project's own .rspec
+// (a --require of a helper we replaced, an extra stdout formatter) can neither
+// break the boot nor corrupt the JSON output.
 export async function runRspecSuite(projectRoot: string): Promise<RspecRunResult> {
   const suitePath = join(GUARDRAILS_DIR, SUITE_FILE);
-  return invokeRspec(projectRoot, [suitePath, '--order', 'defined', '--seed', RSPEC_SEED, '--format', 'json']);
+  const optionsPath = join(GUARDRAILS_DIR, OPTIONS_FILE);
+  return invokeRspec(projectRoot, [
+    suitePath,
+    '--options',
+    optionsPath,
+    '--order',
+    'defined',
+    '--seed',
+    RSPEC_SEED,
+    '--format',
+    'json',
+  ]);
 }
 
 // Prefer the project's own `bin/rspec`; fall back to `bundle exec rspec`. Every

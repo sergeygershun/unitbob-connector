@@ -12,14 +12,21 @@ export interface SuiteBlob {
 export const GUARDRAILS_DIR = join('.unitbob', 'guardrails');
 export const SUITE_FILE = 'architecture_map_contracts_spec.rb';
 export const HELPER_FILE = 'unitbob_helper.rb';
+// An always-empty custom options file: pointing rspec's --options here keeps
+// the project's own .rspec (stray --require lines, extra stdout formatters)
+// out of guardrail runs, whose JSON output must stay parseable.
+export const OPTIONS_FILE = 'rspec.opts';
 
 // The boot file the generated suite requires (spec 29). Connector-owned and
 // versioned with it — never scaffolded into the project, never part of the
 // suite digest (that covers `spec_rb` bytes only). Delegates to the project's
 // own RSpec setup when one exists; boots the Rails test environment directly
-// when none does.
+// when none does. Both branches refuse a non-test environment — before boot
+// via ENV (nothing touched yet), after boot via Rails.env (config overrides).
 export const UNITBOB_HELPER_RB = `# frozen_string_literal: true
 # Written by the unitbob connector on every materialization — do not edit.
+ENV['RAILS_ENV'] ||= 'test'
+abort 'unitbob_helper: refusing to run against a non-test environment' unless ENV['RAILS_ENV'] == 'test'
 root = File.expand_path('../..', __dir__)
 if File.exist?(File.join(root, 'spec', 'rails_helper.rb'))
   # The project has its own RSpec setup — respect it (factories, cleaners…).
@@ -27,9 +34,7 @@ if File.exist?(File.join(root, 'spec', 'rails_helper.rb'))
   require 'rails_helper'
 else
   # No RSpec scaffolding — boot the Rails test environment directly.
-  ENV['RAILS_ENV'] ||= 'test'
   require File.join(root, 'config', 'environment')
-  abort 'unitbob_helper: refusing to run against a non-test environment' unless Rails.env.test?
   require 'rspec/rails'
   ActiveRecord::Migration.maintain_test_schema!
   RSpec.configure do |config|
@@ -37,6 +42,7 @@ else
     config.infer_spec_type_from_file_location!
   end
 end
+abort 'unitbob_helper: refusing to run against a non-test environment' unless Rails.env.test?
 `;
 
 export function materializeGuardrails(projectRoot: string, suite: SuiteBlob): { suitePath: string } {
@@ -51,13 +57,14 @@ export function materializeGuardrails(projectRoot: string, suite: SuiteBlob): { 
   return { suitePath };
 }
 
-// Both flows boot the same way: the check flow writes the helper next to the
-// suite here, the suite-build flow writes it right after the precheck.
+// Both flows boot the same way: the check flow writes the boot kit next to
+// the suite here, the suite-build flow writes it right after the precheck.
 export function materializeHelper(projectRoot: string): string {
   const dir = join(projectRoot, GUARDRAILS_DIR);
   mkdirSync(dir, { recursive: true });
 
   const helperPath = join(dir, HELPER_FILE);
   writeFileSync(helperPath, UNITBOB_HELPER_RB);
+  writeFileSync(join(dir, OPTIONS_FILE), '');
   return helperPath;
 }

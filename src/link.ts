@@ -4,7 +4,7 @@
 // server key nobody is expected to know.
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { CONFIG_FILE, readLocalRepoId, writeConfigFile, type Config } from './config.ts';
 import { registerRepo, WireError } from './wire.ts';
 
@@ -59,15 +59,29 @@ export function projectName(cwd: string): string {
     if (!pointer) return basename(cwd);
 
     const gitdir = isAbsolute(pointer[1]) ? pointer[1] : resolve(cwd, pointer[1]);
-    const worktrees = dirname(gitdir); // <root>/.git/worktrees
-    const commonGit = dirname(worktrees); // <root>/.git
-    if (basename(worktrees) === 'worktrees' && basename(commonGit) === '.git') {
-      return basename(dirname(commonGit));
-    }
-    return basename(cwd); // submodule (`.git/modules/…`) or exotic layout
+    const commonGit = commonGitDir(gitdir);
+    if (commonGit === null) return basename(cwd); // submodule (`.git/modules/…`) or exotic layout
+    if (basename(commonGit) === '.git') return basename(dirname(commonGit));
+    return basename(commonGit).replace(/\.git$/, '') || basename(cwd); // bare / separate git dir
   } catch {
     return basename(cwd); // no .git at all — git-less project
   }
+}
+
+// The main checkout's git dir for a worktree: git's own `commondir` pointer
+// inside the worktree admin dir works for every layout (bare main repo,
+// --separate-git-dir); the literal `<root>/.git/worktrees/<slug>` shape is
+// the fallback. null means "not a worktree we understand" — the caller falls
+// back to basename(cwd), so name resolution never fails linking.
+function commonGitDir(gitdir: string): string | null {
+  const commondir = join(gitdir, 'commondir');
+  if (existsSync(commondir)) return resolve(gitdir, readFileSync(commondir, 'utf8').trim());
+
+  const worktrees = dirname(gitdir);
+  if (basename(worktrees) === 'worktrees' && basename(dirname(worktrees)) === '.git') {
+    return dirname(worktrees);
+  }
+  return null;
 }
 
 const PROJECT_MARKERS = ['Gemfile', 'gems.rb', 'package.json'];
@@ -78,15 +92,37 @@ const PROJECT_MARKERS = ['Gemfile', 'gems.rb', 'package.json'];
 // version control at all; the marker still keeps junk folders off the brain).
 export function assertProjectRoot(cwd: string): void {
   const isFsRoot = dirname(cwd) === cwd;
-  const anchored =
-    existsSync(join(cwd, '.git')) ||
-    PROJECT_MARKERS.some((marker) => existsSync(join(cwd, marker)));
+  const hasGit = existsSync(join(cwd, '.git'));
+  const anchored = hasGit || PROJECT_MARKERS.some((marker) => existsSync(join(cwd, marker)));
   if (isFsRoot || cwd === homedir() || !anchored) {
     throw new WireError(
       `${cwd} does not look like a project root (no .git and no project files ` +
         "(Gemfile/package.json) here) — run this from your project's root folder.",
     );
   }
+
+  // A marker without .git can also mean a folder *inside* a bigger project —
+  // a monorepo sub-package, a Rails app's frontend/, node_modules. Those must
+  // never mint a brain repo: inside a checkout, the root is where .git is.
+  if (!hasGit) {
+    const enclosing = enclosingCheckout(cwd);
+    if (enclosing !== null || cwd.split(sep).includes('node_modules')) {
+      const hint = enclosing === null ? 'a dependency folder' : `the project at ${enclosing}`;
+      throw new WireError(
+        `${cwd} looks like a folder inside ${hint} — run this from your project's root folder.`,
+      );
+    }
+  }
+}
+
+// Nearest ancestor carrying a .git, walking up to (but not including) $HOME —
+// a dotfiles repo in $HOME must not swallow every git-less project under it.
+function enclosingCheckout(cwd: string): string | null {
+  const home = homedir();
+  for (let dir = dirname(cwd); dir !== home && dirname(dir) !== dir; dir = dirname(dir)) {
+    if (existsSync(join(dir, '.git'))) return dir;
+  }
+  return null;
 }
 
 const ARTIFACT_DIR = '.unitbob/';
