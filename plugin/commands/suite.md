@@ -8,7 +8,7 @@ tests written and run from your real code on this machine; only the finished spe
 file and its capability metadata are uploaded — never source.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.1.6 suite-prepare`. This confirms the runtime is supported
+1. Run `npx -y --loglevel=error unitbob@0.1.7 suite-prepare`. This confirms the runtime is supported
    (Rails + RSpec), materializes the boot helper
    `.unitbob/guardrails/unitbob_helper.rb`, fetches the generate recipe and the
    per-block capability assignment, and writes the task to
@@ -45,7 +45,7 @@ Do this:
      `./path/spec.rb[...]` form rspec's JSON `id` field carries. No Markdown or
      prose around the JSON. If you cannot produce a valid file and JSON for the
      whole assignment, write nothing.
-4. Run `npx -y --loglevel=error unitbob@0.1.6 put-suite-build` to upload the finished suite.
+4. Run `npx -y --loglevel=error unitbob@0.1.7 put-suite-build` to upload the finished suite.
 
 Then tell the user, in plain business language, which capabilities are now guarded
 and which are not yet testable, and include the map URL. If any defect examples

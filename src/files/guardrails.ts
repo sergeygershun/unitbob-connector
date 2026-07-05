@@ -16,6 +16,11 @@ export const HELPER_FILE = 'unitbob_helper.rb';
 // the project's own .rspec (stray --require lines, extra stdout formatters)
 // out of guardrail runs, whose JSON output must stay parseable.
 export const OPTIONS_FILE = 'rspec.opts';
+// RSpec writes its JSON report here via `--out`, not to stdout: the app under
+// test can print to stdout during a run (Rails logging, deprecation notices, a
+// stray `puts`), which corrupts a stdout-parsed JSON document. A dedicated file
+// isolates the report from anything else the process emits.
+export const RESULT_FILE = 'rspec_result.json';
 
 // The boot file the generated suite requires (spec 29). Connector-owned and
 // versioned with it — never scaffolded into the project, never part of the

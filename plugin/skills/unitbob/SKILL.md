@@ -11,7 +11,7 @@ as green or red lamps. A red lamp is the only signal the user needs: something t
 structure depended on just broke.
 
 There is a `unitbob` command-line tool, run via
-`npx -y --loglevel=error unitbob@0.1.6 <verb>`. It is
+`npx -y --loglevel=error unitbob@0.1.7 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
 (Claude Code) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.
@@ -30,6 +30,13 @@ user retires the guard with the button on the red lamp (no command).
 
 Map a natural-language request to the closest command. If it is ambiguous, ask the
 user which one they mean rather than guessing destructively.
+
+When suggesting next steps to the user, offer the plain-words phrasing ("say
+'generate the checks'"), not the slash command: `/unitbob:...` commands only
+register when a session starts, so right after installing the plugin they come
+back as "Unknown command". If the user hits that, tell them it just means the
+commands haven't loaded yet — start a new chat and they will work; meanwhile the
+plain-words request does the same thing right now.
 
 ## Setup — linking is automatic
 

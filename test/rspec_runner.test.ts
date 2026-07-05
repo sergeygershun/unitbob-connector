@@ -36,6 +36,8 @@ test('uses executable bin/rspec first with the exact suite path, fixed order/see
     '1',
     '--format',
     'json',
+    '--out',
+    '.unitbob/guardrails/rspec_result.json',
   ]);
   assert.equal(payload.root, projectRoot);
   assert.equal(payload.rails_env, 'test');
@@ -69,10 +71,29 @@ test('falls back to bundle exec rspec when bin/rspec is not executable', async (
       '1',
       '--format',
       'json',
+      '--out',
+      '.unitbob/guardrails/rspec_result.json',
     ]);
     assert.equal(payload.root, projectRoot);
     assert.equal(payload.rails_env, 'test');
   } finally {
     process.env.PATH = oldPath;
   }
+});
+
+test('reads the JSON report from the --out file, immune to stdout pollution', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, 'bin'), { recursive: true });
+  // The fake writes the report to the --out path and prints unrelated noise to
+  // stdout — exactly the shape (a passing run + app stdout writes) that used to
+  // be misreported as a suite error.
+  executable(
+    join(projectRoot, 'bin', 'rspec'),
+    'mkdir -p .unitbob/guardrails; printf \'{"examples":[]}\' > .unitbob/guardrails/rspec_result.json; printf \'DEPRECATION WARNING: noise\'',
+  );
+
+  const result = await runRspecSuite(projectRoot);
+
+  assert.deepEqual(JSON.parse(result.jsonReport), { examples: [] });
+  assert.match(result.stdout, /DEPRECATION WARNING/);
 });

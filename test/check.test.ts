@@ -47,7 +47,7 @@ test('204 suite response prints a no-suite message and does not run RSpec', asyn
     getSuite: async () => null,
     runRspecSuite: async () => {
       ran = true;
-      return { stdout: '{}', stderr: '', code: 0, command: 'rspec', args: [] };
+      return { stdout: '', stderr: '', code: 0, command: 'rspec', args: [], jsonReport: '{}' };
     },
     stdout: { write: (chunk: string) => { output += chunk; return true; } },
   });
@@ -56,7 +56,7 @@ test('204 suite response prints a no-suite message and does not run RSpec', asyn
   assert.match(output, /No Unitbob suite exists yet/);
 });
 
-test('successful run uploads raw RSpec JSON and prints Rails summary and map URL', async () => {
+test('successful run uploads the JSON report even when the app pollutes stdout', async () => {
   const projectRoot = tmpProject();
   const calls: string[] = [];
   let uploaded: unknown = null;
@@ -71,7 +71,16 @@ test('successful run uploads raw RSpec JSON and prints Rails summary and map URL
     },
     runRspecSuite: async (root) => {
       calls.push(`run:${root}`);
-      return { stdout: '{"examples":[]}', stderr: '', code: 0, command: 'rspec', args: [] };
+      // The report is clean in jsonReport; stdout carries app noise that would
+      // break a stdout-parsed run. The `--out` file keeps the report intact.
+      return {
+        stdout: '{"examples":[]}\nDEPRECATION WARNING: something\n',
+        stderr: '',
+        code: 0,
+        command: 'rspec',
+        args: [],
+        jsonReport: '{"examples":[]}',
+      };
     },
     postRun: async (payload) => {
       uploaded = payload;
@@ -95,13 +104,14 @@ test('long failure text is size-bounded before upload', async () => {
     getSuite: async () => suite(),
     materializeGuardrails: () => ({ suitePath: 'x' }),
     runRspecSuite: async () => ({
-      stdout: JSON.stringify({
-        examples: [{ id: './x[1:1]', status: 'failed', exception: { message: longMessage, backtrace: Array(50).fill('frame') } }],
-      }),
+      stdout: '',
       stderr: '',
       code: 1,
       command: 'rspec',
       args: [],
+      jsonReport: JSON.stringify({
+        examples: [{ id: './x[1:1]', status: 'failed', exception: { message: longMessage, backtrace: Array(50).fill('frame') } }],
+      }),
     }),
     postRun: async (payload) => {
       uploaded = payload as Record<string, unknown>;
@@ -116,19 +126,22 @@ test('long failure text is size-bounded before upload', async () => {
   assert.ok(example.exception.backtrace.length <= 20, 'backtrace capped');
 });
 
-test('non-JSON runner output uploads suite_error', async () => {
+test('a boot failure with no JSON report uploads suite_error', async () => {
   let uploaded = {};
 
   await run(config(tmpProject()), [], {
     precheck: okPrecheck,
     getSuite: async () => suite(),
     materializeGuardrails: () => ({ suitePath: 'x' }),
+    // No report file was written (the suite failed to boot); stdout/stderr carry
+    // the load error. This is the genuine suite-error path.
     runRspecSuite: async () => ({
       stdout: 'cannot load spec',
       stderr: 'LoadError',
       code: 1,
       command: 'rspec',
       args: [],
+      jsonReport: '',
     }),
     postRun: async (payload) => {
       uploaded = payload as Record<string, unknown>;

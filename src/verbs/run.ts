@@ -48,6 +48,7 @@ export async function run(config: Config, _args: string[], deps?: Partial<Deps>)
       code: null,
       command: 'rspec',
       args: [],
+      jsonReport: '',
     }));
 
   const payload = rawRunPayload(suite.suite_digest, result);
@@ -56,8 +57,11 @@ export async function run(config: Config, _args: string[], deps?: Partial<Deps>)
   if (summary.map_url) d.stdout.write(`${summary.map_url}\n`);
 }
 
+// The RSpec JSON report comes from the `--out` file (`jsonReport`), which the app
+// under test cannot pollute. Stdout is only a fallback for a runner double that
+// emits its report there; anything unparseable is a genuine suite error.
 function rawRunPayload(suiteDigest: string, result: RspecRunResult): unknown {
-  const parsed = parseJsonObject(result.stdout);
+  const parsed = parseJsonObject(result.jsonReport) ?? parseJsonObject(result.stdout);
   if (parsed) return { suite_digest: suiteDigest, rspec_json: boundFailures(parsed) };
 
   return {

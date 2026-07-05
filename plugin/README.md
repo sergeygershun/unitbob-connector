@@ -51,7 +51,10 @@ click **Install**.
 
 > Install the unitbob plugin
 
-After installing, start a new session so the new commands load.
+**Then start a new session (new chat).** The `/unitbob:...` commands only load
+when a session starts — in the session where you installed the plugin they don't
+exist yet. If you ever type a command and see *"Unknown command: /unitbob:..."*,
+that's all it is: start a new chat and it will work.
 
 ## Step 3 — Link your project (automatic — nothing to do)
 
@@ -96,7 +99,9 @@ You only need this full sequence once. After that, see Step 5.
 
 ## Step 5 — Everyday use
 
-Just talk to Claude Code. Each request also has a matching command if you prefer:
+Just talk to Claude Code. Each request also has a matching command if you prefer.
+(Commands register when a chat starts — if one comes back as
+*"Unknown command"*, start a new chat; plain words always work either way.)
 
 | What you want | Say this | Command |
 | :--- | :--- | :--- |

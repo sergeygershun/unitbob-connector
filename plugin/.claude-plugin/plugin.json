@@ -1,6 +1,6 @@
 {
   "name": "unitbob",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Unitbob — a living map of your app's business subsystems, each seam guarded by an auto-generated test. Lamps on the map are the only signal you need: red means something the structure depended on just broke. Claude Code reads local source and writes local outputs; the thin connector relays packets via npx.",
   "author": { "name": "Unitbob" }
 }

@@ -2,10 +2,11 @@
 // connector serves no UI of its own. We point at the human repo page `/repos/:id`
 // where the run status renders, not the map document JSON at `/repos/:id/map` — the
 // JSON is the machine view, the page is the view a user actually wants (spec 24).
+// The #map anchor lands the user straight on the map, past the version panels.
 import type { Config } from '../config.ts';
 
 export function repoUrl(config: Config): string {
-  return `${config.server}/repos/${config.repoId}`;
+  return `${config.server}/repos/${config.repoId}#map`;
 }
 
 export async function show(config: Config): Promise<void> {
