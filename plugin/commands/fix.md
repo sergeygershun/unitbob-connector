@@ -9,7 +9,7 @@ machine. There are two honest responses — fix the code, or accept that the
 behaviour changed on purpose.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.1.5 fix-prepare $ARGUMENTS`. This fetches the per-capability
+1. Run `npx -y --loglevel=error unitbob@0.1.6 fix-prepare $ARGUMENTS`. This fetches the per-capability
    repair data (the business behaviour, the latest failure, a source anchor) and
    writes the task to `.unitbob/fix/request.json`. If it reports the check is not
    failing or the suite is stale, report that and stop.
@@ -28,7 +28,7 @@ Do this:
      capability's** examples in
      `.unitbob/guardrails/architecture_map_contracts_spec.rb`, run the whole file
      to green, re-derive `test_metadata`, and republish with
-     `npx -y --loglevel=error unitbob@0.1.5 put-suite-build`. This makes a new suite version against
+     `npx -y --loglevel=error unitbob@0.1.6 put-suite-build`. This makes a new suite version against
      the same map.
 4. Tell the user, in plain business language, what you changed.
 
