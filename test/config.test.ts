@@ -47,8 +47,8 @@ test('never adopts a parent directory config (no walk-up)', () => {
 
 test('writeConfigFile round-trips through readLocalRepoId', () => {
   const dir = tmpProject();
-  writeConfigFile(dir, { server: 'http://localhost:3000', repo_id: 42 });
+  writeConfigFile(dir, { server: 'https://unitbob-73a4082838d3.herokuapp.com', repo_id: 42 });
   assert.equal(readLocalRepoId(dir), 42);
   const raw = JSON.parse(readFileSync(join(dir, '.unitbob.json'), 'utf8'));
-  assert.deepEqual(raw, { server: 'http://localhost:3000', repo_id: 42 });
+  assert.deepEqual(raw, { server: 'https://unitbob-73a4082838d3.herokuapp.com', repo_id: 42 });
 });

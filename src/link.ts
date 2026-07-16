@@ -8,9 +8,9 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { CONFIG_FILE, readLocalRepoId, writeConfigFile, type Config } from './config.ts';
 import { registerRepo, WireError } from './wire.ts';
 
-// Grill decision #1: hosted deployment is deferred; the local brain is the only
-// server for now, so the URL is a literal.
-export const DEFAULT_SERVER = 'http://localhost:3000';
+// Public Unitbob brain used by default. Local development can still pass an
+// explicit server URL or edit `.unitbob.json`.
+export const DEFAULT_SERVER = 'https://unitbob-73a4082838d3.herokuapp.com';
 
 // Make sure this project is linked, resolving the repo by name on every run
 // (cheap — the server find-or-creates) and reconciling with the local file:
