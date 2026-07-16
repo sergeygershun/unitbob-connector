@@ -5,7 +5,7 @@ description: Run the guardrail suite and report which subsystems are green or re
 Run the guardrail suite for this project and report the result.
 
 Do this:
-1. `npx -y --loglevel=error unitbob@0.1.7 run` — this fetches the current suite, runs it locally, and ships
+1. `npx -y --loglevel=error unitbob@0.1.8 run` — this fetches the current suite, runs it locally, and ships
    the raw result to the server, which returns the run summary.
 
 Then report the summary to the user in plain business language: which subsystems
