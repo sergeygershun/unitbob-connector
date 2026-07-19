@@ -196,13 +196,18 @@ test('getRecipe maps 404 to a WireError', async () => {
 test('getSuite returns the blob, and null on 204', async () => {
   await withServer(
     (_hit, res) => {
-      json(res, 200, { suite_digest: 'd1', spec_rb: 'RSpec.describe("x") {}' });
+      json(res, 200, {
+        suite_digest: 'd1',
+        suite_file: { path: '.unitbob/guardrails/architecture_map_contracts_spec.rb', content: 'RSpec.describe("x") {}' },
+        runner_manifest: { language: 'ruby', framework: 'rspec', result_format: 'rspec_json', runner: 'rspec' },
+      });
     },
     async (config) => {
       const suite = await new Wire(config).getSuite();
       assert.deepEqual(suite, {
         suite_digest: 'd1',
-        spec_rb: 'RSpec.describe("x") {}',
+        suite_file: { path: '.unitbob/guardrails/architecture_map_contracts_spec.rb', content: 'RSpec.describe("x") {}' },
+        runner_manifest: { language: 'ruby', framework: 'rspec', result_format: 'rspec_json', runner: 'rspec' },
       });
     },
   );

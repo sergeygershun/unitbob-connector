@@ -5,11 +5,11 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { CONFIG_FILE, readLocalRepoId, writeConfigFile, type Config } from './config.ts';
+import { CONFIG_FILE, readLocalRepoId, readLocalServer, writeConfigFile, type Config } from './config.ts';
 import { registerRepo, WireError } from './wire.ts';
 
-// Public Unitbob brain used by default. Local development can still pass an
-// explicit server URL or edit `.unitbob.json`.
+// Public Unitbob brain used by default. A `server` in `.unitbob.json` (or an
+// explicit argument) overrides it — see resolution order in ensureLinked.
 export const DEFAULT_SERVER = 'https://unitbob-73a4082838d3.herokuapp.com';
 
 // Make sure this project is linked, resolving the repo by name on every run
@@ -19,22 +19,36 @@ export const DEFAULT_SERVER = 'https://unitbob-73a4082838d3.herokuapp.com';
 //   - the file's id matches the name's server id → proceed silently;
 //   - mismatch → fail here, before any expensive work — never silently re-link,
 //     the file may point at a real repo the user cares about.
+//
+// The server is resolved in order: explicit argument → `server` from the
+// project's own `.unitbob.json` → the public default. The file must win over
+// the default, or a locally-linked project would silently register itself on
+// the public brain.
+//
+// `out` is injectable because hijacking process.stdout in tests swallows
+// node:test's own runner protocol (which also travels over stdout).
+export interface Out {
+  write: (chunk: string) => unknown;
+}
+
 export async function ensureLinked(
   cwd: string = process.cwd(),
-  server: string = DEFAULT_SERVER,
+  server?: string,
+  out: Out = process.stdout,
 ): Promise<Config> {
+  const resolvedServer = server ?? readLocalServer(cwd) ?? DEFAULT_SERVER;
   const fileId = readLocalRepoId(cwd); // only cwd's own file — no walk-up
   const name = projectName(cwd);
 
   // Refuse before touching the server, so a stray run can't mint a junk repo.
   if (fileId === null) assertProjectRoot(cwd);
 
-  const authId = await registerRepo(server, name);
+  const authId = await registerRepo(resolvedServer, name);
 
   if (fileId === null) {
-    writeConfigFile(cwd, { server, repo_id: authId });
-    ensureGitignored(cwd);
-    process.stdout.write(`Linked this project to Unitbob as ${name}.\n`);
+    writeConfigFile(cwd, { server: resolvedServer, repo_id: authId });
+    ensureGitignored(cwd, out);
+    out.write(`Linked this project to Unitbob as ${name}.\n`);
   } else if (fileId !== authId) {
     throw new WireError(
       `${CONFIG_FILE} points at repo ${fileId}, but "${name}" is repo ${authId} on the server. ` +
@@ -42,7 +56,7 @@ export async function ensureLinked(
     );
   }
 
-  return { server, repoId: authId, projectRoot: cwd };
+  return { server: resolvedServer, repoId: authId, projectRoot: cwd };
 }
 
 // The linking name is the *project's* name, not the checkout's (spec 29). A
@@ -129,7 +143,7 @@ const ARTIFACT_DIR = '.unitbob/';
 const GITIGNORE = '.gitignore';
 
 // The config and the artifact dir are per-machine state, never committed.
-export function ensureGitignored(cwd: string): void {
+export function ensureGitignored(cwd: string, out: Out = process.stdout): void {
   const gitignorePath = join(cwd, GITIGNORE);
   let current = '';
   if (existsSync(gitignorePath)) {
@@ -142,5 +156,5 @@ export function ensureGitignored(cwd: string): void {
 
   const prefix = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
   writeFileSync(gitignorePath, `${current}${prefix}${additions.join('\n')}\n`);
-  process.stdout.write(`Added ${additions.join(', ')} to ${GITIGNORE}.\n`);
+  out.write(`Added ${additions.join(', ')} to ${GITIGNORE}.\n`);
 }

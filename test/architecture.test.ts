@@ -21,10 +21,18 @@ const FORBIDDEN = [
   /\bretired\b/i,
   /\bcoverage\b/i,
 ];
-// Spec 26 dropped the manifest entirely (the host uploads the whole spec file +
-// capability test_metadata, stored verbatim), so no file needs a manifest
-// exemption any more.
-const ALLOWED_BY_FILE: Record<string, RegExp[]> = {};
+// Spec 30 reintroduced one narrow envelope field: `runner_manifest`, the
+// suite-level runner selection whose `runner` enum names a connector-owned
+// strategy. Carrying and relaying it is transport, not interpretation — the
+// connector still never reads test results or maps pass/fail to contracts.
+// Only the files that store, relay, or dispatch on that envelope may name it.
+const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
+  'wire.ts': [/manifest/i],
+  [join('files', 'guardrails.ts')]: [/manifest/i],
+  [join('files', 'suiteBuild.ts')]: [/manifest/i],
+  [join('verbs', 'run.ts')]: [/manifest/i],
+  [join('verbs', 'putSuiteBuild.ts')]: [/manifest/i],
+};
 
 // `lamp` is the single domain noun the connector may name — but only in wire.ts,
 // where "lamps" is the URL of an opaque endpoint it fetches and prints verbatim.

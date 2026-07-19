@@ -4,34 +4,82 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { materializeGuardrails, materializeHelper, UNITBOB_HELPER_RB } from '../src/files/guardrails.ts';
+import {
+  assertGuardrailPath,
+  materializeGuardrails,
+  materializeHelper,
+  UNITBOB_HELPER_RB,
+  type SuiteBlob,
+} from '../src/files/guardrails.ts';
 
 function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'unitbob-guardrails-'));
 }
 
-test('materializes the verbatim suite under .unitbob/guardrails', () => {
-  const projectRoot = tmpProject();
-  const dir = join(projectRoot, '.unitbob', 'guardrails');
+function rubySuite(content: string, digest = 'd1'): SuiteBlob {
+  return {
+    suite_digest: digest,
+    suite_file: { path: '.unitbob/guardrails/architecture_map_contracts_spec.rb', content },
+    runner_manifest: { language: 'ruby', framework: 'rspec', result_format: 'rspec_json', runner: 'rspec' },
+  };
+}
 
-  materializeGuardrails(projectRoot, {
-    suite_digest: 'd1',
-    spec_rb: "require 'rails_helper'\n\nRSpec.describe('x') {}\n",
-  });
+test('materializes the verbatim suite at its own path under .unitbob/guardrails', () => {
+  const projectRoot = tmpProject();
+
+  materializeGuardrails(projectRoot, rubySuite("require 'rails_helper'\n\nRSpec.describe('x') {}\n"));
 
   assert.equal(
-    readFileSync(join(dir, 'architecture_map_contracts_spec.rb'), 'utf8'),
+    readFileSync(join(projectRoot, '.unitbob', 'guardrails', 'architecture_map_contracts_spec.rb'), 'utf8'),
     "require 'rails_helper'\n\nRSpec.describe('x') {}\n",
   );
-  // test_metadata stays server-side — no manifest file is written.
-  assert.equal(existsSync(join(dir, 'guardrails_manifest.json')), false);
 });
 
-test('materializes the boot kit (helper + empty rspec options) next to the suite', () => {
+test('materializes a vitest suite without the Ruby boot kit', () => {
+  const projectRoot = tmpProject();
+  const suite: SuiteBlob = {
+    suite_digest: 'd1',
+    suite_file: { path: '.unitbob/guardrails/architecture_map_contracts.test.ts', content: 'import { it } from "vitest";\n' },
+    runner_manifest: { language: 'javascript', framework: 'vitest', result_format: 'vitest_json', runner: 'vitest' },
+  };
+
+  materializeGuardrails(projectRoot, suite);
+
+  const dir = join(projectRoot, '.unitbob', 'guardrails');
+  assert.equal(readFileSync(join(dir, 'architecture_map_contracts.test.ts'), 'utf8'), 'import { it } from "vitest";\n');
+  assert.equal(existsSync(join(dir, 'unitbob_helper.rb')), false);
+  assert.equal(existsSync(join(dir, 'rspec.opts')), false);
+});
+
+test('refuses unsafe suite paths and writes nothing', () => {
+  const projectRoot = tmpProject();
+  const unsafe = [
+    '/etc/passwd',
+    'spec/pwned_spec.rb',
+    '.unitbob/guardrails/../../pwned.rb',
+    '',
+  ];
+
+  for (const path of unsafe) {
+    assert.throws(
+      () => materializeGuardrails(projectRoot, { ...rubySuite('x'), suite_file: { path, content: 'x' } }),
+      /relative path under/,
+      path,
+    );
+  }
+  assert.equal(existsSync(join(projectRoot, 'spec')), false);
+  assert.equal(existsSync(join(projectRoot, 'pwned.rb')), false);
+});
+
+test('assertGuardrailPath accepts a well-formed guardrail path', () => {
+  assertGuardrailPath('.unitbob/guardrails/architecture_map_contracts.test.ts');
+});
+
+test('materializes the boot kit (helper + empty rspec options) next to a Ruby suite', () => {
   const projectRoot = tmpProject();
   const dir = join(projectRoot, '.unitbob', 'guardrails');
 
-  materializeGuardrails(projectRoot, { suite_digest: 'd1', spec_rb: 'suite' });
+  materializeGuardrails(projectRoot, rubySuite('suite'));
 
   assert.equal(readFileSync(join(dir, 'unitbob_helper.rb'), 'utf8'), UNITBOB_HELPER_RB);
   // Empty custom options file — shields guardrail runs from the project's .rspec.
@@ -83,10 +131,10 @@ test('rewrites any existing local guardrail files before each run', () => {
   const projectRoot = tmpProject();
   const dir = join(projectRoot, '.unitbob', 'guardrails');
 
-  materializeGuardrails(projectRoot, { suite_digest: 'd1', spec_rb: 'old' });
+  materializeGuardrails(projectRoot, rubySuite('old'));
   writeFileSync(join(dir, 'extra.txt'), 'stale');
 
-  materializeGuardrails(projectRoot, { suite_digest: 'd2', spec_rb: 'new' });
+  materializeGuardrails(projectRoot, rubySuite('new', 'd2'));
 
   assert.equal(readFileSync(join(dir, 'architecture_map_contracts_spec.rb'), 'utf8'), 'new');
   assert.equal(existsSync(join(dir, 'extra.txt')), false);

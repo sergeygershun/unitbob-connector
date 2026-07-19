@@ -22,7 +22,7 @@ test('uses executable bin/rspec first with the exact suite path, fixed order/see
     'printf \'{"args":"%s","root":"%s","rails_env":"%s","pwd":"%s"}\' "$*" "$UNITBOB_REPO_ROOT" "$RAILS_ENV" "$(pwd)"',
   );
 
-  const result = await runRspecSuite(projectRoot);
+  const result = await runRspecSuite(projectRoot, '.unitbob/guardrails/architecture_map_contracts_spec.rb');
   const payload = JSON.parse(result.stdout);
 
   assert.equal(result.command, join(projectRoot, 'bin', 'rspec'));
@@ -55,7 +55,7 @@ test('falls back to bundle exec rspec when bin/rspec is not executable', async (
   process.env.PATH = `${fakeBin}${delimiter}${oldPath ?? ''}`;
 
   try {
-    const result = await runRspecSuite(projectRoot);
+    const result = await runRspecSuite(projectRoot, '.unitbob/guardrails/architecture_map_contracts_spec.rb');
     const payload = JSON.parse(result.stdout);
 
     assert.equal(result.command, 'bundle');
@@ -92,8 +92,8 @@ test('reads the JSON report from the --out file, immune to stdout pollution', as
     'mkdir -p .unitbob/guardrails; printf \'{"examples":[]}\' > .unitbob/guardrails/rspec_result.json; printf \'DEPRECATION WARNING: noise\'',
   );
 
-  const result = await runRspecSuite(projectRoot);
+  const result = await runRspecSuite(projectRoot, '.unitbob/guardrails/architecture_map_contracts_spec.rb');
 
-  assert.deepEqual(JSON.parse(result.jsonReport), { examples: [] });
+  assert.deepEqual(JSON.parse(result.report), { examples: [] });
   assert.match(result.stdout, /DEPRECATION WARNING/);
 });

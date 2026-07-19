@@ -3,6 +3,10 @@
 A living map of your app's business parts. Each important seam gets an automatic
 test — a "lamp" on the map. Green means fine, red means something broke.
 
+Works with Ruby on Rails (RSpec), JavaScript/TypeScript (Vitest), and Python
+(pytest) projects — the guardrail tests are generated in your project's own
+language and run with its native test runner.
+
 You work through Claude Code. You need: Node 18+, Python 3.10+.
 
 ---

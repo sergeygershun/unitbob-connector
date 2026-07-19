@@ -46,19 +46,17 @@ function tmpProject(name: string): string {
   return dir;
 }
 
-async function captureStdout(fn: () => Promise<void>): Promise<string> {
-  const original = process.stdout.write.bind(process.stdout);
-  let out = '';
-  process.stdout.write = ((chunk: string | Uint8Array) => {
-    out += chunk.toString();
-    return true;
-  }) as typeof process.stdout.write;
-  try {
-    await fn();
-  } finally {
-    process.stdout.write = original;
-  }
-  return out;
+// Injected in place of process.stdout: hijacking the real stdout swallows
+// node:test's own runner protocol, silently dropping tests from the report.
+function outCollector(): { write: (chunk: string) => boolean; text: () => string } {
+  let text = '';
+  return {
+    write: (chunk: string) => {
+      text += chunk;
+      return true;
+    },
+    text: () => text,
+  };
 }
 
 test('registerRepo posts the name and returns the id', async () => {
@@ -80,12 +78,11 @@ test('registerRepo maps an unreachable server to an actionable WireError', async
 test('ensureLinked registers a fresh project, writes the file, and announces once', async () => {
   await withRegisterServer(2, async (server) => {
     const dir = tmpProject('a2time');
-    const out = await captureStdout(async () => {
-      const config = await ensureLinked(dir, server);
-      assert.deepEqual(config, { server, repoId: 2, projectRoot: dir });
-    });
+    const out = outCollector();
+    const config = await ensureLinked(dir, server, out);
+    assert.deepEqual(config, { server, repoId: 2, projectRoot: dir });
 
-    assert.match(out, /Linked this project to Unitbob as a2time\./);
+    assert.match(out.text(), /Linked this project to Unitbob as a2time\./);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, '.unitbob.json'), 'utf8')), {
       server,
       repo_id: 2,
@@ -100,12 +97,11 @@ test('ensureLinked heals a legacy repo_id: 0 file', async () => {
     const dir = tmpProject('legacy');
     writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server, repo_id: 0 }));
 
-    const out = await captureStdout(async () => {
-      const config = await ensureLinked(dir, server);
-      assert.equal(config.repoId, 5);
-    });
+    const out = outCollector();
+    const config = await ensureLinked(dir, server, out);
+    assert.equal(config.repoId, 5);
 
-    assert.match(out, /Linked this project to Unitbob as legacy\./);
+    assert.match(out.text(), /Linked this project to Unitbob as legacy\./);
     assert.equal(JSON.parse(readFileSync(join(dir, '.unitbob.json'), 'utf8')).repo_id, 5);
   });
 });
@@ -115,15 +111,56 @@ test('ensureLinked is silent when the file matches the server', async () => {
     const dir = tmpProject('a2time');
     writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server, repo_id: 2 }));
 
-    const out = await captureStdout(async () => {
-      const config = await ensureLinked(dir, server);
-      assert.equal(config.repoId, 2);
-    });
+    const out = outCollector();
+    const config = await ensureLinked(dir, server, out);
+    assert.equal(config.repoId, 2);
 
-    // node:test writes its own runner protocol to stdout, so assert on our
-    // line's absence rather than on emptiness.
-    assert.doesNotMatch(out, /Linked this project/);
+    assert.equal(out.text(), '');
     assert.equal(hits.length, 1); // still resolved by name — that is the reconciliation
+  });
+});
+
+test('ensureLinked uses the server from .unitbob.json when no explicit server is given', async () => {
+  await withRegisterServer(2, async (server, hits) => {
+    const dir = tmpProject('a2time');
+    writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server, repo_id: 2 }));
+
+    const result = await ensureLinked(dir, undefined, outCollector()); // no server argument — the file decides
+    assert.deepEqual(result, { server, repoId: 2, projectRoot: dir });
+
+    assert.equal(hits.length, 1); // resolved against the file's server, not the default
+  });
+});
+
+test('ensureLinked heals a legacy repo_id against the server named in the file', async () => {
+  await withRegisterServer(6, async (server, hits) => {
+    const dir = tmpProject('legacy-local');
+    writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server, repo_id: 0 }));
+
+    const config = await ensureLinked(dir, undefined, outCollector()); // no server argument
+    assert.equal(config.server, server);
+    assert.equal(config.repoId, 6);
+
+    assert.equal(hits.length, 1);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, '.unitbob.json'), 'utf8')), {
+      server,
+      repo_id: 6,
+    });
+  });
+});
+
+test('an explicit server argument overrides the file', async () => {
+  await withRegisterServer(2, async (server, hits) => {
+    const dir = tmpProject('a2time');
+    writeFileSync(
+      join(dir, '.unitbob.json'),
+      JSON.stringify({ server: 'http://127.0.0.1:1', repo_id: 2 }),
+    );
+
+    const config = await ensureLinked(dir, server, outCollector());
+    assert.equal(config.server, server);
+
+    assert.equal(hits.length, 1);
   });
 });
 
@@ -165,11 +202,10 @@ test('ensureLinked links a session worktree under the main checkout name', async
       `gitdir: ${join(main, '.git', 'worktrees', 'practical-sinoussi')}\n`,
     );
 
-    const out = await captureStdout(async () => {
-      await ensureLinked(worktree, server);
-    });
+    const out = outCollector();
+    await ensureLinked(worktree, server, out);
 
-    assert.match(out, /Linked this project to Unitbob as a2time\./);
+    assert.match(out.text(), /Linked this project to Unitbob as a2time\./);
     assert.deepEqual(JSON.parse(hits[0].body), { name: 'a2time' });
   });
 });

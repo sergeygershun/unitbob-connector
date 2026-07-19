@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Recipe } from '../wire.ts';
+import { assertGuardrailPath, type SuiteFile } from './guardrails.ts';
 
 // The task the host reads: where the project is, which map it was cut from, where
 // to write the answer, the generate recipe, and its per-block capability
@@ -14,10 +15,13 @@ export interface SuiteBuildRequest {
   blocks: unknown[];
 }
 
-// The host's answer: the complete spec file (inline as `spec_rb`, or via a
-// `spec_rb_path` the connector reads) plus the capability-keyed `test_metadata`.
+// The host's answer (spec 30): the single generated guardrail file as
+// `suite_file { path, content }` (content inline, or read from the file the
+// host already wrote at that path), the suite-level `runner_manifest`, and the
+// capability-keyed `test_metadata`. The legacy `spec_rb` shape is rejected.
 export interface HostSuiteOutput {
-  spec_rb: string;
+  suite_file: SuiteFile;
+  runner_manifest: unknown;
   test_metadata: unknown;
 }
 
@@ -61,10 +65,11 @@ export function readSuiteBuildRequest(projectRoot: string): SuiteBuildRequest {
   return request;
 }
 
-// Read and parse the host's answer. The host wrote and ran the whole spec file;
-// the connector verifies it parses and carries `spec_rb` (inline or via
-// `spec_rb_path`) plus `test_metadata`, then relays it untouched. Anything
-// unparseable or incomplete means nothing is uploaded (all-or-nothing).
+// Read and parse the host's answer. The host wrote and ran the whole guardrail
+// file; the connector verifies the answer parses, carries `suite_file` (with a
+// safe path under .unitbob/guardrails/), `runner_manifest`, and
+// `test_metadata`, then relays it untouched. Anything unparseable or
+// incomplete means nothing is uploaded (all-or-nothing).
 export function readHostSuiteOutput(path: string, projectRoot: string): HostSuiteOutput {
   if (!existsSync(path)) {
     throw new Error(`${path} not found — the host suite builder did not write its output.`);
@@ -72,27 +77,55 @@ export function readHostSuiteOutput(path: string, projectRoot: string): HostSuit
 
   const parsed = parseJson(readFileSync(path, 'utf8'), path) as Record<string, unknown> | null;
   if (!parsed || typeof parsed !== 'object') {
-    throw new Error(`${path} is malformed: expected an object with spec_rb (or spec_rb_path) and test_metadata.`);
+    throw new Error(`${path} is malformed: expected an object with suite_file, runner_manifest, and test_metadata.`);
+  }
+
+  if ('spec_rb' in parsed || 'spec_rb_path' in parsed) {
+    throw new Error(`${path} uses the legacy spec_rb shape — emit suite_file { path, content } instead (spec 30).`);
   }
 
   if (!('test_metadata' in parsed)) {
     throw new Error(`${path} is malformed: missing test_metadata.`);
   }
 
-  const specRb = resolveSpecRb(parsed, projectRoot, path);
-  return { spec_rb: specRb, test_metadata: parsed.test_metadata };
-}
-
-function resolveSpecRb(parsed: Record<string, unknown>, projectRoot: string, path: string): string {
-  if (typeof parsed.spec_rb === 'string' && parsed.spec_rb.trim()) return parsed.spec_rb;
-
-  if (typeof parsed.spec_rb_path === 'string' && parsed.spec_rb_path.trim()) {
-    const specPath = isAbsolute(parsed.spec_rb_path) ? parsed.spec_rb_path : join(projectRoot, parsed.spec_rb_path);
-    if (!existsSync(specPath)) throw new Error(`${path}: spec_rb_path "${parsed.spec_rb_path}" does not exist.`);
-    return readFileSync(specPath, 'utf8');
+  const manifest = parsed.runner_manifest;
+  if (!manifest || typeof manifest !== 'object') {
+    throw new Error(`${path} is malformed: missing runner_manifest.`);
   }
 
-  throw new Error(`${path} is malformed: expected a non-empty spec_rb or spec_rb_path.`);
+  return {
+    suite_file: resolveSuiteFile(parsed, projectRoot, path),
+    runner_manifest: manifest,
+    test_metadata: parsed.test_metadata,
+  };
+}
+
+// The host may inline `content` or point at the file it already wrote at
+// `suite_file.path` — either way the path must be safe before anything is read.
+function resolveSuiteFile(parsed: Record<string, unknown>, projectRoot: string, path: string): SuiteFile {
+  const file = parsed.suite_file;
+  if (!file || typeof file !== 'object') {
+    throw new Error(`${path} is malformed: expected suite_file { path, content }.`);
+  }
+
+  const suiteFile = file as Record<string, unknown>;
+  const suitePath = typeof suiteFile.path === 'string' ? suiteFile.path : '';
+  assertGuardrailPath(suitePath);
+
+  if (typeof suiteFile.content === 'string' && suiteFile.content.trim()) {
+    return { path: suitePath, content: suiteFile.content };
+  }
+
+  const onDisk = join(projectRoot, suitePath);
+  if (!existsSync(onDisk)) {
+    throw new Error(`${path}: suite_file has no content and "${suitePath}" does not exist in the project.`);
+  }
+
+  const content = readFileSync(onDisk, 'utf8');
+  if (!content.trim()) {
+    throw new Error(`${path}: suite_file content at "${suitePath}" is empty.`);
+  }
+  return { path: suitePath, content };
 }
 
 function parseJson(raw: string, path: string): unknown {

@@ -125,12 +125,13 @@ export class Wire {
   }
 
   // PUT /repos/:id/suite_build — upload the host's complete, locally-validated
-  // suite: the verbatim spec file plus the capability-keyed test_metadata. The
-  // server validates the classification, stores the bytes verbatim, versions, and
-  // returns the new suite's identity.
+  // suite artifact: the verbatim suite_file, the suite-level runner_manifest,
+  // and the capability-keyed test_metadata. The server validates the artifact,
+  // stores it verbatim, versions, and returns the new suite's identity.
   async putSuiteBuild(payload: {
     map_digest: string;
-    spec_rb: string;
+    suite_file: unknown;
+    runner_manifest: unknown;
     test_metadata: unknown;
   }): Promise<SuiteBuildUploadResult> {
     const res = await this.send('PUT', this.repoPath('suite_build'), payload);
@@ -199,10 +200,18 @@ export class Wire {
     }
 
     const suite = payload as Record<string, unknown>;
-    if (typeof suite.suite_digest !== 'string' || typeof suite.spec_rb !== 'string') {
+    const file = suite.suite_file as Record<string, unknown> | undefined;
+    const manifest = suite.runner_manifest as Record<string, unknown> | undefined;
+    const wellFormed =
+      typeof suite.suite_digest === 'string' &&
+      file != null && typeof file === 'object' &&
+      typeof file.path === 'string' && typeof file.content === 'string' &&
+      manifest != null && typeof manifest === 'object' &&
+      typeof manifest.runner === 'string';
+    if (!wellFormed) {
       throw new WireError(
         `GET ${this.repoPath('suite')} returned a malformed suite payload: ` +
-          'expected suite_digest and spec_rb.',
+          'expected suite_digest, suite_file { path, content }, and runner_manifest.runner.',
       );
     }
 

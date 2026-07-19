@@ -5,8 +5,12 @@ description: Run the guardrail suite and report which subsystems are green or re
 Run the guardrail suite for this project and report the result.
 
 Do this:
-1. `npx -y --loglevel=error unitbob@0.1.8 run` — this fetches the current suite, runs it locally, and ships
-   the raw result to the server, which returns the run summary.
+1. `npx -y --loglevel=error unitbob@0.1.8 run` — this fetches the current suite,
+   runs it locally with the suite's own runner (RSpec, Vitest, or pytest — the
+   connector picks the command; nothing to configure), and ships the raw
+   machine-readable result to the server, which returns the run summary. If the
+   local project does not match the suite's stack, it stops with a mismatch
+   message and writes nothing — regenerate the suite with `/unitbob:suite`.
 
 Then report the summary to the user in plain business language: which subsystems
 are healthy (green) and which broke (red), and for a red one, what business
