@@ -51,10 +51,14 @@ click **Install**.
 
 > Install the unitbob plugin
 
-**Then start a new session (new chat).** The `/unitbob:...` commands only load
-when a session starts — in the session where you installed the plugin they don't
-exist yet. If you ever type a command and see *"Unknown command: /unitbob:..."*,
-that's all it is: start a new chat and it will work.
+That's it — you can start using it in the same chat, by asking in plain words
+(see the table below).
+
+The plugin also adds `/unitbob:...` commands, but they are fussier: they load
+only when a Claude Code **terminal** session starts, so they don't exist in the
+chat where you installed the plugin, and in a browser or desktop window they
+never appear at all — typing one there answers *"isn't a recognized command
+here"*. Nothing is broken when that happens; just ask in words instead.
 
 ## Step 3 — Link your project (automatic — nothing to do)
 
@@ -99,17 +103,18 @@ You only need this full sequence once. After that, see Step 5.
 
 ## Step 5 — Everyday use
 
-Just talk to Claude Code. Each request also has a matching command if you prefer.
-(Commands register when a chat starts — if one comes back as
-*"Unknown command"*, start a new chat; plain words always work either way.)
+Just talk to Claude Code.
 
-| What you want | Say this | Command |
-| :--- | :--- | :--- |
-| Build or refresh the map | "build the map" | `/unitbob:map` |
-| Create the guardrail checks | "generate the checks" | `/unitbob:suite` |
-| Run the checks | "run the checks" | `/unitbob:check` |
-| Open the map | "open the map" | `/unitbob:show` |
-| Fix a red guard | "fix guard <id>" | `/unitbob:fix <id>` |
+| What you want | Say this |
+| :--- | :--- |
+| Build or refresh the map | "build the map" |
+| Create the guardrail checks | "generate the checks" |
+| Run the checks | "run the checks" |
+| Open the map | "open the map" |
+| Fix a red guard | "fix guard \<id\>" |
+
+(There are `/unitbob:...` commands for the same five things, but only inside a
+Claude Code terminal — see Step 2. The words above work in every window.)
 
 When the map shows a **red lamp**, copy the guard id shown on it and ask Claude to
 fix that guard. Claude edits the code locally, then asks you to run the checks

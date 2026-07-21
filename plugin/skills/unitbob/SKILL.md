@@ -11,32 +11,39 @@ as green or red lamps. A red lamp is the only signal the user needs: something t
 structure depended on just broke.
 
 There is a `unitbob` command-line tool, run via
-`npx -y --loglevel=error unitbob@0.1.8 <verb>`. It is
+`npx -y --loglevel=error unitbob@0.1.10 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
 (Claude Code) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.
 
 ## Workflow
 
-- **Rebuild the map** → run `/unitbob:map`.
-- **Generate the guardrail suite** → run `/unitbob:suite`.
-- **Run the checks** → run `/unitbob:check`.
-- **Open the map** → run `/unitbob:show`.
-- **Fix a red guard** (the code drifted) → run `/unitbob:fix <guard_id>`.
+Each job is a file in `workflows/` next to this one. **Read the file and follow
+it** — do not work from memory, and do not reach for a `/unitbob:...` command:
+the file is the same thing the command runs, and it is here right now.
+
+- **Rebuild the map** → `workflows/map.md`
+- **Generate the guardrail suite** → `workflows/suite.md`
+- **Run the checks** → `workflows/check.md`
+- **Open the map** → `workflows/show.md`
+- **Fix a red guard** (the code drifted) → `workflows/fix.md`
 
 The `<guard_id>` for fix is the guard handle shown on the red lamp on the map —
 the user copies it from there. To stop guarding code that is gone for good, the
-user retires the guard with the button on the red lamp (no command).
+user retires the guard with the button on the red lamp (no command, no workflow).
 
-Map a natural-language request to the closest command. If it is ambiguous, ask the
-user which one they mean rather than guessing destructively.
+Map a natural-language request to the closest workflow. If it is ambiguous, ask
+the user which one they mean rather than guessing destructively.
 
-When suggesting next steps to the user, offer the plain-words phrasing ("say
-'generate the checks'"), not the slash command: `/unitbob:...` commands only
-register when a session starts, so right after installing the plugin they come
-back as "Unknown command". If the user hits that, tell them it just means the
-commands haven't loaded yet — start a new chat and they will work; meanwhile the
-plain-words request does the same thing right now.
+Working from these files is what makes unitbob usable everywhere. The
+`/unitbob:...` commands are a convenience that exists only inside a Claude Code
+terminal, and only in a session started after the plugin was installed — in a
+browser or desktop window they do not register at all, and typing one comes back
+as "Unknown command" or "isn't a recognized command here". So **never hand the
+user a slash command**: ask them to say what they want in plain words ("run the
+checks"), which reaches these same workflows in the session they already have
+open. If a user reports one of those errors, explain that nothing is broken —
+plain words work right now.
 
 ## Setup — linking is automatic
 

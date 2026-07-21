@@ -2,13 +2,7 @@
 description: Open this project's Unitbob map.
 ---
 
-Show the user where to view this project's map.
+Read `${CLAUDE_PLUGIN_ROOT}/skills/unitbob/workflows/show.md` and follow it exactly.
 
-Do this:
-1. `npx -y --loglevel=error unitbob@0.1.8 show` — this prints the link to the map on the server.
-
-Give the user that link and invite them to open it. The map is viewed on the
-server; the connector serves no UI of its own.
-
-Linking is automatic: if a command prints `Linked this project to Unitbob as X.`,
-relay that line to the user verbatim. Never ask for or guess a repo_id.
+That file is the single copy of this workflow: the skill follows it too, so a
+user who asks in plain words and a user who types this command get the same run.

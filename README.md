@@ -31,13 +31,20 @@ Restart the session so the commands load.
 
 ## Full cycle
 
-| Step | With a prompt (just type in chat) | With a command |
-|------|-----------------------------------|----------------|
-| 1. Build the map | `Build my Unitbob map` | `/unitbob:map` |
-| 2. Generate tests | `Generate the guardrail tests` | `/unitbob:suite` |
-| 3. Run the checks | `Run the checks` | `/unitbob:check` |
-| 4. Fix a red lamp | `Fix guardrail <id>` | `/unitbob:fix <id>` |
-| 5. Open the map | `Open my Unitbob map` | `/unitbob:show` |
+Just type it in the chat. There is nothing to memorise and no command to get right.
+
+| Step | Say this |
+|------|----------|
+| 1. Build the map | `Build my Unitbob map` |
+| 2. Generate tests | `Generate the guardrail tests` |
+| 3. Run the checks | `Run the checks` |
+| 4. Fix a red lamp | `Fix guardrail <id>` |
+| 5. Open the map | `Open my Unitbob map` |
+
+There are also `/unitbob:map`, `/unitbob:suite` and friends, but they work only
+inside a Claude Code terminal, and only in a session started after the plugin was
+installed — in a browser or desktop window they are not recognised at all. The
+phrasings above work everywhere, so they are the ones documented here.
 
 ---
 

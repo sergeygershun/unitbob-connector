@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const connectorRoot = fileURLToPath(new URL('..', import.meta.url));
 const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
 const cliDistPath = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
-const commandsDir = fileURLToPath(new URL('../plugin/commands', import.meta.url));
+const workflowsDir = fileURLToPath(new URL('../plugin/skills/unitbob/workflows', import.meta.url));
 const pluginJsonPath = fileURLToPath(new URL('../plugin/.claude-plugin/plugin.json', import.meta.url));
 const marketplaceJsonPath = fileURLToPath(new URL('../.claude-plugin/marketplace.json', import.meta.url));
 
@@ -70,16 +70,19 @@ test('built CLI keeps the Node shebang', () => {
   assert.equal(firstLine, '#!/usr/bin/env node');
 });
 
-test('Claude Code plugin commands pin the connector package version', () => {
+// The npx invocations live in the skill's workflow files — the one copy both the
+// commands and the skill run. The commands themselves are pointers and name no
+// version, so there is nothing in them to fall out of date.
+test('Claude Code plugin workflows pin the connector package version', () => {
   const version = connectorVersion();
   // Spec 29: warnings suppressed, npm's own errors stay visible (never --silent).
   const pinnedNpx = new RegExp(`npx -y --loglevel=error unitbob@${escapeRegExp(version)}`);
   const bareNpx = /npx(?:\s+--?\S+)*\s+unitbob(?!@)/;
 
-  for (const entry of readdirSync(commandsDir)) {
+  for (const entry of readdirSync(workflowsDir)) {
     if (!entry.endsWith('.md')) continue;
 
-    const text = readFileSync(`${commandsDir}/${entry}`, 'utf8');
+    const text = readFileSync(`${workflowsDir}/${entry}`, 'utf8');
     assert.doesNotMatch(text, bareNpx, `${entry} must not use bare npx unitbob`);
     assert.doesNotMatch(text, /--silent/, `${entry} must not swallow npm errors with --silent`);
     assert.doesNotMatch(text, /ai\/agents\//, `${entry} must be self-contained for Claude Code installs`);

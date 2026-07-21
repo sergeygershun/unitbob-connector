@@ -66,21 +66,75 @@ export async function requireGraphify(): Promise<void> {
   }
 }
 
+// Paths that hold no business logic in the stacks unitbob supports — Rails,
+// JS/TS, Python — and that graphify does not already skip (it drops
+// node_modules, venv, dist, build, target, out, __pycache__, and the framework
+// cache and report dirs on its own).
+//
+// Every entry earns its place, because an over-broad pattern fails silently: a
+// subsystem simply never appears on the map and nobody learns why. Measured on
+// one real Rails app (2943 nodes), vendor/ was 1337 of them, app/assets/ 414,
+// db/migrate/ 314 — 70% of the graph, and the busiest nodes in it were `_()`
+// and `$()`. Everything else in that project was already clean: bin/, tmp/,
+// log/ and storage/ produced zero nodes, so they are deliberately not listed.
+//
+// The list stays language-neutral: one project is often Rails and Python at
+// once. Gitignore syntax; graphify merges it with .gitignore, and it can only
+// ever exclude more, never re-include.
+export const GRAPH_NOISE_PATTERNS = [
+  '# unitbob: keep the graph about your own business code',
+  '.unitbob/',
+
+  // Third-party code committed into the repo. In Rails, `vendor/` is the
+  // convention for it, and `app/assets/javascripts/` is where sprockets-era
+  // apps dumped libraries — on the measured app that folder was moment.js,
+  // datatables.js and jquery.inputmask, against a single node of own code. A
+  // modern Rails app keeps its own JS in `app/javascript/`, which stays.
+  'vendor/',
+  'app/assets/javascripts/',
+  'app/assets/builds/',
+  'app/assets/config/',
+  'public/assets/',
+  'public/packs/',
+  '*.min.js',
+  '*.min.css',
+  '*.bundle.js',
+
+  // Generated code: schema history and codegen output. Describes the shape of
+  // data, never the behaviour a guardrail could protect.
+  'db/migrate/',
+  'db/schema.rb',
+  'db/structure.sql',
+  'migrations/',
+  '__generated__/',
+  '*_pb2.py',
+  '*_pb2_grpc.py',
+  '*_pb.js',
+
+  // Type declarations — a contract for a compiler, with no runtime behaviour.
+  '*.d.ts',
+  '*.pyi',
+];
+
 export function ensureUnitbobIgnored(projectRoot: string): void {
-  ensureLine(join(projectRoot, '.gitignore'), '.unitbob/');
-  ensureLine(join(projectRoot, '.gitignore'), 'graphify-out/');
-  ensureLine(join(projectRoot, '.graphifyignore'), '.unitbob/');
+  // `.graphifyignore` is unitbob's own bookkeeping, like the other two entries —
+  // the user never edits it, so it stays out of their commits.
+  ensureLines(join(projectRoot, '.gitignore'), ['.unitbob/', 'graphify-out/', '.graphifyignore']);
+  ensureLines(join(projectRoot, '.graphifyignore'), GRAPH_NOISE_PATTERNS);
 }
 
-function ensureLine(path: string, line: string): void {
+// Appends whichever lines are missing, in one write, leaving the user's own
+// entries (and their order) untouched. Idempotent: a second run adds nothing.
+function ensureLines(path: string, lines: string[]): void {
   let current = '';
-  if (existsSync(path)) {
-    current = readFileSync(path, 'utf8');
-    if (current.split('\n').some((existing) => existing.trim() === line)) return;
-  }
+  if (existsSync(path)) current = readFileSync(path, 'utf8');
+
+  const present = new Set(current.split('\n').map((line) => line.trim()));
+  const missing = lines.filter((line) => !present.has(line));
+  if (missing.length === 0) return;
 
   const prefix = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
-  writeFileSync(path, `${current}${prefix}${line}\n`);
+  writeFileSync(path, `${current}${prefix}${missing.join('\n')}\n`);
 }
 
 export async function runGraphifyExtractKeyless(projectRoot: string): Promise<ProcResult> {
