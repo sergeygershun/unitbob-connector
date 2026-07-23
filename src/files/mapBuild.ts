@@ -6,11 +6,17 @@ export interface MapBuildRequest {
   project_root: string;
   graph_path: string;
   output_path: string;
+  surfaces_path: string;
+  surface_output_path: string;
   recipes: {
     decompose: Recipe;
     relate: Recipe;
+    extract_surfaces: Recipe;
+    decompose_surfaces: Recipe;
   };
 }
+
+export type MapBuildRecipes = MapBuildRequest['recipes'];
 
 export function graphPath(projectRoot: string): string {
   // The one canonical local graph, shared with Graphify and any host-LLM
@@ -26,6 +32,16 @@ export function outputPath(projectRoot: string): string {
   return join(projectRoot, '.unitbob', 'map-build', 'map_document.json');
 }
 
+// The surface inventory (spec 31, step 1) and the grouped surface document
+// (step 2) are the two extra local artifacts of one atomic map build.
+export function surfacesPath(projectRoot: string): string {
+  return join(projectRoot, '.unitbob', 'map-build', 'surfaces.json');
+}
+
+export function surfaceOutputPath(projectRoot: string): string {
+  return join(projectRoot, '.unitbob', 'map-build', 'surface_document.json');
+}
+
 export function readFreshGraph(projectRoot: string): string {
   const path = graphPath(projectRoot);
   if (!existsSync(path)) {
@@ -37,11 +53,13 @@ export function readFreshGraph(projectRoot: string): string {
   return rawGraphJson;
 }
 
-export function writeMapBuildRequest(projectRoot: string, recipes: MapBuildRequest['recipes']): MapBuildRequest {
+export function writeMapBuildRequest(projectRoot: string, recipes: MapBuildRecipes): MapBuildRequest {
   const packet: MapBuildRequest = {
     project_root: projectRoot,
     graph_path: graphPath(projectRoot),
     output_path: outputPath(projectRoot),
+    surfaces_path: surfacesPath(projectRoot),
+    surface_output_path: surfaceOutputPath(projectRoot),
     recipes,
   };
 
@@ -59,7 +77,10 @@ export function readMapBuildRequest(projectRoot: string): MapBuildRequest {
 
   const packet = parseJson(readFileSync(path, 'utf8'), path);
   if (!isMapBuildRequest(packet)) {
-    throw new Error(`${path} is malformed: expected project_root, graph_path, output_path, and recipes.`);
+    throw new Error(
+      `${path} is malformed: expected project_root, graph_path, output_path, surfaces_path, ` +
+        'surface_output_path, and recipes.',
+    );
   }
 
   return packet;
@@ -68,6 +89,24 @@ export function readMapBuildRequest(projectRoot: string): MapBuildRequest {
 export function readHostMapOutput(path: string): unknown {
   if (!existsSync(path)) {
     throw new Error(`${path} not found — the host map builder did not write a map document.`);
+  }
+
+  return parseJson(readFileSync(path, 'utf8'), path);
+}
+
+// The two surface artifacts are both required before upload: no partial bundle
+// carrying only one lens is ever sent (spec 31, atomic bundle).
+export function readSurfacesInventory(path: string): unknown {
+  if (!existsSync(path)) {
+    throw new Error(`${path} not found — the extract_surfaces step did not write a surfaces inventory.`);
+  }
+
+  return parseJson(readFileSync(path, 'utf8'), path);
+}
+
+export function readSurfaceDocument(path: string): unknown {
+  if (!existsSync(path)) {
+    throw new Error(`${path} not found — the decompose_surfaces step did not write a surface document.`);
   }
 
   return parseJson(readFileSync(path, 'utf8'), path);
@@ -89,9 +128,13 @@ function isMapBuildRequest(value: unknown): value is MapBuildRequest {
     typeof packet.project_root === 'string' &&
     typeof packet.graph_path === 'string' &&
     typeof packet.output_path === 'string' &&
+    typeof packet.surfaces_path === 'string' &&
+    typeof packet.surface_output_path === 'string' &&
     !!recipes &&
     isRecipe(recipes.decompose) &&
-    isRecipe(recipes.relate)
+    isRecipe(recipes.relate) &&
+    isRecipe(recipes.extract_surfaces) &&
+    isRecipe(recipes.decompose_surfaces)
   );
 }
 

@@ -40,12 +40,16 @@ test('map-prepare keylessly updates the canonical graph, fetches recipes, and wr
     'graphify',
     'recipe:decompose',
     'recipe:relate',
+    'recipe:extract_surfaces',
+    'recipe:decompose_surfaces',
   ]);
   const packet = readMapBuildRequest(projectRoot);
   // The request references the one canonical graph, never a `.unitbob` copy.
   assert.equal(packet.graph_path, join(projectRoot, 'graphify-out', 'graph.json'));
   assert.equal(packet.recipes.decompose.text, 'decompose recipe');
   assert.equal(packet.recipes.relate.text, 'relate recipe');
+  assert.equal(packet.recipes.extract_surfaces.text, 'extract_surfaces recipe');
+  assert.equal(packet.recipes.decompose_surfaces.text, 'decompose_surfaces recipe');
 });
 
 test('map-prepare succeeds with no LLM API key in the environment', async () => {
@@ -97,9 +101,13 @@ test('map-prepare prints a next-step naming the recipes, output_path, and put-ma
   }
 
   const outputPath = join(projectRoot, '.unitbob', 'map-build', 'map_document.json');
-  assert.match(output, /Next: build the Map Document at/);
-  assert.ok(output.includes(outputPath), 'names the output_path');
-  assert.match(output, /recipes\.decompose and recipes\.relate/);
+  const surfaceOutputPath = join(projectRoot, '.unitbob', 'map-build', 'surface_document.json');
+  assert.match(output, /Next: build BOTH lenses/);
+  assert.ok(output.includes(outputPath), 'names the map output_path');
+  assert.ok(output.includes(surfaceOutputPath), 'names the surface_output_path');
+  assert.match(output, /recipes\.decompose, recipes\.relate/);
+  assert.match(output, /recipes\.extract_surfaces/);
+  assert.match(output, /recipes\.decompose_surfaces/);
   assert.match(output, /`unitbob put-map-build`/);
 });
 

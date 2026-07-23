@@ -32,12 +32,24 @@ export async function mapPrepare(config: Config, _args: string[] = [], deps?: Pa
   }
 
   readFreshGraph(config.projectRoot);
-  const [decompose, relate] = await Promise.all([actual.getRecipe('decompose'), actual.getRecipe('relate')]);
-  const packet = writeMapBuildRequest(config.projectRoot, { decompose, relate });
+  const [decompose, relate, extractSurfaces, decomposeSurfaces] = await Promise.all([
+    actual.getRecipe('decompose'),
+    actual.getRecipe('relate'),
+    actual.getRecipe('extract_surfaces'),
+    actual.getRecipe('decompose_surfaces'),
+  ]);
+  const packet = writeMapBuildRequest(config.projectRoot, {
+    decompose,
+    relate,
+    extract_surfaces: extractSurfaces,
+    decompose_surfaces: decomposeSurfaces,
+  });
 
   process.stdout.write(`Map build request written to ${packet.project_root}/.unitbob/map-build/request.json\n`);
   process.stdout.write(
-    `Next: build the Map Document at ${packet.output_path} following recipes.decompose and ` +
-      'recipes.relate inside that request, then run `unitbob put-map-build`.\n',
+    `Next: build BOTH lenses following the recipes in that request — the decompose map at ` +
+      `${packet.output_path} (recipes.decompose, recipes.relate), and the surface map at ` +
+      `${packet.surface_output_path} (recipes.extract_surfaces → ${packet.surfaces_path}, then ` +
+      'recipes.decompose_surfaces) — then run `unitbob put-map-build`.\n',
   );
 }

@@ -26,6 +26,7 @@ export interface RunSummary {
 export interface MapBuildUploadResult {
   map_version_id: number;
   map_digest: string;
+  surface_digest: string;
   graph_digest: string;
   map_url: string;
   reused: boolean;
@@ -107,9 +108,16 @@ export class Wire {
     this.config = config;
   }
 
-  // PUT /repos/:id/map_build — upload the fresh graph and host-built map as one
-  // atomic blob. Rails validates, versions, and computes all digests.
-  async putMapBuild(payload: { graph: unknown; map_document: unknown }): Promise<MapBuildUploadResult> {
+  // PUT /repos/:id/map_build — upload the fresh graph and both host-built lenses
+  // (decompose map_document + surfaces inventory + grouped surface_document) as
+  // one atomic bundle. Rails validates both documents, versions, and computes all
+  // digests; either lens failing rejects the whole bundle (spec 31).
+  async putMapBuild(payload: {
+    graph: unknown;
+    map_document: unknown;
+    surfaces: unknown;
+    surface_document: unknown;
+  }): Promise<MapBuildUploadResult> {
     const res = await this.send('PUT', this.repoPath('map_build'), payload);
     await this.ensureOk(res, `PUT ${this.repoPath('map_build')}`);
     return (await res.json()) as MapBuildUploadResult;
