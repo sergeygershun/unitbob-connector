@@ -5,7 +5,7 @@ in the project's own primary stack — Ruby/RSpec, JS/TS/Vitest, or Python/pytes
 guardrail file and its capability metadata are uploaded — never source.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.1.10 suite-prepare`. This confirms at
+1. Run `npx -y --loglevel=error unitbob@0.1.11 suite-prepare`. This confirms at
    least one supported stack is present (Rails + RSpec, Vitest, or pytest),
    materializes the Ruby boot helper `.unitbob/guardrails/unitbob_helper.rb`
    (used only by RSpec suites), fetches the generate recipe and the per-block
@@ -51,7 +51,7 @@ Do this:
      the assignment. Never emit `spec_rb`, `rspec_id`, `example_id`, or
      `run_command`. No Markdown or prose around the JSON. If you cannot produce
      a valid file and JSON for the whole assignment, write nothing.
-4. Run `npx -y --loglevel=error unitbob@0.1.10 put-suite-build` to upload the
+4. Run `npx -y --loglevel=error unitbob@0.1.11 put-suite-build` to upload the
    finished suite. It verifies your selected stack against local project
    markers — a mismatch fails closed and uploads nothing.
 

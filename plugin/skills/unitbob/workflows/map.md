@@ -6,7 +6,7 @@ built locally and uploaded as one atomic bundle:
 - **Internal structure** (the decompose map) — the code's own subsystems.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.1.10 map-prepare`. It refreshes the code
+1. Run `npx -y --loglevel=error unitbob@0.1.11 map-prepare`. It refreshes the code
    graph and writes the build request.
 2. Read `.unitbob/map-build/request.json`. It gives you `project_root`,
    `graph_path`, `output_path`, `surfaces_path`, `surface_output_path`, and the
@@ -14,7 +14,7 @@ Do this:
 3. Read the graph at `graph_path`. **This is your input — both maps are built
    from it (plus, for the surface map, the project source).**
 4. Build **both** lenses locally (see below).
-5. Run `npx -y --loglevel=error unitbob@0.1.10 put-map-build`. It uploads the
+5. Run `npx -y --loglevel=error unitbob@0.1.11 put-map-build`. It uploads the
    graph, `map_document.json`, `surfaces.json`, and `surface_document.json`
    together; if either lens is missing or invalid the whole upload is rejected
    and the previous map stays current.

@@ -1,7 +1,7 @@
 Run the guardrail suite for this project and report the result.
 
 Do this:
-1. `npx -y --loglevel=error unitbob@0.1.10 run` — this fetches the current suite,
+1. `npx -y --loglevel=error unitbob@0.1.11 run` — this fetches the current suite,
    runs it locally with the suite's own runner (RSpec, Vitest, or pytest — the
    connector picks the command; nothing to configure), and ships the raw
    machine-readable result to the server, which returns the run summary. If the
