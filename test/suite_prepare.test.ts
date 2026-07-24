@@ -18,6 +18,7 @@ function config(projectRoot: string): Config {
 }
 
 const okPrecheck = () => ({ ok: true });
+const okRunner = async () => ({ status: 'provisioned' as const });
 
 function packets(): SuitePacket[] {
   return [
@@ -42,6 +43,7 @@ test('suite-prepare fetches both peer assignments and each branch recipe, then w
 
   await suitePrepare(config(projectRoot), [], {
     precheck: okPrecheck,
+    ensureRunner: okRunner,
     getRecipe: async (name) => { calls.push(`recipe:${name}`); return { name, version: `${name}-v1`, text: `${name} recipe` }; },
     getSuitePacketsBatch: async () => { calls.push('packets'); return packets(); },
     stdout: { write: () => true },
@@ -67,6 +69,7 @@ test('suite-prepare prints a next-step naming both kinds, the output_path, and p
 
   await suitePrepare(config(projectRoot), [], {
     precheck: okPrecheck,
+    ensureRunner: okRunner,
     getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
     getSuitePacketsBatch: async () => packets(),
     stdout: { write: (chunk: string) => { output += chunk; return true; } },
@@ -84,6 +87,7 @@ test('suite-prepare materializes the boot helper right after the precheck', asyn
 
   await suitePrepare(config(projectRoot), [], {
     precheck: okPrecheck,
+    ensureRunner: okRunner,
     getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
     getSuitePacketsBatch: async () => packets(),
     stdout: { write: () => true },
@@ -132,23 +136,66 @@ test('suite-prepare surfaces a no-current-map error and writes nothing', async (
   assert.throws(() => readSuiteBuildRequest(projectRoot), /run `npx unitbob suite-prepare` first/);
 });
 
-test('suite-prepare surfaces fixable behavioral runner provision error with checklist', async () => {
+test('a fixable behavioral runner blocker does not abort the build or block the structural peer', async () => {
+  const projectRoot = tmpProject();
+  let output = '';
+
+  // Spec 32-1: a `fixable` provision outcome is infrastructure the vibecoder clears with one
+  // command — never a build_error dead-end, never a red lamp, and it must not take the structural
+  // suite down with it.
+  await suitePrepare(config(projectRoot), [], {
+    precheck: okPrecheck,
+    ensureRunner: async () => ({
+      status: 'fixable',
+      message: 'Bundler missing',
+      checklist: ['Install bundler (`gem install bundler`)'],
+    }),
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk: string) => { output += chunk; return true; } },
+  });
+
+  // Structural still builds; the unprovisioned behavioral branch is dropped from this run.
+  const request = readSuiteBuildRequest(projectRoot);
+  assert.deepEqual(request.branches.map((branch) => branch.suite_kind), ['structural']);
+
+  // The vibecoder gets a fixable checklist, not a failure.
+  assert.match(output, /Behavioral suite skipped this run/);
+  assert.match(output, /Bundler missing/);
+  assert.match(output, /Install bundler/);
+  assert.doesNotMatch(output, /build_error|provision incomplete/i);
+});
+
+test('suite-prepare invokes the runner provision for the behavioral branch', async () => {
+  const projectRoot = tmpProject();
+  const provisioned: string[] = [];
+
+  // Regression guard for the stub-default bug: provisioning must actually run for the behavioral
+  // peer during preflight. (The production default is the real `ensureRunner`; `noUnusedLocals`
+  // fails the build if that import is ever left unwired again.)
+  await suitePrepare(config(projectRoot), [], {
+    precheck: okPrecheck,
+    ensureRunner: async (_root, runner) => { provisioned.push(runner); return { status: 'provisioned' }; },
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: () => true },
+  });
+
+  assert.deepEqual(provisioned, ['cucumber']);
+});
+
+test('a provisioned behavioral runner keeps both peer suites in the request', async () => {
   const projectRoot = tmpProject();
 
-  await assert.rejects(
-    () =>
-      suitePrepare(config(projectRoot), [], {
-        precheck: okPrecheck,
-        ensureRunner: async () => ({
-          status: 'fixable',
-          message: 'Bundler missing',
-          checklist: ['Install bundler (`gem install bundler`)'],
-        }),
-        getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
-        getSuitePacketsBatch: async () => packets(),
-        stdout: { write: () => true },
-      }),
-    /Behavioral runner provision incomplete for "cucumber": Bundler missing/,
-  );
+  await suitePrepare(config(projectRoot), [], {
+    precheck: okPrecheck,
+    ensureRunner: async () => ({ status: 'provisioned' }),
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: () => true },
+  });
+
+  const request = readSuiteBuildRequest(projectRoot);
+  assert.deepEqual(request.branches.map((branch) => branch.suite_kind), ['structural', 'behavioral']);
 });
 

@@ -29,7 +29,7 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
     getRecipe: (name) => wire.getRecipe(name),
     getSuitePacketsBatch: () => wire.getSuitePacketsBatch(),
     precheck: anyStackPrecheck,
-    ensureRunner: deps?.ensureRunner ?? (async () => ({ status: 'provisioned' })),
+    ensureRunner: deps?.ensureRunner ?? ensureRunner,
     stdout: process.stdout,
     ...deps,
   };
@@ -41,20 +41,29 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
 
   const packets = await actual.getSuitePacketsBatch();
 
-  // Spec 32-1: Zero-touch sidecar provision for behavioral BDD runners during build preflight
+  // Spec 32-1: Zero-touch sidecar provision for behavioral BDD runners during build preflight.
+  // A `fixable` outcome (no package manager available to install the runner) is an infrastructure
+  // blocker the vibecoder clears with one command. Per the spec it must NOT surface as a
+  // build_error dead-end, must NOT abort the build, and must NOT block the structural peer. So we
+  // drop only the unprovisioned behavioral branch from this run, keep everything else buildable,
+  // and print a fixable checklist after the request is written.
+  const fixableNotices: string[] = [];
+  const buildable: SuitePacket[] = [];
   for (const packet of packets) {
     const runner = (packet as { runner?: string }).runner ?? (packet.suite_kind === 'behavioral' ? inferBddRunner(config.projectRoot) : undefined);
     if (runner && (packet.suite_kind === 'behavioral' || ['cucumber', 'cucumber-js', 'pytest-bdd'].includes(runner))) {
       const prov = await actual.ensureRunner(config.projectRoot, runner);
       if (prov.status === 'fixable') {
-        const checklist = prov.checklist ? `\nSteps to fix:\n- ${prov.checklist.join('\n- ')}` : '';
-        throw new Error(`Behavioral runner provision incomplete for "${runner}": ${prov.message ?? ''}${checklist}`);
+        const steps = prov.checklist?.length ? `\n    - ${prov.checklist.join('\n    - ')}` : '';
+        fixableNotices.push(`  Behavioral runner "${runner}" not installed: ${prov.message ?? ''}${steps}`);
+        continue;
       }
     }
+    buildable.push(packet);
   }
 
   const branches: SuiteBuildBranch[] = await Promise.all(
-    packets.map(async (packet) => ({
+    buildable.map(async (packet) => ({
       suite_kind: packet.suite_kind,
       source_digest: packet.source_digest,
       path_root: packet.path_root,
@@ -68,10 +77,21 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
 
   actual.stdout.write(`Suite build request written to ${request.project_root}/.unitbob/suite-build/request.json\n`);
   actual.stdout.write(
-    `Next: build both peer suites (${kinds}) following each branch's \`recipe\` and \`assignment\`, ` +
+    `Next: build ${branches.length === 1 ? 'the' : 'both'} peer ${branches.length === 1 ? 'suite' : 'suites'} (${kinds}) following each branch's \`recipe\` and \`assignment\`, ` +
       `write your answer to ${request.output_path} as a branches array, run each locally to green, ` +
       'then run `unitbob put-suite-build`.\n',
   );
+
+  // A fixable runner blocker is not a failure: the structural suite still builds this run. Tell the
+  // vibecoder the one command that unblocks the behavioral peer, then re-run suite-prepare.
+  if (fixableNotices.length > 0) {
+    actual.stdout.write(
+      '\nBehavioral suite skipped this run — its BDD runner is not installed yet. ' +
+        'This is a fixable setup step, not a build failure, and it does not affect the structural suite:\n' +
+        fixableNotices.join('\n') +
+        '\nFix the above, then re-run `unitbob suite-prepare` to build the behavioral peer.\n',
+    );
+  }
 }
 
 function inferBddRunner(projectRoot: string): string {
