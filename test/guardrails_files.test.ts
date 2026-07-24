@@ -19,18 +19,18 @@ function tmpProject(): string {
 function rubySuite(content: string, digest = 'd1'): SuiteBlob {
   return {
     suite_digest: digest,
-    suite_file: { path: '.unitbob/guardrails/architecture_map_contracts_spec.rb', content },
+    suite_file: { path: '.unitbob/structural/architecture_map_contracts_spec.rb', content },
     runner_manifest: { language: 'ruby', framework: 'rspec', result_format: 'rspec_json', runner: 'rspec' },
   };
 }
 
-test('materializes the verbatim suite at its own path under .unitbob/guardrails', () => {
+test('materializes the verbatim suite at its own path under .unitbob/structural', () => {
   const projectRoot = tmpProject();
 
   materializeGuardrails(projectRoot, rubySuite("require 'rails_helper'\n\nRSpec.describe('x') {}\n"));
 
   assert.equal(
-    readFileSync(join(projectRoot, '.unitbob', 'guardrails', 'architecture_map_contracts_spec.rb'), 'utf8'),
+    readFileSync(join(projectRoot, '.unitbob', 'structural', 'architecture_map_contracts_spec.rb'), 'utf8'),
     "require 'rails_helper'\n\nRSpec.describe('x') {}\n",
   );
 });
@@ -39,13 +39,13 @@ test('materializes a vitest suite without the Ruby boot kit', () => {
   const projectRoot = tmpProject();
   const suite: SuiteBlob = {
     suite_digest: 'd1',
-    suite_file: { path: '.unitbob/guardrails/architecture_map_contracts.test.ts', content: 'import { it } from "vitest";\n' },
+    suite_file: { path: '.unitbob/structural/architecture_map_contracts.test.ts', content: 'import { it } from "vitest";\n' },
     runner_manifest: { language: 'javascript', framework: 'vitest', result_format: 'vitest_json', runner: 'vitest' },
   };
 
   materializeGuardrails(projectRoot, suite);
 
-  const dir = join(projectRoot, '.unitbob', 'guardrails');
+  const dir = join(projectRoot, '.unitbob', 'structural');
   assert.equal(readFileSync(join(dir, 'architecture_map_contracts.test.ts'), 'utf8'), 'import { it } from "vitest";\n');
   assert.equal(existsSync(join(dir, 'unitbob_helper.rb')), false);
   assert.equal(existsSync(join(dir, 'rspec.opts')), false);
@@ -56,7 +56,7 @@ test('refuses unsafe suite paths and writes nothing', () => {
   const unsafe = [
     '/etc/passwd',
     'spec/pwned_spec.rb',
-    '.unitbob/guardrails/../../pwned.rb',
+    '.unitbob/structural/../../pwned.rb',
     '',
   ];
 
@@ -72,12 +72,12 @@ test('refuses unsafe suite paths and writes nothing', () => {
 });
 
 test('assertGuardrailPath accepts a well-formed guardrail path', () => {
-  assertGuardrailPath('.unitbob/guardrails/architecture_map_contracts.test.ts');
+  assertGuardrailPath('.unitbob/structural/architecture_map_contracts.test.ts');
 });
 
 test('materializes the boot kit (helper + empty rspec options) next to a Ruby suite', () => {
   const projectRoot = tmpProject();
-  const dir = join(projectRoot, '.unitbob', 'guardrails');
+  const dir = join(projectRoot, '.unitbob', 'structural');
 
   materializeGuardrails(projectRoot, rubySuite('suite'));
 
@@ -91,9 +91,9 @@ test('materializeHelper writes the boot kit on its own (suite-build flow)', () =
 
   const helperPath = materializeHelper(projectRoot);
 
-  assert.equal(helperPath, join(projectRoot, '.unitbob', 'guardrails', 'unitbob_helper.rb'));
+  assert.equal(helperPath, join(projectRoot, '.unitbob', 'structural', 'unitbob_helper.rb'));
   assert.equal(readFileSync(helperPath, 'utf8'), UNITBOB_HELPER_RB);
-  assert.equal(existsSync(join(projectRoot, '.unitbob', 'guardrails', 'rspec.opts')), true);
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'structural', 'rspec.opts')), true);
 });
 
 // The template is connector-owned Ruby nobody executes in these tests — pin the
@@ -129,7 +129,7 @@ test('the helper template is valid Ruby', (t) => {
 
 test('rewrites any existing local guardrail files before each run', () => {
   const projectRoot = tmpProject();
-  const dir = join(projectRoot, '.unitbob', 'guardrails');
+  const dir = join(projectRoot, '.unitbob', 'structural');
 
   materializeGuardrails(projectRoot, rubySuite('old'));
   writeFileSync(join(dir, 'extra.txt'), 'stale');

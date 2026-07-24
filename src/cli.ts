@@ -12,6 +12,7 @@ import { putMapBuild } from './verbs/putMapBuild.ts';
 import { suitePrepare } from './verbs/suitePrepare.ts';
 import { putSuiteBuild } from './verbs/putSuiteBuild.ts';
 import { fixPrepare } from './verbs/fixPrepare.ts';
+import { contractPrompt } from './verbs/contractPrompt.ts';
 
 const USAGE = `unitbob — thin local hands for the Unitbob server.
 
@@ -26,7 +27,9 @@ Verbs:
   suite-prepare        Internal: fetch the recipe and capability assignment, write the host suite-build request.
   put-suite-build      Internal: upload the host-built guardrail suite (whole spec file + test_metadata).
   fix-prepare <id>     Internal: fetch the per-capability repair packet for one red guard (by interface_id).
-  check                Run the guardrail suite locally and report.
+  contract-prompt <digest> <test_id> [fix|accept]
+                       Internal: fetch the fix/accept brief for one red check on either map.
+  check                Run every Unitbob contract suite locally and report.
   run                  Alias for check.
 
 Pipeline: map and suite are built on your machine. \`*-prepare\` writes a request
@@ -72,6 +75,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case 'fix-prepare':
         await fixPrepare(await ensureLinked(), args);
+        return 0;
+      case 'contract-prompt':
+        await contractPrompt(await ensureLinked(), args);
         return 0;
       case 'run':
       case 'check':

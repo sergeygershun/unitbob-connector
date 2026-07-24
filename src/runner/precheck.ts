@@ -38,6 +38,14 @@ export function anyStackPrecheck(projectRoot: string, deps: PrecheckDeps = defau
 
 // Confirm the host-selected runner against local markers. A mismatch fails
 // closed: the caller writes no files and uploads nothing.
+//
+// Both contract systems route through here (spec 32). The structural runners
+// (rspec/vitest/pytest) confirm the exact test framework is present, because the
+// host writes and runs against it. The behavioral BDD runners
+// (cucumber/cucumber-js/pytest-bdd) confirm only the base language: `check` never
+// installs anything, so a missing BDD runner is left to surface as a suite error
+// from the actual run — the precheck just replaces "bundle: command not found"
+// with an early, clear "this project isn't Ruby".
 export function validateStack(projectRoot: string, runner: string, deps: PrecheckDeps = defaultDeps): PrecheckResult {
   switch (runner) {
     case 'rspec':
@@ -46,12 +54,72 @@ export function validateStack(projectRoot: string, runner: string, deps: Prechec
       return vitestPrecheck(projectRoot);
     case 'pytest':
       return pytestPrecheck(projectRoot, deps);
+    case 'cucumber':
+      return rubyBehavioralPrecheck(projectRoot);
+    case 'cucumber-js':
+      return jsBehavioralPrecheck(projectRoot);
+    case 'pytest-bdd':
+      return pythonBehavioralPrecheck(projectRoot, deps);
     default:
       return {
         ok: false,
-        message: `Unsupported runner "${runner}" — Unitbob supports rspec, vitest, and pytest only.`,
+        message: `Unsupported runner "${runner}" — Unitbob supports ` +
+          'rspec, vitest, pytest, cucumber, cucumber-js, and pytest-bdd only.',
       };
   }
+}
+
+// The behavioral suite boots the app in its test environment, so a Ruby project
+// is the marker — but not rspec-rails (the behavioral runner is cucumber, not
+// rspec), and not the cucumber gem itself (check never installs; a missing
+// runner surfaces as a suite error from the run).
+function rubyBehavioralPrecheck(projectRoot: string): PrecheckResult {
+  if (hasGemfileWith(projectRoot, /\brails\b/)) return { ok: true };
+
+  return {
+    ok: false,
+    message:
+      'The behavioral (Gherkin) suite selected the Ruby stack, but this project does not look ' +
+      'like Rails (no `rails` gem found in Gemfile).',
+  };
+}
+
+function jsBehavioralPrecheck(projectRoot: string): PrecheckResult {
+  if (existsSync(join(projectRoot, 'package.json'))) return { ok: true };
+
+  return {
+    ok: false,
+    message: 'The behavioral (Gherkin) suite selected the JavaScript/TypeScript stack, but this project has no package.json.',
+  };
+}
+
+// pytest-bdd runs under pytest, so the harness must be importable — same probe
+// and message shape as the structural pytest precheck; pytest-bdd itself, if
+// missing, surfaces as a suite error from the run.
+function pythonBehavioralPrecheck(projectRoot: string, deps: PrecheckDeps): PrecheckResult {
+  const markers = ['pyproject.toml', 'requirements.txt', 'Pipfile'];
+  if (!markers.some((name) => existsSync(join(projectRoot, name)))) {
+    return {
+      ok: false,
+      message:
+        'The behavioral (Gherkin) suite selected the Python stack, but this project has none of ' +
+        `${markers.join(', ')} — it does not look like a Python project.`,
+    };
+  }
+
+  const available = ['python3', 'python'].some((python) =>
+    deps.commandSucceeds(python, ['-m', 'pytest', '--version'], projectRoot),
+  );
+  if (!available) {
+    return {
+      ok: false,
+      message:
+        'The behavioral (Gherkin) suite selected the Python stack, but pytest is not importable in ' +
+        'the current Python environment. If your dependencies live in a virtualenv, activate it ' +
+        '(e.g. `source .venv/bin/activate`) before running Unitbob, then retry.',
+    };
+  }
+  return { ok: true };
 }
 
 function rubyPrecheck(projectRoot: string): PrecheckResult {

@@ -257,6 +257,79 @@ test('getLamps hits GET /repos/:id/lamps', async () => {
   );
 });
 
+test('getSuitePacketsBatch returns the two peer packets', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { suite_packets: [{ suite_kind: 'structural' }, { suite_kind: 'behavioral' }] }),
+    async (config, hits) => {
+      const packets = await new Wire(config).getSuitePacketsBatch();
+      assert.deepEqual(packets.map((p) => p.suite_kind), ['structural', 'behavioral']);
+      assert.equal(hits[0].url, '/repos/3/suite_packets');
+    },
+  );
+});
+
+test('putSuiteBuilds PUTs the batch and returns one result per kind', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { results: [{ suite_kind: 'structural', status: 'created' }], map_url: 'u' }),
+    async (config, hits) => {
+      const results = await new Wire(config).putSuiteBuilds([
+        { suite_kind: 'structural', source_digest: 'm', artifacts: { suite_file: {}, runner_manifest: {}, test_metadata: {} } },
+      ]);
+      assert.equal(results[0].status, 'created');
+      assert.equal(hits[0].method, 'PUT');
+      assert.equal(hits[0].url, '/repos/3/suite_builds');
+      assert.equal(JSON.parse(hits[0].body).suite_builds.length, 1);
+    },
+  );
+});
+
+test('getSuites returns the two peer suite items', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { suites: [{ suite_kind: 'structural', status: 'ready' }, { suite_kind: 'behavioral', status: 'not_built' }] }),
+    async (config, hits) => {
+      const suites = await new Wire(config).getSuites();
+      assert.deepEqual(suites.map((s) => s.status), ['ready', 'not_built']);
+      assert.equal(hits[0].url, '/repos/3/suites');
+    },
+  );
+});
+
+test('postRunsBatch POSTs the runs and returns results + one map_url', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { results: [{ suite_kind: 'behavioral', status: 'ok', summary: 'ok' }], map_url: 'http://host/repos/3/map' }),
+    async (config, hits) => {
+      const { results, map_url } = await new Wire(config).postRunsBatch([{ suite_digest: 'd', run_result: '{}' }]);
+      assert.equal(results[0].suite_kind, 'behavioral');
+      assert.equal(map_url, 'http://host/repos/3/map');
+      assert.equal(hits[0].method, 'POST');
+      assert.equal(hits[0].url, '/repos/3/runs/batch');
+    },
+  );
+});
+
+test('getContractPrompt hits GET /contract_prompt with the digest+test_id+intent query', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { suite_digest: 'd', suite_kind: 'behavioral', test_id: 'checkout', intent: 'fix', prompt: 'p', message: 'm' }),
+    async (config, hits) => {
+      const packet = await new Wire(config).getContractPrompt('d', 'checkout', 'fix');
+      assert.equal(packet.prompt, 'p');
+      assert.match(hits[0].url, /^\/repos\/3\/contract_prompt\?/);
+      assert.match(hits[0].url, /suite_digest=d/);
+      assert.match(hits[0].url, /test_id=checkout/);
+      assert.match(hits[0].url, /intent=fix/);
+    },
+  );
+});
+
+test('a batch endpoint answering without its array is a WireError', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { nope: true }),
+    async (config) => {
+      await assert.rejects(() => new Wire(config).getSuites(), (err) => err instanceof WireError);
+    },
+  );
+});
+
 test('an unreachable server throws an actionable WireError, never a fabricated result', async () => {
   // Port 1 is reserved and nothing listens there → connection refused.
   const config: Config = { server: 'http://127.0.0.1:1', repoId: 3, projectRoot: '/project' };

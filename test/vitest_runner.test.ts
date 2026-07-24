@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { runVitestSuite, VITEST_CONFIG_FILE } from '../src/runner/vitest.ts';
 
-const suitePath = '.unitbob/guardrails/architecture_map_contracts.test.ts';
+const suitePath = '.unitbob/structural/architecture_map_contracts.test.ts';
 
 function tmpProject(): string {
   // The check flow materializes the guardrail file (creating .unitbob/) before

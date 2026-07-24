@@ -87,13 +87,15 @@ test('suite workflow stitches suite-prepare, the host agent, and put-suite-build
   assert.doesNotMatch(text, /npx unitbob(?!@).* suite(?!-)/);
 });
 
-test('fix workflow stitches fix-prepare and covers both fix and accept', () => {
+test('fix workflow drives contract-prompt and covers both fix and accept on either map', () => {
   const text = workflow('fix');
 
-  assert.match(text, new RegExp(`${unitbobPattern} fix-prepare <guard_id>`));
-  assert.match(text, /Read `\.unitbob\/fix\/request\.json`/);
+  // Spec 32: one selector — suite_digest + test_id + intent — for both maps.
+  assert.match(text, new RegExp(`${unitbobPattern} contract-prompt <suite_digest> <test_id>`));
+  assert.match(text, /\.unitbob\/structural\//);
+  assert.match(text, /\.unitbob\/behavioral\//);
   assert.doesNotMatch(text, /ai\/agents\/fixer\.md/);
-  // Fix edits code (no upload); accept republishes the whole suite via put-suite-build.
+  // Fix edits code (no upload); accept republishes that suite via put-suite-build.
   assert.match(text, new RegExp(`${unitbobPattern} put-suite-build`));
   // `$ARGUMENTS` is a command-only substitution — inside a workflow it stays literal.
   assert.doesNotMatch(text, /\$ARGUMENTS/);

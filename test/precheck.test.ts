@@ -101,6 +101,52 @@ test('an unknown runner is refused', () => {
   assert.match(check.message ?? '', /Unsupported runner "jest"/);
 });
 
+// The behavioral (Gherkin) runners (spec 32) confirm only the base language —
+// check installs nothing, so a missing BDD runner is left to surface as a suite
+// error from the run. rspec-rails / vitest presence is not required here.
+test('cucumber: passes on a Rails project, without requiring rspec-rails or the cucumber gem', () => {
+  assert.deepEqual(validateStack(rubyProject("gem 'rails'\n"), 'cucumber'), { ok: true });
+});
+
+test('cucumber: fails with a clear message when the project is not Ruby', () => {
+  const check = validateStack(rubyProject("gem 'sinatra'\n"), 'cucumber');
+  assert.equal(check.ok, false);
+  assert.match(check.message ?? '', /behavioral \(Gherkin\) suite selected the Ruby stack/);
+  assert.match(check.message ?? '', /does not look like Rails/);
+});
+
+test('cucumber-js: passes when a package.json is present', () => {
+  const dir = tmpProject();
+  writeFileSync(join(dir, 'package.json'), '{}');
+  assert.deepEqual(validateStack(dir, 'cucumber-js'), { ok: true });
+});
+
+test('cucumber-js: fails with a clear message when there is no package.json', () => {
+  const check = validateStack(tmpProject(), 'cucumber-js');
+  assert.equal(check.ok, false);
+  assert.match(check.message ?? '', /JavaScript\/TypeScript stack, but this project has no package.json/);
+});
+
+test('pytest-bdd: passes with a Python marker when pytest is importable', () => {
+  const dir = tmpProject();
+  writeFileSync(join(dir, 'pyproject.toml'), '');
+  assert.deepEqual(validateStack(dir, 'pytest-bdd', pytestPresent), { ok: true });
+});
+
+test('pytest-bdd: fails closed when pytest is not importable', () => {
+  const dir = tmpProject();
+  writeFileSync(join(dir, 'requirements.txt'), '');
+  const check = validateStack(dir, 'pytest-bdd', pytestMissing);
+  assert.equal(check.ok, false);
+  assert.match(check.message ?? '', /pytest is not importable/);
+});
+
+test('pytest-bdd: fails without Python project markers', () => {
+  const check = validateStack(tmpProject(), 'pytest-bdd', pytestPresent);
+  assert.equal(check.ok, false);
+  assert.match(check.message ?? '', /does not look like a Python project/);
+});
+
 test('anyStackPrecheck passes when at least one stack matches and fails when none do', () => {
   const python = tmpProject();
   writeFileSync(join(python, 'pyproject.toml'), '');

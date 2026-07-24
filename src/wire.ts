@@ -40,6 +40,41 @@ export interface SuitePackets {
   blocks: unknown[];
 }
 
+// One peer packet from the batch GET /suite_packets (spec 32): the assignment
+// for one contract system. The connector reads only `suite_kind`, `source_digest`,
+// and `path_root`; the `assignment` body is opaque and relayed to the host.
+export interface SuitePacket {
+  suite_kind: string;
+  source_digest: string;
+  path_root: string;
+  assignment: unknown;
+}
+
+// One peer build outcome uploaded in the batch PUT /suite_builds. Exactly one of
+// `artifacts` or `build_error` is set. `artifacts` is the host's verbatim
+// answer; `build_error` records that the host could not build this branch at all.
+export interface SuiteBuildItem {
+  suite_kind: string;
+  source_digest: string;
+  artifacts?: {
+    suite_file: unknown;
+    runner_manifest: unknown;
+    test_metadata: unknown;
+  };
+  build_error?: { message: string };
+}
+
+// The per-kind result the server returns for each uploaded branch. Printed
+// verbatim; the connector reads only `suite_kind` and `status` for its summary.
+export interface SuiteBuildResult {
+  suite_kind: string;
+  status: string;
+  suite_version_id?: number;
+  suite_digest?: string;
+  error?: string;
+  counts?: Record<string, number>;
+}
+
 export interface SuiteBuildUploadResult {
   suite_version_id: number;
   suite_digest: string;
@@ -47,6 +82,53 @@ export interface SuiteBuildUploadResult {
   // The server-computed tallies, printed verbatim. Kept as a loose map so the
   // connector names none of the server's domain buckets.
   counts: Record<string, number>;
+}
+
+// One peer suite from the batch GET /suites (spec 32). A `ready` item carries
+// the full suite blob to materialize and run; a `not_built` item has nothing to
+// run and is skipped.
+export interface SuiteListItem {
+  suite_kind: string;
+  status: string;
+  suite_digest?: string;
+  suite_file?: SuiteArtifact;
+  runner_manifest?: RunnerManifestWire;
+}
+
+export interface SuiteArtifact {
+  path: string;
+  content: string;
+  support_files?: { path: string; content: string }[];
+}
+
+export interface RunnerManifestWire {
+  runner: string;
+  [key: string]: unknown;
+}
+
+// One per-kind run summary the server returns from POST /runs/batch. Printed
+// verbatim; the connector reads only `suite_kind`, `summary`, and `status`.
+export interface RunResultItem {
+  suite_kind: string | null;
+  suite_digest: string;
+  status: string;
+  summary: string;
+  lamps?: unknown;
+}
+
+// The contract action brief (spec 32) — one operation for both maps and both
+// intents. Carries no source and no test body; the connector prints `message`
+// and copies `prompt`.
+export interface ContractPrompt {
+  suite_digest: string;
+  suite_kind: string;
+  test_id: string;
+  intent: string;
+  headline: string;
+  failure_message: string;
+  prompt: string;
+  message: string;
+  [key: string]: unknown;
 }
 
 // The per-capability repair data packet (spec 26). Carries no source and no test
@@ -123,9 +205,69 @@ export class Wire {
     return (await res.json()) as MapBuildUploadResult;
   }
 
-  // GET /repos/:id/suite_packets — the host's assignment (the capabilities to
-  // guard). Relayed opaque; 409 (no current map) surfaces as a WireError carrying
-  // the server's "run /unitbob map first" guidance.
+  // GET /repos/:id/suite_packets — the two peer assignments (spec 32), exactly
+  // one per contract system. Relayed opaque; 409 (no current map) surfaces as a
+  // WireError carrying the server's "run the Unitbob map first" guidance.
+  async getSuitePacketsBatch(): Promise<SuitePacket[]> {
+    const res = await this.send('GET', this.repoPath('suite_packets'));
+    await this.ensureOk(res, `GET ${this.repoPath('suite_packets')}`);
+    const body = (await res.json()) as { suite_packets?: unknown };
+    if (!Array.isArray(body.suite_packets)) {
+      throw new WireError(`GET ${this.repoPath('suite_packets')} returned no suite_packets array.`);
+    }
+    return body.suite_packets as SuitePacket[];
+  }
+
+  // PUT /repos/:id/suite_builds — upload both peer branches in one batch (spec
+  // 32). Each item is validated and published independently; the response
+  // carries one result per suite_kind.
+  async putSuiteBuilds(items: SuiteBuildItem[]): Promise<SuiteBuildResult[]> {
+    const res = await this.send('PUT', this.repoPath('suite_builds'), { suite_builds: items });
+    await this.ensureOk(res, `PUT ${this.repoPath('suite_builds')}`);
+    const body = (await res.json()) as { results?: unknown };
+    if (!Array.isArray(body.results)) {
+      throw new WireError(`PUT ${this.repoPath('suite_builds')} returned no results array.`);
+    }
+    return body.results as SuiteBuildResult[];
+  }
+
+  // GET /repos/:id/suites — both current suites (spec 32), exactly two peer
+  // items. A `ready` item carries its blob; a `not_built` item is skipped.
+  async getSuites(): Promise<SuiteListItem[]> {
+    const res = await this.send('GET', this.repoPath('suites'));
+    await this.ensureOk(res, `GET ${this.repoPath('suites')}`);
+    const body = (await res.json()) as { suites?: unknown };
+    if (!Array.isArray(body.suites)) {
+      throw new WireError(`GET ${this.repoPath('suites')} returned no suites array.`);
+    }
+    return body.suites as SuiteListItem[];
+  }
+
+  // POST /repos/:id/runs/batch — ship each branch's raw report (or suite error)
+  // in one batch; the server parses each against the exact stored version and
+  // returns one summary per branch plus one shared map URL.
+  async postRunsBatch(runs: unknown[]): Promise<{ results: RunResultItem[]; map_url: string }> {
+    const res = await this.send('POST', this.repoPath('runs/batch'), { runs });
+    await this.ensureOk(res, `POST ${this.repoPath('runs/batch')}`);
+    const body = (await res.json()) as { results?: unknown; map_url?: unknown };
+    if (!Array.isArray(body.results)) {
+      throw new WireError(`POST ${this.repoPath('runs/batch')} returned no results array.`);
+    }
+    return { results: body.results as RunResultItem[], map_url: String(body.map_url ?? '') };
+  }
+
+  // GET /repos/:id/contract_prompt?suite_digest=&test_id=&intent= — the one
+  // contract action operation for both maps and both intents (spec 32).
+  async getContractPrompt(suiteDigest: string, testId: string, intent: string): Promise<ContractPrompt> {
+    const query = new URLSearchParams({ suite_digest: suiteDigest, test_id: testId, intent });
+    const url = `${this.repoPath('contract_prompt')}?${query}`;
+    const res = await this.send('GET', url);
+    await this.ensureOk(res, `GET ${url}`);
+    return (await res.json()) as ContractPrompt;
+  }
+
+  // GET /repos/:id/suite_packets — the legacy singular assignment (spec 26),
+  // kept for the structural-only flow. Relayed opaque.
   async getSuitePackets(): Promise<SuitePackets> {
     const res = await this.send('GET', this.repoPath('suite_packets'));
     await this.ensureOk(res, `GET ${this.repoPath('suite_packets')}`);

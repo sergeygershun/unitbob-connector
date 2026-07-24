@@ -1,30 +1,31 @@
 import type { Config } from '../config.ts';
 import { materializeHelper } from '../files/guardrails.ts';
-import { writeSuiteBuildRequest } from '../files/suiteBuild.ts';
+import { recipeNameFor, writeSuiteBuildRequest, type SuiteBuildBranch } from '../files/suiteBuild.ts';
 import { anyStackPrecheck } from '../runner/precheck.ts';
-import { Wire, type Recipe, type SuitePackets } from '../wire.ts';
+import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
 
 interface SuitePrepareDeps {
   getRecipe: (name: string) => Promise<Recipe>;
-  getSuitePackets: () => Promise<SuitePackets>;
+  getSuitePacketsBatch: () => Promise<SuitePacket[]>;
   precheck: (projectRoot: string) => { ok: boolean; message?: string };
+  stdout: { write: (chunk: string) => unknown };
 }
 
-// Confirm at least one supported stack is present (Rails+RSpec, Vitest, or
-// pytest — the host LLM picks the primary one during generation), materialize
-// the Ruby boot helper a generated RSpec suite would require, then fetch the
-// generate recipe and the per-block capability assignment and write the host's
-// task to `.unitbob/suite-build/request.json`. No model is called and no
-// source is read here — that is the host's job, framed by
-// ai/agents/suite_builder.md. An unsupported project stops with one actionable
-// message and writes nothing; a no-current-map error from the server surfaces
-// (via WireError) with guidance to run `/unitbob map` first.
+// Confirm at least one supported stack is present, materialize the Ruby boot
+// helper a generated RSpec suite would require, then fetch both peer assignments
+// (spec 32) and each branch's recipe, and write the host's task to
+// `.unitbob/suite-build/request.json`. No model is called and no source is read
+// here — that is the host's job, framed by the two generation recipes. An
+// unsupported project stops with one actionable message and writes nothing; a
+// no-current-map error from the server surfaces (via WireError) with guidance to
+// rebuild the map first.
 export async function suitePrepare(config: Config, _args: string[] = [], deps?: Partial<SuitePrepareDeps>): Promise<void> {
   const wire = new Wire(config);
   const actual: SuitePrepareDeps = {
     getRecipe: (name) => wire.getRecipe(name),
-    getSuitePackets: () => wire.getSuitePackets(),
+    getSuitePacketsBatch: () => wire.getSuitePacketsBatch(),
     precheck: anyStackPrecheck,
+    stdout: process.stdout,
     ...deps,
   };
 
@@ -33,16 +34,24 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
 
   materializeHelper(config.projectRoot);
 
-  const [recipe, packets] = await Promise.all([actual.getRecipe('generate'), actual.getSuitePackets()]);
-  const request = writeSuiteBuildRequest(config.projectRoot, {
-    map_digest: packets.map_digest,
-    recipe,
-    blocks: packets.blocks,
-  });
+  const packets = await actual.getSuitePacketsBatch();
+  const branches: SuiteBuildBranch[] = await Promise.all(
+    packets.map(async (packet) => ({
+      suite_kind: packet.suite_kind,
+      source_digest: packet.source_digest,
+      path_root: packet.path_root,
+      recipe: await actual.getRecipe(recipeNameFor(packet)),
+      assignment: packet.assignment,
+    })),
+  );
 
-  process.stdout.write(`Suite build request written to ${request.project_root}/.unitbob/suite-build/request.json\n`);
-  process.stdout.write(
-    `Next: write the complete guardrail spec and ${request.output_path} following \`recipe\` and the ` +
-      'per-block capability `blocks` inside that request, run it locally to green, then run `unitbob put-suite-build`.\n',
+  const request = writeSuiteBuildRequest(config.projectRoot, branches);
+  const kinds = branches.map((branch) => branch.suite_kind).join(' and ');
+
+  actual.stdout.write(`Suite build request written to ${request.project_root}/.unitbob/suite-build/request.json\n`);
+  actual.stdout.write(
+    `Next: build both peer suites (${kinds}) following each branch's \`recipe\` and \`assignment\`, ` +
+      `write your answer to ${request.output_path} as a branches array, run each locally to green, ` +
+      'then run `unitbob put-suite-build`.\n',
   );
 }

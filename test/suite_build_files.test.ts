@@ -5,11 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   outputPath,
-  readHostSuiteOutput,
+  readHostSuiteOutputs,
   readSuiteBuildRequest,
+  recipeNameFor,
   requestPath,
   writeSuiteBuildRequest,
+  type SuiteBuildBranch,
 } from '../src/files/suiteBuild.ts';
+import type { SuitePacket } from '../src/wire.ts';
 
 function tmpProject(): string {
   const dir = mkdtempSync(join(tmpdir(), 'unitbob-suite-build-files-'));
@@ -17,14 +20,46 @@ function tmpProject(): string {
   return dir;
 }
 
-const SUITE_PATH = '.unitbob/guardrails/architecture_map_contracts_spec.rb';
+function branches(): SuiteBuildBranch[] {
+  return [
+    {
+      suite_kind: 'structural', source_digest: 'map-d', path_root: '.unitbob/structural/',
+      recipe: { name: 'generate', version: 'g1', text: 'g' }, assignment: { blocks: [] },
+    },
+    {
+      suite_kind: 'behavioral', source_digest: 'surface-d', path_root: '.unitbob/behavioral/',
+      recipe: { name: 'generate_behavioral', version: 'b1', text: 'b' }, assignment: { capabilities: [] },
+    },
+  ];
+}
 
-function goodOutput(): Record<string, unknown> {
+function structuralBranch(): Record<string, unknown> {
   return {
-    suite_file: { path: SUITE_PATH, content: "require 'rails_helper'\n" },
+    suite_kind: 'structural',
+    suite_file: { path: '.unitbob/structural/architecture_map_contracts_spec.rb', content: "require 'x'\n" },
     runner_manifest: { language: 'ruby', framework: 'rspec', result_format: 'rspec_json', runner: 'rspec' },
     test_metadata: { capabilities: [] },
   };
+}
+
+function behavioralBranch(): Record<string, unknown> {
+  return {
+    suite_kind: 'behavioral',
+    suite_file: {
+      path: '.unitbob/behavioral/features/surface_contracts.feature',
+      content: 'Feature: x\n',
+      support_files: [{ path: '.unitbob/behavioral/step_definitions/surface_steps.rb', content: '# steps\n' }],
+    },
+    runner_manifest: {
+      language: 'ruby', framework: 'cucumber', result_format: 'cucumber_messages',
+      runner: 'cucumber', package_manager: 'bundler', runner_version: '9.2.0',
+    },
+    test_metadata: { capabilities: [] },
+  };
+}
+
+function writeTask(projectRoot: string): void {
+  writeSuiteBuildRequest(projectRoot, branches());
 }
 
 function writeOutput(projectRoot: string, output: unknown): string {
@@ -33,83 +68,82 @@ function writeOutput(projectRoot: string, output: unknown): string {
   return path;
 }
 
-test('writes and round-trips the suite build request', () => {
+test('writes and round-trips the two-branch suite build request', () => {
   const projectRoot = tmpProject();
+  const request = writeSuiteBuildRequest(projectRoot, branches());
 
-  const request = writeSuiteBuildRequest(projectRoot, {
-    map_digest: 'sha256-map',
-    recipe: { name: 'generate', version: 'g1', text: 'generate recipe' },
-    blocks: [{ block_id: 'billing', interfaces: [] }],
-  });
-
-  assert.equal(request.map_digest, 'sha256-map');
   assert.equal(request.output_path, outputPath(projectRoot));
   assert.equal(existsSync(requestPath(projectRoot)), true);
   assert.deepEqual(readSuiteBuildRequest(projectRoot), request);
+  assert.deepEqual(request.branches.map((branch) => branch.suite_kind), ['structural', 'behavioral']);
 });
 
-test('reads the host output (suite_file + runner_manifest + test_metadata)', () => {
+test('reads both branch outputs, keeping each artifact envelope', () => {
   const projectRoot = tmpProject();
-  const path = writeOutput(projectRoot, goodOutput());
+  writeTask(projectRoot);
+  const path = writeOutput(projectRoot, { branches: [structuralBranch(), behavioralBranch()] });
 
-  assert.deepEqual(readHostSuiteOutput(path, projectRoot), goodOutput());
+  const outputs = readHostSuiteOutputs(path, readSuiteBuildRequest(projectRoot));
+  assert.deepEqual(outputs.map((output) => output.suite_kind), ['structural', 'behavioral']);
+  assert.deepEqual(outputs[1].suite_file, behavioralBranch().suite_file);
 });
 
-test('rejects malformed or incomplete host output', () => {
+test('relays a branch build_error', () => {
   const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const path = writeOutput(projectRoot, {
+    branches: [structuralBranch(), { suite_kind: 'behavioral', build_error: { message: 'no cucumber here' } }],
+  });
+
+  const outputs = readHostSuiteOutputs(path, readSuiteBuildRequest(projectRoot));
+  assert.equal(outputs[1].build_error?.message, 'no cucumber here');
+  assert.equal(outputs[1].suite_file, undefined);
+});
+
+test('rejects malformed or incomplete branch output', () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const request = readSuiteBuildRequest(projectRoot);
 
   let path = writeOutput(projectRoot, 'I wrote some tests for you');
-  assert.throws(() => readHostSuiteOutput(path, projectRoot), /is not valid JSON/);
+  assert.throws(() => readHostSuiteOutputs(path, request), /is not valid JSON/);
 
-  path = writeOutput(projectRoot, { ...goodOutput(), test_metadata: undefined });
-  assert.throws(() => readHostSuiteOutput(path, projectRoot), /missing test_metadata/);
+  path = writeOutput(projectRoot, { branches: [{ ...structuralBranch(), test_metadata: undefined }] });
+  assert.throws(() => readHostSuiteOutputs(path, request), /missing test_metadata/);
 
-  path = writeOutput(projectRoot, { ...goodOutput(), runner_manifest: undefined });
-  assert.throws(() => readHostSuiteOutput(path, projectRoot), /missing runner_manifest/);
+  path = writeOutput(projectRoot, { branches: [{ ...structuralBranch(), runner_manifest: undefined }] });
+  assert.throws(() => readHostSuiteOutputs(path, request), /missing runner_manifest/);
 
-  path = writeOutput(projectRoot, { ...goodOutput(), suite_file: 'inline ruby' });
-  assert.throws(() => readHostSuiteOutput(path, projectRoot), /suite_file \{ path, content \}/);
+  path = writeOutput(projectRoot, { branches: [{ ...structuralBranch(), suite_kind: 'mystery' }] });
+  assert.throws(() => readHostSuiteOutputs(path, request), /unknown suite_kind/);
 });
 
-test('rejects the legacy spec_rb shape', () => {
+test('rejects the legacy spec_rb shape per branch', () => {
   const projectRoot = tmpProject();
-  const path = writeOutput(projectRoot, { spec_rb: "require 'rails_helper'\n", test_metadata: { capabilities: [] } });
+  writeTask(projectRoot);
+  const path = writeOutput(projectRoot, { branches: [{ suite_kind: 'structural', spec_rb: "require 'x'\n" }] });
 
-  assert.throws(() => readHostSuiteOutput(path, projectRoot), /legacy spec_rb shape/);
+  assert.throws(() => readHostSuiteOutputs(path, readSuiteBuildRequest(projectRoot)), /legacy spec_rb shape/);
 });
 
-test('rejects unsafe suite_file paths (absolute, outside the dir, traversal)', () => {
+test('rejects unsafe file paths under each branch root', () => {
   const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const request = readSuiteBuildRequest(projectRoot);
 
-  for (const unsafe of ['/etc/passwd', 'spec/pwned_spec.rb', '.unitbob/guardrails/../../pwned.rb']) {
-    const output = goodOutput();
-    (output.suite_file as Record<string, unknown>).path = unsafe;
-    const path = writeOutput(projectRoot, output);
-    assert.throws(() => readHostSuiteOutput(path, projectRoot), /relative path under/, unsafe);
+  for (const unsafe of ['/etc/passwd', 'spec/pwned_spec.rb', '.unitbob/structural/../../pwned.rb']) {
+    const branch = structuralBranch();
+    (branch.suite_file as Record<string, unknown>).path = unsafe;
+    const path = writeOutput(projectRoot, { branches: [branch] });
+    assert.throws(() => readHostSuiteOutputs(path, request), /relative path under/, unsafe);
   }
 });
 
-test('reads content from the file the host already wrote when content is not inlined', () => {
-  const projectRoot = tmpProject();
-  mkdirSync(join(projectRoot, '.unitbob', 'guardrails'), { recursive: true });
-  writeFileSync(join(projectRoot, SUITE_PATH), "require 'rails_helper'\n");
-  const output = goodOutput();
-  delete (output.suite_file as Record<string, unknown>).content;
-  const path = writeOutput(projectRoot, output);
-
-  assert.deepEqual(readHostSuiteOutput(path, projectRoot).suite_file, {
-    path: SUITE_PATH,
-    content: "require 'rails_helper'\n",
-  });
-});
-
-test('rejects a suite_file with neither content nor a file on disk', () => {
-  const projectRoot = tmpProject();
-  const output = goodOutput();
-  delete (output.suite_file as Record<string, unknown>).content;
-  const path = writeOutput(projectRoot, output);
-
-  assert.throws(() => readHostSuiteOutput(path, projectRoot), /does not exist in the project/);
+test('recipeNameFor maps each kind to its generation recipe', () => {
+  const structural: SuitePacket = { suite_kind: 'structural', source_digest: 'm', path_root: '.unitbob/structural/', assignment: {} };
+  const behavioral: SuitePacket = { suite_kind: 'behavioral', source_digest: 's', path_root: '.unitbob/behavioral/', assignment: {} };
+  assert.equal(recipeNameFor(structural), 'generate');
+  assert.equal(recipeNameFor(behavioral), 'generate_behavioral');
 });
 
 test('readSuiteBuildRequest errors with guidance when the task is missing', () => {

@@ -23,12 +23,14 @@ export interface SuiteBlob {
   runner_manifest: RunnerManifest;
 }
 
-// A forward-slash literal, not path.join: suite paths always arrive over the
-// wire with '/', while path.join would render this '.unitbob\guardrails' on
-// Windows and make assertGuardrailPath reject every valid path there. node's
+// The structural suite lives under its own root now that behavioral is its peer
+// (spec 32) — `.unitbob/structural/`, matching the Rails StructuralSuiteVersion
+// path root. A forward-slash literal, not path.join: suite paths always arrive
+// over the wire with '/', while path.join would render this '.unitbob\structural'
+// on Windows and make assertGuardrailPath reject every valid path there. node's
 // path.join still accepts a '/'-joined segment as input on every platform, so
 // filesystem builds below are unaffected.
-export const GUARDRAILS_DIR = '.unitbob/guardrails';
+export const GUARDRAILS_DIR = '.unitbob/structural';
 export const HELPER_FILE = 'unitbob_helper.rb';
 // An always-empty custom options file: pointing rspec's --options here keeps
 // the project's own .rspec (stray --require lines, extra stdout formatters)
