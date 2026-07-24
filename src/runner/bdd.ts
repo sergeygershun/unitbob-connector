@@ -39,14 +39,26 @@ async function runCucumberRuby(projectRoot: string): Promise<RunnerResult> {
   const features = join(BEHAVIORAL_ROOT, 'features');
   const steps = join(BEHAVIORAL_ROOT, 'step_definitions');
   const localBin = join(projectRoot, 'bin', 'cucumber');
+  const sidecarGemfile = join(projectRoot, BEHAVIORAL_ROOT, 'Gemfile');
+  const hasSidecarGemfile = existsSync(sidecarGemfile);
+
   const command = executable(localBin) ? localBin : 'bundle';
   const base = executable(localBin) ? [] : ['exec', 'cucumber'];
   const args = [...base, features, '--require', steps, '--format', 'message', '--out', CUCUMBER_REPORT];
 
+  const env: Record<string, string> = {
+    ...process.env,
+    RAILS_ENV: 'test',
+    UNITBOB_REPO_ROOT: projectRoot,
+  };
+  if (hasSidecarGemfile) {
+    env.BUNDLE_GEMFILE = join(BEHAVIORAL_ROOT, 'Gemfile');
+  }
+
   const result = await runProcess(command, args, {
     cwd: projectRoot,
     timeoutMs: BDD_TIMEOUT_MS,
-    env: { ...process.env, RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
+    env,
   });
 
   return finalize(result, command, args, projectRoot, CUCUMBER_REPORT);
@@ -57,9 +69,12 @@ async function runCucumberRuby(projectRoot: string): Promise<RunnerResult> {
 async function runCucumberJs(projectRoot: string): Promise<RunnerResult> {
   const features = join(BEHAVIORAL_ROOT, 'features');
   const steps = join(BEHAVIORAL_ROOT, 'step_definitions', '**', '*');
-  const command = 'npx';
+  const sidecarBin = join(projectRoot, BEHAVIORAL_ROOT, 'node_modules', '.bin', 'cucumber-js');
+
+  const command = executable(sidecarBin) ? sidecarBin : 'npx';
+  const baseArgs = executable(sidecarBin) ? [] : ['cucumber-js'];
   const args = [
-    'cucumber-js',
+    ...baseArgs,
     features,
     '--require',
     steps,
@@ -86,8 +101,10 @@ async function runPytestBdd(projectRoot: string, mainPath: string): Promise<Runn
 
   const command = await pickPython(projectRoot);
   const stepsDir = join(BEHAVIORAL_ROOT, 'step_definitions');
-  const args = ['-m', 'pytest', '-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p',
-                pluginModule(), stepsDir, '--rootdir', projectRoot];
+  const isVenvPytest = command.endsWith('/pytest');
+  const args = isVenvPytest
+    ? ['-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', projectRoot]
+    : ['-m', 'pytest', '-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', projectRoot];
 
   const result = await runProcess(command, args, {
     cwd: projectRoot,
@@ -126,6 +143,11 @@ function finalize(
 }
 
 async function pickPython(projectRoot: string): Promise<string> {
+  const sidecarVenvPytest = join(projectRoot, BEHAVIORAL_ROOT, '.venv', 'bin', 'pytest');
+  if (executable(sidecarVenvPytest)) {
+    return sidecarVenvPytest;
+  }
+
   const probe = await runProcess('python3', ['-m', 'pytest', '--version'], {
     cwd: projectRoot,
     timeoutMs: 10_000,

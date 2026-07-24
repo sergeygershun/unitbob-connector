@@ -1,13 +1,17 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Config } from '../config.ts';
 import { materializeHelper } from '../files/guardrails.ts';
 import { recipeNameFor, writeSuiteBuildRequest, type SuiteBuildBranch } from '../files/suiteBuild.ts';
 import { anyStackPrecheck } from '../runner/precheck.ts';
+import { ensureRunner, type ProvisionResult } from '../runner/provision.ts';
 import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
 
 interface SuitePrepareDeps {
   getRecipe: (name: string) => Promise<Recipe>;
   getSuitePacketsBatch: () => Promise<SuitePacket[]>;
   precheck: (projectRoot: string) => { ok: boolean; message?: string };
+  ensureRunner: (projectRoot: string, runner: string) => Promise<ProvisionResult>;
   stdout: { write: (chunk: string) => unknown };
 }
 
@@ -25,6 +29,7 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
     getRecipe: (name) => wire.getRecipe(name),
     getSuitePacketsBatch: () => wire.getSuitePacketsBatch(),
     precheck: anyStackPrecheck,
+    ensureRunner: deps?.ensureRunner ?? (async () => ({ status: 'provisioned' })),
     stdout: process.stdout,
     ...deps,
   };
@@ -35,6 +40,19 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
   materializeHelper(config.projectRoot);
 
   const packets = await actual.getSuitePacketsBatch();
+
+  // Spec 32-1: Zero-touch sidecar provision for behavioral BDD runners during build preflight
+  for (const packet of packets) {
+    const runner = (packet as { runner?: string }).runner ?? (packet.suite_kind === 'behavioral' ? inferBddRunner(config.projectRoot) : undefined);
+    if (runner && (packet.suite_kind === 'behavioral' || ['cucumber', 'cucumber-js', 'pytest-bdd'].includes(runner))) {
+      const prov = await actual.ensureRunner(config.projectRoot, runner);
+      if (prov.status === 'fixable') {
+        const checklist = prov.checklist ? `\nSteps to fix:\n- ${prov.checklist.join('\n- ')}` : '';
+        throw new Error(`Behavioral runner provision incomplete for "${runner}": ${prov.message ?? ''}${checklist}`);
+      }
+    }
+  }
+
   const branches: SuiteBuildBranch[] = await Promise.all(
     packets.map(async (packet) => ({
       suite_kind: packet.suite_kind,
@@ -55,3 +73,11 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
       'then run `unitbob put-suite-build`.\n',
   );
 }
+
+function inferBddRunner(projectRoot: string): string {
+  if (existsSync(join(projectRoot, 'package.json'))) return 'cucumber-js';
+  if (['pyproject.toml', 'requirements.txt', 'Pipfile'].some((f) => existsSync(join(projectRoot, f)))) return 'pytest-bdd';
+  return 'cucumber';
+}
+
+

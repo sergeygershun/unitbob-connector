@@ -131,3 +131,24 @@ test('suite-prepare surfaces a no-current-map error and writes nothing', async (
 
   assert.throws(() => readSuiteBuildRequest(projectRoot), /run `npx unitbob suite-prepare` first/);
 });
+
+test('suite-prepare surfaces fixable behavioral runner provision error with checklist', async () => {
+  const projectRoot = tmpProject();
+
+  await assert.rejects(
+    () =>
+      suitePrepare(config(projectRoot), [], {
+        precheck: okPrecheck,
+        ensureRunner: async () => ({
+          status: 'fixable',
+          message: 'Bundler missing',
+          checklist: ['Install bundler (`gem install bundler`)'],
+        }),
+        getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+        getSuitePacketsBatch: async () => packets(),
+        stdout: { write: () => true },
+      }),
+    /Behavioral runner provision incomplete for "cucumber": Bundler missing/,
+  );
+});
+
