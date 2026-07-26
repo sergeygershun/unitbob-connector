@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { runBddSuite } from '../src/runner/bdd.ts';
 import { PYTEST_BDD_PLUGIN } from '../src/runner/pytestBddPlugin.ts';
 
@@ -18,10 +18,14 @@ function tmpProject(): string {
 
 function fakeBinDir(name: string, body: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'unitbob-fake-bin-'));
-  const path = join(dir, name);
+  writeExecutable(join(dir, name), body);
+  return dir;
+}
+
+function writeExecutable(path: string, body: string): void {
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `#!/bin/sh\n${body}\n`);
   chmodSync(path, 0o755);
-  return dir;
 }
 
 async function withPath(dir: string, fn: () => Promise<void>): Promise<void> {
@@ -37,7 +41,11 @@ async function withPath(dir: string, fn: () => Promise<void>): Promise<void> {
 test('cucumber strategy reads the Cucumber Messages report the runner wrote', async () => {
   const projectRoot = tmpProject();
   const report = '{"testCaseStarted":{"id":"s1"}}';
-  const fakeBin = fakeBinDir('bundle', `mkdir -p .unitbob/behavioral; printf '${report}' > .unitbob/behavioral/cucumber_messages.ndjson`);
+  writeFileSync(join(projectRoot, '.unitbob', 'behavioral', 'Gemfile'), 'gem "cucumber"\n');
+  const fakeBin = fakeBinDir(
+    'bundle',
+    `test "$BUNDLE_GEMFILE" = ".unitbob/behavioral/Gemfile" || exit 4\nmkdir -p .unitbob/behavioral; printf '${report}' > .unitbob/behavioral/cucumber_messages.ndjson`,
+  );
 
   await withPath(fakeBin, async () => {
     const result = await runBddSuite(projectRoot, 'cucumber', '.unitbob/behavioral/features/surface_contracts.feature');
@@ -47,34 +55,49 @@ test('cucumber strategy reads the Cucumber Messages report the runner wrote', as
   });
 });
 
-test('cucumber-js strategy runs npx cucumber-js with the message formatter', async () => {
+test('cucumber strategy reports a missing sidecar instead of falling back to the project bundle', async () => {
+  await assert.rejects(
+    () => runBddSuite(tmpProject(), 'cucumber', '.unitbob/behavioral/features/surface_contracts.feature'),
+    /Behavioral runner missing.*suite-prepare/,
+  );
+});
+
+test('cucumber-js strategy runs the provisioned sidecar with the message formatter', async () => {
   const projectRoot = tmpProject();
   const report = '{"testCaseStarted":{"id":"s2"}}';
-  const fakeBin = fakeBinDir('npx', `mkdir -p .unitbob/behavioral; printf '${report}' > .unitbob/behavioral/cucumber_messages.ndjson`);
+  const sidecarBin = join(projectRoot, '.unitbob', 'behavioral', 'node_modules', '.bin', 'cucumber-js');
+  writeExecutable(sidecarBin, `mkdir -p .unitbob/behavioral; printf '${report}' > .unitbob/behavioral/cucumber_messages.ndjson`);
 
-  await withPath(fakeBin, async () => {
-    const result = await runBddSuite(projectRoot, 'cucumber-js', '.unitbob/behavioral/features/surface_contracts.feature');
-    assert.equal(result.command, 'npx');
-    assert.equal(result.report, report);
-    assert.ok(result.args.some((arg) => arg.startsWith('message:')), 'uses the message formatter to a file');
-  });
+  const result = await runBddSuite(projectRoot, 'cucumber-js', '.unitbob/behavioral/features/surface_contracts.feature');
+  assert.equal(result.command, sidecarBin);
+  assert.equal(result.report, report);
+  assert.ok(result.args.some((arg) => arg.startsWith('message:')), 'uses the message formatter to a file');
+});
+
+test('cucumber-js strategy reports a missing sidecar instead of invoking npx', async () => {
+  await assert.rejects(
+    () => runBddSuite(tmpProject(), 'cucumber-js', '.unitbob/behavioral/features/surface_contracts.feature'),
+    /Behavioral runner missing.*suite-prepare/,
+  );
 });
 
 test('pytest-bdd strategy writes its ini + plugin and reads the connector report', async () => {
   const projectRoot = tmpProject();
   const report = '{"version":1,"scenarios":[]}';
-  // The fake python probes --version (exit 0), then on the real run writes the
-  // report to the path the connector passes via UNITBOB_PYTEST_BDD_REPORT.
-  const fakeBin = fakeBinDir(
-    'python3',
-    `case "$*" in *--version*) exit 0 ;; esac\nprintf '%s' '${report}' > "$UNITBOB_PYTEST_BDD_REPORT"`,
-  );
+  const sidecarPytest = join(projectRoot, '.unitbob', 'behavioral', '.venv', 'bin', 'pytest');
+  writeExecutable(sidecarPytest, `printf '%s' '${report}' > "$UNITBOB_PYTEST_BDD_REPORT"`);
 
-  await withPath(fakeBin, async () => {
-    const result = await runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/surface_contracts.feature');
-    assert.equal(result.report, report);
-    assert.equal(result.resultPath, '.unitbob/behavioral/pytest_bdd_report.json');
-  });
+  const result = await runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/surface_contracts.feature');
+  assert.equal(result.command, sidecarPytest);
+  assert.equal(result.report, report);
+  assert.equal(result.resultPath, '.unitbob/behavioral/pytest_bdd_report.json');
+});
+
+test('pytest-bdd strategy reports a missing sidecar instead of using system pytest', async () => {
+  await assert.rejects(
+    () => runBddSuite(tmpProject(), 'pytest-bdd', '.unitbob/behavioral/features/surface_contracts.feature'),
+    /Behavioral runner missing.*suite-prepare/,
+  );
 });
 
 test('an unknown BDD runner is rejected, never guessed', async () => {

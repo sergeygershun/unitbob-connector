@@ -41,7 +41,8 @@ export async function run(config: Config, _args: string[], deps?: Partial<Deps>)
         suite_file: { path: item.suite_file!.path, content: item.suite_file!.content },
         runner_manifest: item.runner_manifest!,
       }),
-    materializeBehavioral: (projectRoot, item) => materializeBehavioral(projectRoot, item.suite_file!).mainPath,
+    materializeBehavioral: (projectRoot, item) =>
+      materializeBehavioral(projectRoot, item.suite_file!, item.runner_manifest!.runner).mainPath,
     runStructural: runStructuralByRunner,
     runBehavioral: runBddSuite,
     validateStack,

@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { assertUnitbobPath } from './artifactPath.ts';
 import type { SuiteArtifact } from '../wire.ts';
@@ -12,14 +12,25 @@ import type { SuiteArtifact } from '../wire.ts';
 export const BEHAVIORAL_DIR = '.unitbob/behavioral';
 
 // Write a behavioral artifact envelope (main file + support files) under the
-// behavioral root, after checking every path is safe. The root is wiped first
-// so a stale file from a previous version never lingers. Returns the absolute
-// path of the materialized main file.
-export function materializeBehavioral(projectRoot: string, artifact: SuiteArtifact): { mainPath: string } {
+// behavioral root, after checking every path is safe. Stale suite artifacts are
+// removed while the separately provisioned runner environment is preserved.
+// Returns the absolute path of the materialized main file.
+export function materializeBehavioral(
+  projectRoot: string,
+  artifact: SuiteArtifact,
+  runner: string,
+): { mainPath: string } {
   const files = [artifact, ...(artifact.support_files ?? [])];
   for (const file of files) assertUnitbobPath(file.path, BEHAVIORAL_DIR);
 
-  rmSync(join(projectRoot, BEHAVIORAL_DIR), { recursive: true, force: true });
+  const behavioralRoot = join(projectRoot, BEHAVIORAL_DIR);
+  const runnerEntries = RUNNER_ENVIRONMENT_ENTRIES[runner] ?? EMPTY_ENTRIES;
+  mkdirSync(behavioralRoot, { recursive: true });
+  for (const entry of readdirSync(behavioralRoot)) {
+    if (!runnerEntries.has(entry)) {
+      rmSync(join(behavioralRoot, entry), { recursive: true, force: true });
+    }
+  }
 
   let mainPath = '';
   for (const file of files) {
@@ -31,3 +42,10 @@ export function materializeBehavioral(projectRoot: string, artifact: SuiteArtifa
 
   return { mainPath };
 }
+
+const EMPTY_ENTRIES = new Set<string>();
+const RUNNER_ENVIRONMENT_ENTRIES: Record<string, ReadonlySet<string>> = {
+  cucumber: new Set(['.bundle', 'Gemfile', 'Gemfile.lock']),
+  'cucumber-js': new Set(['node_modules', 'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']),
+  'pytest-bdd': new Set(['.venv']),
+};

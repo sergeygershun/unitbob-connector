@@ -12,7 +12,7 @@ uploaded, never source:
 Neither replaces the other; they have independent versions, runs, and lamps.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.2.3 suite-prepare`. It confirms a
+1. Run `npx -y --loglevel=error unitbob@0.2.4 suite-prepare`. It confirms a
    supported stack, materializes the Ruby boot helper
    `.unitbob/structural/unitbob_helper.rb` (RSpec only), fetches both peer
    assignments and each branch's recipe, and writes the task to
@@ -65,7 +65,7 @@ Do this:
    cannot build gets `{ "suite_kind": ..., "build_error": { "message": "..." } }`
    instead — it never blocks the peer branch. Never emit `spec_rb`, `rspec_id`,
    `example_id`, or `run_command`. No prose around the JSON.
-5. Run `npx -y --loglevel=error unitbob@0.2.3 put-suite-build` to upload both
+5. Run `npx -y --loglevel=error unitbob@0.2.4 put-suite-build` to upload both
    branches in one batch. Each is validated and published independently.
 
 Then tell the user, in plain business language, what is guarded on each map and

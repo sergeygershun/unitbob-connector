@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run } from '../src/verbs/run.ts';
+import { materializeBehavioral } from '../src/files/behavioral.ts';
+import { runBddSuite } from '../src/runner/bdd.ts';
 import type { Config } from '../src/config.ts';
 import type { RunnerResult } from '../src/runner/types.ts';
 import type { SuiteListItem } from '../src/wire.ts';
@@ -210,4 +212,41 @@ test('a behavioral runner that produced no report becomes a suite_error without 
   assert.equal(uploaded[0].suite_digest, 'behav-d1');
   assert.equal('run_result' in uploaded[0], false);
   assert.match(String((uploaded[0].suite_error as Record<string, unknown>).output_tail), /command not found/);
+});
+
+test('the public run flow preserves the provisioned behavioral sidecar while refreshing suite files', async () => {
+  const projectRoot = tmpProject();
+  const sidecarGemfile = join(projectRoot, '.unitbob', 'behavioral', 'Gemfile');
+  mkdirSync(join(projectRoot, '.unitbob', 'behavioral'), { recursive: true });
+  writeFileSync(sidecarGemfile, 'gem "cucumber"\n');
+
+  await run(config(projectRoot), [], batchDeps({
+    getSuites: async () => [behavioralSuite()],
+    materializeBehavioral: (root, item) =>
+      materializeBehavioral(root, item.suite_file!, item.runner_manifest!.runner).mainPath,
+    runBehavioral: async () => {
+      assert.equal(existsSync(sidecarGemfile), true);
+      return runnerResult({ report: '{"testCaseStarted":{}}\n' });
+    },
+  }));
+});
+
+test('the public run flow reports a missing behavioral sidecar without invoking a fallback runner', async () => {
+  let uploaded: Array<Record<string, unknown>> = [];
+
+  await run(config(tmpProject()), [], batchDeps({
+    getSuites: async () => [behavioralSuite()],
+    materializeBehavioral: (root, item) =>
+      materializeBehavioral(root, item.suite_file!, item.runner_manifest!.runner).mainPath,
+    runBehavioral: runBddSuite,
+    postRunsBatch: async (runs) => {
+      uploaded = runs as Array<Record<string, unknown>>;
+      return { results: [], map_url: '' };
+    },
+  }));
+
+  assert.match(
+    String((uploaded[0].suite_error as Record<string, unknown>).output_tail),
+    /Behavioral runner missing.*suite-prepare/,
+  );
 });

@@ -38,22 +38,20 @@ export function runBddSuite(projectRoot: string, runner: string, mainPath: strin
 async function runCucumberRuby(projectRoot: string): Promise<RunnerResult> {
   const features = join(BEHAVIORAL_ROOT, 'features');
   const steps = join(BEHAVIORAL_ROOT, 'step_definitions');
-  const localBin = join(projectRoot, 'bin', 'cucumber');
   const sidecarGemfile = join(projectRoot, BEHAVIORAL_ROOT, 'Gemfile');
-  const hasSidecarGemfile = existsSync(sidecarGemfile);
+  if (!existsSync(sidecarGemfile)) {
+    throw missingRunner('Cucumber');
+  }
 
-  const command = executable(localBin) ? localBin : 'bundle';
-  const base = executable(localBin) ? [] : ['exec', 'cucumber'];
-  const args = [...base, features, '--require', steps, '--format', 'message', '--out', CUCUMBER_REPORT];
+  const command = 'bundle';
+  const args = ['exec', 'cucumber', features, '--require', steps, '--format', 'message', '--out', CUCUMBER_REPORT];
 
   const env: Record<string, string> = {
     ...process.env,
     RAILS_ENV: 'test',
     UNITBOB_REPO_ROOT: projectRoot,
   };
-  if (hasSidecarGemfile) {
-    env.BUNDLE_GEMFILE = join(BEHAVIORAL_ROOT, 'Gemfile');
-  }
+  env.BUNDLE_GEMFILE = join(BEHAVIORAL_ROOT, 'Gemfile');
 
   const result = await runProcess(command, args, {
     cwd: projectRoot,
@@ -64,17 +62,24 @@ async function runCucumberRuby(projectRoot: string): Promise<RunnerResult> {
   return finalize(result, command, args, projectRoot, CUCUMBER_REPORT);
 }
 
+function missingRunner(name: string): Error {
+  return new Error(
+    `Behavioral runner missing (${name}). Run suite-prepare to provision it under ${BEHAVIORAL_ROOT}/, then run the checks again.`,
+  );
+}
+
 // JS/TS: `@cucumber/cucumber` (cucumber-js) with the message formatter written
 // to a file.
 async function runCucumberJs(projectRoot: string): Promise<RunnerResult> {
   const features = join(BEHAVIORAL_ROOT, 'features');
   const steps = join(BEHAVIORAL_ROOT, 'step_definitions', '**', '*');
   const sidecarBin = join(projectRoot, BEHAVIORAL_ROOT, 'node_modules', '.bin', 'cucumber-js');
+  if (!executable(sidecarBin)) {
+    throw missingRunner('Cucumber JS');
+  }
 
-  const command = executable(sidecarBin) ? sidecarBin : 'npx';
-  const baseArgs = executable(sidecarBin) ? [] : ['cucumber-js'];
+  const command = sidecarBin;
   const args = [
-    ...baseArgs,
     features,
     '--require',
     steps,
@@ -147,12 +152,7 @@ async function pickPython(projectRoot: string): Promise<string> {
   if (executable(sidecarVenvPytest)) {
     return sidecarVenvPytest;
   }
-
-  const probe = await runProcess('python3', ['-m', 'pytest', '--version'], {
-    cwd: projectRoot,
-    timeoutMs: 10_000,
-  }).catch(() => ({ stdout: '', stderr: '', code: 1 }));
-  return probe.code === 0 ? 'python3' : 'python';
+  throw missingRunner('pytest-bdd');
 }
 
 function executable(path: string): boolean {
