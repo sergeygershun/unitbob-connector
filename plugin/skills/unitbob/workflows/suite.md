@@ -22,6 +22,11 @@ Do this:
 2. Read `.unitbob/suite-build/request.json`. It has `project_root`,
    `output_path`, and `branches` — one per contract system, each with its
    `suite_kind`, `source_digest`, `path_root`, `recipe`, and `assignment`.
+   Before writing a large batch of scenarios, make sure the app actually boots
+   in its test environment (the build preflight in `suite-prepare` already smoke-
+   runs it; trust that). If it does **not** boot, that is a real defect, not a
+   setup step to fix first — it will show up as a red lamp. Write the scenarios
+   and let the lamp be red; don't stop to repair the app before generating.
 3. Build and run **both** branches locally, each following its own
    `recipe.text`:
    - **structural** — for every interface, a real unit test that exercises

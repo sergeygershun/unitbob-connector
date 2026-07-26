@@ -35,6 +35,83 @@ user retires the guard with the button on the red lamp (no command, no workflow)
 Map a natural-language request to the closest workflow. If it is ambiguous, ask
 the user which one they mean rather than guessing destructively.
 
+## How to talk to the user during the workflow
+
+The person watching is a vibecoder, not an engineer. Every message spends their
+attention, so keep the running commentary short and structured.
+
+- **Don't dump generated files into the chat** — `.feature` files, step
+  definitions, map JSON. They are written under `.unitbob/`; point at them, don't
+  paste them.
+- **Don't narrate your reasoning step by step** ("first I looked at…, then I
+  filtered…, then I decided…"). That is a working trail for you, not something the
+  user needs to read.
+- **Don't echo raw tool output.** Say what it means in a line of your own.
+- When you find something, say it as **one compact bullet**: what you found ·
+  what it means · what you'll do about it.
+- A checkpoint after a stage is **one or two lines**, not a page-long recap.
+- End of a turn: what changed and what's next — not a retelling of what you did.
+
+The point is the opposite of a wall of text. If a passage reads like an essay
+about your reasoning, cut it.
+
+## When to ask the user, and when to just decide
+
+Most calls during map- and suite-building are technical and yours to make. Ask
+the user **only** when a decision:
+
+  (a) **changes their production code** — e.g. add back a gem you'd otherwise
+      drop, edit `report.rb` to fix a real bug you found; or
+  (b) **changes what gets built or run next** — e.g. write 18 failing scenarios
+      now versus after a fix the user might want first.
+
+Everything else you **decide yourself and report in one line** — don't open a
+discussion for it. You decide: which graph edges are noise and get filtered,
+which dead code to drop, how to group a fuzzy community, which fixture fields to
+set, how to handle a locale or collation quirk in a test. State the call, move on.
+
+When genuine (a)/(b) questions come up, **hold them and ask them together in one
+checkpoint at the end** — never scatter them one at a time through the run. One
+message with two clear questions beats six interruptions.
+
+## Fewer approvals — allow the safe commands once
+
+The workflow leans on a handful of read-only commands: searching the code,
+checking dependencies, running the guardrail suite. Rather than have the user
+approve each one every time, offer them this block for their
+`.claude/settings.json` so they allow the whole set in a single paste:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(npx -y --loglevel=error unitbob@*)",
+      "Bash(bundle check)",
+      "Bash(bundle exec cucumber:*)",
+      "Bash(bundle exec rspec:*)",
+      "Read(//**/config/**)",
+      "Read(//**/Gemfile*)",
+      "Read(//**/package.json)",
+      "Read(//**/db/schema.rb)"
+    ]
+  }
+}
+```
+
+- The runner lines above are for a **Ruby/Rails** project. For
+  **JavaScript/TypeScript**, swap them for `"Bash(npx vitest:*)"` and
+  `"Bash(npx cucumber-js:*)"`; for **Python**, use `"Bash(python -m pytest:*)"`.
+- Only **read-only** commands belong here. Anything that changes state —
+  `bundle install`, `npm i`, `pip install`, `rails db:migrate`, `git push`,
+  deploys — is deliberately left out, so it still asks first.
+- If the user has the built-in **`fewer-permission-prompts`** skill, prefer it:
+  it reads their own transcripts and proposes an allowlist automatically. The
+  block above is the manual equivalent.
+
 Working from these files is what makes unitbob usable everywhere. The
 `/unitbob:...` commands are a convenience that exists only inside a Claude Code
 terminal, and only in a session started after the plugin was installed — in a
