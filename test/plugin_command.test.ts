@@ -79,10 +79,21 @@ test('suite workflow stitches suite-prepare, the host agent, and put-suite-build
   const text = workflow('suite');
 
   assert.match(text, new RegExp(`${unitbobPattern} suite-prepare`));
+  assert.match(text, new RegExp(`${unitbobPattern} suite-review-prepare`));
   assert.match(text, new RegExp(`${unitbobPattern} put-suite-build`));
   assert.match(text, /Read `\.unitbob\/suite-build\/request\.json`/);
   assert.doesNotMatch(text, /ai\/agents\/suite_builder\.md/);
   assert.match(text, /Write strict JSON only/);
+  assert.match(text, /application failures remain red/i);
+  assert.match(text, /BDD quality review/i);
+  assert.match(text, /independent reviewer/i);
+  assert.match(text, /bdd_quality_review/);
+  assert.match(text, /known_defect_probe/);
+  assert.match(text, /--known-defect=/);
+  assert.match(text, /--no-known-defect/);
+  assert.match(text, /behavioral_review\.json/);
+  assert.match(text, /must not.*bdd_quality_review.*test_metadata/is);
+  assert.doesNotMatch(text, /behavioral[\s\S]{0,500}iterate to green/i);
   // Never asks the connector to interpret the suite — it only stitches hands.
   assert.doesNotMatch(text, /npx unitbob(?!@).* suite(?!-)/);
 });
@@ -97,6 +108,9 @@ test('fix workflow drives contract-prompt and covers both fix and accept on eith
   assert.doesNotMatch(text, /ai\/agents\/fixer\.md/);
   // Fix edits code (no upload); accept republishes that suite via put-suite-build.
   assert.match(text, new RegExp(`${unitbobPattern} put-suite-build`));
+  assert.match(text, new RegExp(`${unitbobPattern} suite-review-prepare`));
+  assert.doesNotMatch(text, /whole suite of that kind to green/i);
+  assert.match(text, /application failures remain red/i);
   // `$ARGUMENTS` is a command-only substitution — inside a workflow it stays literal.
   assert.doesNotMatch(text, /\$ARGUMENTS/);
 });

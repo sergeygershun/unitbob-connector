@@ -1,5 +1,10 @@
 import type { Config } from '../config.ts';
-import { readHostSuiteOutputs, readSuiteBuildRequest, type SuiteBuildBranch } from '../files/suiteBuild.ts';
+import {
+  readBehavioralReview,
+  readHostSuiteOutputs,
+  readSuiteBuildRequest,
+  type SuiteBuildBranch,
+} from '../files/suiteBuild.ts';
 import { Wire, type SuiteBuildItem, type SuiteBuildResult } from '../wire.ts';
 
 interface PutSuiteBuildDeps {
@@ -29,13 +34,36 @@ export async function putSuiteBuild(config: Config, _args: string[] = [], deps?:
     if (output.build_error) {
       return { suite_kind: output.suite_kind, source_digest: sourceDigest, build_error: output.build_error };
     }
+    let testMetadata = output.test_metadata;
+    if (output.suite_kind === 'behavioral') {
+      const review = readBehavioralReview(config.projectRoot, output);
+      const probe = review.known_defect_probe as Record<string, unknown> | null;
+      const qualityReview = review.bdd_quality_review as Record<string, unknown> | null;
+      if (!qualityReview || typeof qualityReview !== 'object') {
+        throw new Error('The separate behavioral review must contain a bdd_quality_review object.');
+      }
+      if (request.known_defect_context.status === 'supplied' && probe?.status === 'not_supplied') {
+        throw new Error('A known defect was supplied to suite-prepare, but the behavioral review marked it not_supplied.');
+      }
+      testMetadata = {
+        ...(output.test_metadata as Record<string, unknown>),
+        bdd_quality_review: {
+          ...qualityReview,
+          candidate_digest: review.candidate_digest,
+        },
+        known_defect_probe: review.known_defect_probe,
+        known_defect_context: request.known_defect_context,
+        candidate_run: review.candidate_run,
+        ...(review.fixed_candidate_run ? { fixed_candidate_run: review.fixed_candidate_run } : {}),
+      };
+    }
     return {
       suite_kind: output.suite_kind,
       source_digest: sourceDigest,
       artifacts: {
         suite_file: output.suite_file,
         runner_manifest: output.runner_manifest,
-        test_metadata: output.test_metadata,
+        test_metadata: testMetadata,
       },
     };
   });

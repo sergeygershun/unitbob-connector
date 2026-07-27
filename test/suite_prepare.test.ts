@@ -41,7 +41,7 @@ test('suite-prepare fetches both peer assignments and each branch recipe, then w
   const projectRoot = tmpProject();
   const calls: string[] = [];
 
-  await suitePrepare(config(projectRoot), [], {
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
     ensureRunner: okRunner,
     getRecipe: async (name) => { calls.push(`recipe:${name}`); return { name, version: `${name}-v1`, text: `${name} recipe` }; },
@@ -63,11 +63,49 @@ test('suite-prepare fetches both peer assignments and each branch recipe, then w
   assert.equal(behavioral.recipe.name, 'generate_behavioral');
 });
 
-test('suite-prepare prints a next-step naming both kinds, the output_path, and put-suite-build', async () => {
+test('suite-prepare records a user-supplied known defect outside host-authored metadata', async () => {
+  const projectRoot = tmpProject();
+
+  await suitePrepare(config(projectRoot), [
+    '--known-defect=Report#method_name calls the missing calculation_type method',
+    '--fixed-revision=fix-report-method-name',
+  ], {
+    precheck: okPrecheck,
+    ensureRunner: okRunner,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: () => true },
+  });
+
+  assert.deepEqual(readSuiteBuildRequest(projectRoot).known_defect_context, {
+    status: 'supplied',
+    defect: 'Report#method_name calls the missing calculation_type method',
+    fixed_revision: 'fix-report-method-name',
+  });
+});
+
+test('suite-prepare refuses to silently assume that no known defect was supplied', async () => {
+  const projectRoot = tmpProject();
+  let fetched = false;
+
+  await assert.rejects(
+    () => suitePrepare(config(projectRoot), [], {
+      precheck: okPrecheck,
+      ensureRunner: okRunner,
+      getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+      getSuitePacketsBatch: async () => { fetched = true; return packets(); },
+      stdout: { write: () => true },
+    }),
+    /choose exactly one of --known-defect or --no-known-defect/i,
+  );
+  assert.equal(fetched, false);
+});
+
+test('suite-prepare prints a next-step naming both kinds, the output_path, and separate review', async () => {
   const projectRoot = tmpProject();
   let output = '';
 
-  await suitePrepare(config(projectRoot), [], {
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
     ensureRunner: okRunner,
     getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
@@ -79,13 +117,16 @@ test('suite-prepare prints a next-step naming both kinds, the output_path, and p
   assert.match(output, /build both peer suites/);
   assert.match(output, /structural and behavioral/);
   assert.ok(output.includes(outputPath), 'names the output_path');
-  assert.match(output, /`unitbob put-suite-build`/);
+  assert.match(output, /`unitbob suite-review-prepare`/);
+  assert.doesNotMatch(output, /then run `unitbob put-suite-build`/i);
+  assert.match(output, /harness.*application failures.*red/i);
+  assert.doesNotMatch(output, /run each locally to green/i);
 });
 
 test('suite-prepare materializes the boot helper right after the precheck', async () => {
   const projectRoot = tmpProject();
 
-  await suitePrepare(config(projectRoot), [], {
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
     ensureRunner: okRunner,
     getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
@@ -103,7 +144,7 @@ test('suite-prepare stops on an unsupported runtime and writes nothing', async (
 
   await assert.rejects(
     () =>
-      suitePrepare(config(projectRoot), [], {
+      suitePrepare(config(projectRoot), ['--no-known-defect'], {
         precheck: () => ({ ok: false, message: 'This project does not look like Rails + RSpec.' }),
         getRecipe: async () => { fetched = true; return { name: 'generate', version: 'v1', text: 'recipe' }; },
         getSuitePacketsBatch: async () => packets(),
@@ -122,7 +163,7 @@ test('suite-prepare surfaces a no-current-map error and writes nothing', async (
 
   await assert.rejects(
     () =>
-      suitePrepare(config(projectRoot), [], {
+      suitePrepare(config(projectRoot), ['--no-known-defect'], {
         precheck: okPrecheck,
         getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
         getSuitePacketsBatch: async () => {
@@ -143,7 +184,7 @@ test('a fixable behavioral runner blocker does not abort the build or block the 
   // Spec 32-1: a `fixable` provision outcome is infrastructure the vibecoder clears with one
   // command — never a build_error dead-end, never a red lamp, and it must not take the structural
   // suite down with it.
-  await suitePrepare(config(projectRoot), [], {
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
     ensureRunner: async () => ({
       status: 'fixable',
@@ -164,6 +205,8 @@ test('a fixable behavioral runner blocker does not abort the build or block the 
   assert.match(output, /Bundler missing/);
   assert.match(output, /Install bundler/);
   assert.doesNotMatch(output, /build_error|provision incomplete/i);
+  assert.match(output, /`unitbob put-suite-build`/);
+  assert.doesNotMatch(output, /`unitbob suite-review-prepare`/);
 });
 
 test('suite-prepare invokes the runner provision for the behavioral branch', async () => {
@@ -173,7 +216,7 @@ test('suite-prepare invokes the runner provision for the behavioral branch', asy
   // Regression guard for the stub-default bug: provisioning must actually run for the behavioral
   // peer during preflight. (The production default is the real `ensureRunner`; `noUnusedLocals`
   // fails the build if that import is ever left unwired again.)
-  await suitePrepare(config(projectRoot), [], {
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
     ensureRunner: async (_root, runner) => { provisioned.push(runner); return { status: 'provisioned' }; },
     getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
@@ -187,7 +230,7 @@ test('suite-prepare invokes the runner provision for the behavioral branch', asy
 test('a provisioned behavioral runner keeps both peer suites in the request', async () => {
   const projectRoot = tmpProject();
 
-  await suitePrepare(config(projectRoot), [], {
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
     ensureRunner: async () => ({ status: 'provisioned' }),
     getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
@@ -198,4 +241,3 @@ test('a provisioned behavioral runner keeps both peer suites in the request', as
   const request = readSuiteBuildRequest(projectRoot);
   assert.deepEqual(request.branches.map((branch) => branch.suite_kind), ['structural', 'behavioral']);
 });
-

@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { assertUnitbobPath } from './artifactPath.ts';
 import type { SuiteArtifact } from '../wire.ts';
@@ -41,6 +41,22 @@ export function materializeBehavioral(
   }
 
   return { mainPath };
+}
+
+export function copyBehavioralRunnerEnvironment(
+  sourceRoot: string,
+  targetRoot: string,
+  runner: string,
+): void {
+  const entries = RUNNER_ENVIRONMENT_ENTRIES[runner] ?? EMPTY_ENTRIES;
+  for (const entry of entries) {
+    const source = join(sourceRoot, BEHAVIORAL_DIR, entry);
+    if (!existsSync(source)) continue;
+
+    const target = join(targetRoot, BEHAVIORAL_DIR, entry);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(source, target, { recursive: true });
+  }
 }
 
 const EMPTY_ENTRIES = new Set<string>();

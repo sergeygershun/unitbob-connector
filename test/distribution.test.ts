@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const connectorRoot = fileURLToPath(new URL('..', import.meta.url));
 const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
-const cliDistPath = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+const binDistPath = fileURLToPath(new URL('../dist/bin.js', import.meta.url));
 const workflowsDir = fileURLToPath(new URL('../plugin/skills/unitbob/workflows', import.meta.url));
 const pluginJsonPath = fileURLToPath(new URL('../plugin/.claude-plugin/plugin.json', import.meta.url));
 const marketplaceJsonPath = fileURLToPath(new URL('../.claude-plugin/marketplace.json', import.meta.url));
@@ -30,7 +31,7 @@ test('npm package metadata is publishable as the public unitbob CLI', () => {
   const packageJson = readJson(packageJsonPath);
 
   assert.equal(packageJson.name, 'unitbob');
-  assert.deepEqual(packageJson.bin, { unitbob: 'dist/cli.js' });
+  assert.deepEqual(packageJson.bin, { unitbob: 'dist/bin.js' });
   assert.deepEqual(packageJson.files, ['dist']);
 
   const scripts = packageJson.scripts as Record<string, string>;
@@ -48,10 +49,10 @@ test('packed npm tarball includes built CLI output and excludes source and tests
   });
   const [pack] = JSON.parse(output) as Array<{ files: Array<{ path: string; mode: number }> }>;
   const paths = pack.files.map((file) => file.path);
-  const cliFile = pack.files.find((file) => file.path === 'dist/cli.js');
+  const binFile = pack.files.find((file) => file.path === 'dist/bin.js');
 
-  assert.ok(paths.includes('dist/cli.js'));
-  assert.equal(cliFile?.mode, 0o755);
+  assert.ok(paths.includes('dist/bin.js'));
+  assert.equal(binFile?.mode, 0o755);
   assert.ok(paths.every((path) => !path.startsWith('src/')));
   assert.ok(paths.every((path) => !path.startsWith('test/')));
 
@@ -63,11 +64,26 @@ test('packed npm tarball includes built CLI output and excludes source and tests
   }
 });
 
-test('built CLI keeps the Node shebang', () => {
+test('the built binary keeps the Node shebang', () => {
   execFileSync('npm', ['run', 'build'], { cwd: connectorRoot, stdio: 'pipe' });
-  const firstLine = readFileSync(cliDistPath, 'utf8').split('\n')[0];
+  const firstLine = readFileSync(binDistPath, 'utf8').split('\n')[0];
 
   assert.equal(firstLine, '#!/usr/bin/env node');
+});
+
+// npm installs a `bin` as a symlink in node_modules/.bin, so `npx unitbob` never
+// executes the real file path. Node resolves the entry module to its realpath,
+// which is why an entry point that compares itself to `process.argv[1]` runs
+// fine from a checkout and does nothing at all once installed. Execute the built
+// binary the way a client does — through a symlink — so that stays impossible.
+test('the built binary still runs when invoked through an npm-style bin symlink', () => {
+  execFileSync('npm', ['run', 'build'], { cwd: connectorRoot, stdio: 'pipe' });
+  const link = join(mkdtempSync(join(tmpdir(), 'unitbob-bin-')), 'unitbob');
+  symlinkSync(binDistPath, link);
+
+  const output = execFileSync(link, ['--help'], { encoding: 'utf8' });
+
+  assert.match(output, /^unitbob — thin local hands/);
 });
 
 // The npx invocations live in the skill's workflow files — the one copy both the

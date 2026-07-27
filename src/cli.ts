@@ -1,8 +1,10 @@
-#!/usr/bin/env node
-// The single entry point. Parse `unitbob <verb> [args]`, dispatch to a hands-verb,
-// and map any thrown error to a non-zero exit with an actionable message — never
-// a raw stack trace. This is the only place that decides process exit codes.
+// Verb dispatch. Parse `unitbob <verb> [args]`, dispatch to a hands-verb, and map
+// any thrown error to an exit code with an actionable message — never a raw stack
+// trace. This module decides exit codes but never acts on them: importing it must
+// stay free of side effects so tests can drive `main` directly. `bin.ts` is the
+// executable that owns process startup and exit.
 import { ensureLinked } from './link.ts';
+import type { Config } from './config.ts';
 import { recipe } from './verbs/recipe.ts';
 import { show } from './verbs/show.ts';
 import { run } from './verbs/run.ts';
@@ -13,6 +15,7 @@ import { suitePrepare } from './verbs/suitePrepare.ts';
 import { putSuiteBuild } from './verbs/putSuiteBuild.ts';
 import { fixPrepare } from './verbs/fixPrepare.ts';
 import { contractPrompt } from './verbs/contractPrompt.ts';
+import { suiteReviewPrepare } from './verbs/suiteReviewPrepare.ts';
 
 const USAGE = `unitbob — thin local hands for the Unitbob server.
 
@@ -25,6 +28,7 @@ Verbs:
   map-prepare          Internal: keylessly update the graph (no API key) and write the host map-build request.
   put-map-build        Internal: upload the host-built map and graph.
   suite-prepare        Internal: fetch the recipe and capability assignment, write the host suite-build request.
+  suite-review-prepare Internal: bind an independent BDD quality review to the built behavioral candidate.
   put-suite-build      Internal: upload the host-built guardrail suite (whole spec file + test_metadata).
   fix-prepare <id>     Internal: fetch the per-capability repair packet for one red guard (by interface_id).
   contract-prompt <digest> <test_id> [fix|accept]
@@ -42,7 +46,11 @@ host-LLM's job; any semantic graph enrichment is host-LLM work (the /graphify sk
 Config: .unitbob.json at your project root, created automatically: the first
 run registers the project on the server by its folder name (spec 28).`;
 
-async function main(argv: string[]): Promise<number> {
+interface CliDeps {
+  ensureLinked: () => Promise<Config>;
+}
+
+export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Promise<number> {
   const [verb, ...args] = argv;
 
   if (!verb || verb === '--help' || verb === '-h' || verb === 'help') {
@@ -56,32 +64,35 @@ async function main(argv: string[]): Promise<number> {
         await init(args);
         return 0;
       case 'recipe':
-        await recipe(await ensureLinked(), args);
+        await recipe(await deps.ensureLinked(), args);
         return 0;
       case 'show':
-        await show(await ensureLinked());
+        await show(await deps.ensureLinked());
         return 0;
       case 'map-prepare':
-        await mapPrepare(await ensureLinked(), args);
+        await mapPrepare(await deps.ensureLinked(), args);
         return 0;
       case 'put-map-build':
-        await putMapBuild(await ensureLinked(), args);
+        await putMapBuild(await deps.ensureLinked(), args);
         return 0;
       case 'suite-prepare':
-        await suitePrepare(await ensureLinked(), args);
+        await suitePrepare(await deps.ensureLinked(), args);
+        return 0;
+      case 'suite-review-prepare':
+        await suiteReviewPrepare(await deps.ensureLinked(), args);
         return 0;
       case 'put-suite-build':
-        await putSuiteBuild(await ensureLinked(), args);
+        await putSuiteBuild(await deps.ensureLinked(), args);
         return 0;
       case 'fix-prepare':
-        await fixPrepare(await ensureLinked(), args);
+        await fixPrepare(await deps.ensureLinked(), args);
         return 0;
       case 'contract-prompt':
-        await contractPrompt(await ensureLinked(), args);
+        await contractPrompt(await deps.ensureLinked(), args);
         return 0;
       case 'run':
       case 'check':
-        await run(await ensureLinked(), args);
+        await run(await deps.ensureLinked(), args);
         return 0;
       default:
         process.stderr.write(`Unknown verb "${verb}".\n\n${USAGE}\n`);
@@ -92,11 +103,3 @@ async function main(argv: string[]): Promise<number> {
     return 1;
   }
 }
-
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (err) => {
-    process.stderr.write(`${(err as Error).message}\n`);
-    process.exit(1);
-  },
-);

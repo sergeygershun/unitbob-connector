@@ -3,7 +3,15 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { outputPath, writeSuiteBuildRequest, type SuiteBuildBranch } from '../src/files/suiteBuild.ts';
+import {
+  outputPath,
+  reviewOutputPath,
+  suiteCandidateDigest,
+  writeBehavioralReviewRequest,
+  writeSuiteBuildRequest,
+  type HostBranchOutput,
+  type SuiteBuildBranch,
+} from '../src/files/suiteBuild.ts';
 import { putSuiteBuild } from '../src/verbs/putSuiteBuild.ts';
 import type { Config } from '../src/config.ts';
 import type { SuiteBuildItem, SuiteBuildResult } from '../src/wire.ts';
@@ -62,6 +70,19 @@ function behavioralBranch(): Record<string, unknown> {
   };
 }
 
+function writeReview(projectRoot: string, behavioral: Record<string, unknown>): void {
+  writeBehavioralReviewRequest(
+    projectRoot,
+    behavioral as unknown as HostBranchOutput,
+    { revision: 'candidate-sha', run_result: 'raw machine report' },
+  );
+  writeFileSync(reviewOutputPath(projectRoot), JSON.stringify({
+    candidate_digest: suiteCandidateDigest(behavioral as unknown as HostBranchOutput),
+    bdd_quality_review: { reviewer: 'independent', scenario_reviews: [] },
+    known_defect_probe: { status: 'not_supplied' },
+  }));
+}
+
 const okResults: SuiteBuildResult[] = [
   { suite_kind: 'structural', status: 'created', suite_digest: 's', counts: { covered: 1 } },
   { suite_kind: 'behavioral', status: 'created', suite_digest: 'b', counts: { covered: 1 } },
@@ -70,7 +91,9 @@ const okResults: SuiteBuildResult[] = [
 test('put-suite-build uploads both branches, echoing each source_digest from the task', async () => {
   const projectRoot = tmpProject();
   writeTask(projectRoot);
-  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioralBranch()] }));
+  const behavioral = behavioralBranch();
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+  writeReview(projectRoot, behavioral);
 
   let uploaded: SuiteBuildItem[] = [];
   await putSuiteBuild(config(projectRoot), [], {
@@ -85,6 +108,14 @@ test('put-suite-build uploads both branches, echoing each source_digest from the
   assert.deepEqual(
     (uploaded[1].artifacts!.suite_file as Record<string, unknown>).support_files,
     (behavioralBranch().suite_file as Record<string, unknown>).support_files,
+  );
+  assert.deepEqual(
+    (uploaded[1].artifacts!.test_metadata as Record<string, unknown>).bdd_quality_review,
+    {
+      reviewer: 'independent',
+      scenario_reviews: [],
+      candidate_digest: suiteCandidateDigest(behavioral as unknown as HostBranchOutput),
+    },
   );
 });
 
@@ -124,6 +155,92 @@ test('put-suite-build refuses to upload when the host output is unparseable', as
     /is not valid JSON/,
   );
   assert.equal(uploaded, false);
+});
+
+test('put-suite-build refuses a behavioral review embedded by the suite generator', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const behavioral = behavioralBranch();
+  behavioral.test_metadata = {
+    capabilities: [],
+      bdd_quality_review: { reviewer: 'independent', scenario_reviews: [] },
+      known_defect_probe: { status: 'not_supplied' },
+      known_defect_context: { status: 'not_supplied' },
+  };
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+
+  let uploaded = false;
+  await assert.rejects(
+    () => putSuiteBuild(config(projectRoot), [], {
+      putSuiteBuilds: async () => { uploaded = true; return okResults; },
+      stdout: { write: () => true },
+    }),
+    /separate review artifact|suite-review-prepare/i,
+  );
+  assert.equal(uploaded, false);
+});
+
+// The server strips five keys before it recomputes the digest, so a generator
+// that writes any of them makes the two sides hash different objects. Caught
+// here it names the real cause; caught by the server it reads as "the review is
+// about a different candidate".
+test('put-suite-build names the generator-owned run report the server would strip from the digest', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const behavioral = behavioralBranch();
+  behavioral.test_metadata = {
+    capabilities: [],
+    candidate_run: { revision: 'abc123', run_result: '{}' },
+  };
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+
+  let uploaded = false;
+  await assert.rejects(
+    () => putSuiteBuild(config(projectRoot), [], {
+      putSuiteBuilds: async () => { uploaded = true; return okResults; },
+      stdout: { write: () => true },
+    }),
+    /found candidate_run in test_metadata/i,
+  );
+  assert.equal(uploaded, false);
+});
+
+test('put-suite-build refuses a review created before the behavioral runner manifest changed', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const behavioral = behavioralBranch();
+  writeReview(projectRoot, behavioral);
+  behavioral.runner_manifest = { ...(behavioral.runner_manifest as Record<string, unknown>), runner_version: '10.0.0' };
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+
+  let uploaded = false;
+  await assert.rejects(
+    () => putSuiteBuild(config(projectRoot), [], {
+      putSuiteBuilds: async () => { uploaded = true; return okResults; },
+      stdout: { write: () => true },
+    }),
+    /does not review the current behavioral suite candidate/i,
+  );
+  assert.equal(uploaded, false);
+});
+
+test('put-suite-build refuses not_supplied when suite-prepare recorded a known defect', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  writeSuiteBuildRequest(projectRoot, branches(), {
+    status: 'supplied', defect: 'Report uses a missing method',
+  });
+  const behavioral = behavioralBranch();
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+  writeReview(projectRoot, behavioral);
+
+  await assert.rejects(
+    () => putSuiteBuild(config(projectRoot), [], {
+      putSuiteBuilds: async () => { throw new Error('must not upload'); },
+      stdout: { write: () => true },
+    }),
+    /known defect.*not_supplied/i,
+  );
 });
 
 test('put-suite-build rejects a behavioral branch whose file escapes the behavioral root', async () => {

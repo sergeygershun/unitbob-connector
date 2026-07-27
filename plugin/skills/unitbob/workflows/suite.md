@@ -12,8 +12,14 @@ uploaded, never source:
 Neither replaces the other; they have independent versions, runs, and lamps.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.2.4 suite-prepare`. It confirms a
-   supported stack, materializes the Ruby boot helper
+1. Run `npx -y --loglevel=error unitbob@0.2.6 suite-prepare` with exactly one
+   defect-context option. If the user or acceptance material named a known defect, append
+   `--known-defect='<exact defect description>'`; when a fixed revision was
+   supplied, also append `--fixed-revision='<exact revision>'`. Never omit the
+   first option merely because the defect is visible in the conversation. If no
+   defect was supplied, append `--no-known-defect`; the connector rejects an
+   ambiguous omission. It
+   confirms a supported stack and materializes the Ruby boot helper
    `.unitbob/structural/unitbob_helper.rb` (RSpec only), fetches both peer
    assignments and each branch's recipe, and writes the task to
    `.unitbob/suite-build/request.json`. If it reports an unsupported project,
@@ -40,8 +46,13 @@ Do this:
      Given/When/Then read as product behavior, each tagged with the capability's
      `@case_marker`. Write the `.feature` and its step definitions under
      `.unitbob/behavioral/`, install the fixed BDD runner's pinned version into
-     an isolated environment there if missing, run the whole bundle, and iterate
-     to green — no undefined/ambiguous/pending steps.
+     an isolated environment there if missing, then run the whole bundle. Repair
+     undefined/ambiguous/pending steps because they mean the harness is broken;
+     application failures remain red. Never weaken their assertions to get green.
+     The generator must not put `bdd_quality_review`, `known_defect_probe`, or
+     `known_defect_context` in `test_metadata`; the connector rejects this
+     self-review. An independent reviewer handles them after the candidate is
+     complete.
    - Cover every assigned id exactly once in each branch: `covered` (marker on
      real tests/scenarios) or `unguarded` (with a business reason). Never mint or
      alter a marker. Use plain business language; never surface `Class#method`.
@@ -65,7 +76,36 @@ Do this:
    cannot build gets `{ "suite_kind": ..., "build_error": { "message": "..." } }`
    instead — it never blocks the peer branch. Never emit `spec_rb`, `rspec_id`,
    `example_id`, or `run_command`. No prose around the JSON.
-5. Run `npx -y --loglevel=error unitbob@0.2.4 put-suite-build` to upload both
+5. If no behavioral candidate was built (or it carries `build_error`), skip the
+   review step and continue to step 7 so the structural peer can still publish.
+   Otherwise run `npx -y --loglevel=error unitbob@0.2.6 suite-review-prepare`. It reads the
+   finished behavioral candidate, runs that exact candidate to capture machine
+   evidence (and repeats it in a disposable worktree when a fixed revision was
+   supplied), then writes a digest-bound request to
+   `.unitbob/suite-build/review-request.json`.
+6. Give only that request plus the referenced suite bundle to an
+   **independent reviewer** in a separate agent/subagent with fresh context. If
+   one is unavailable, do not upload the behavioral branch. The reviewer performs
+   the BDD quality review: cover every important surface, trace each Given
+   record into Then, confirm When drives every declared public surface, and
+   reject generic load/success results when the Scenario promises a record,
+   change, message, or side effect. Availability is valid only when availability
+   itself is the product promise.
+
+   Write strict JSON only to the request's `output_path`
+   (`.unitbob/suite-build/behavioral_review.json`): copy its exact
+   `candidate_digest`; add `bdd_quality_review` with `reviewer: "independent"`
+   and one `scenario_reviews` entry per Scenario. Each entry has exact
+   `scenario`, `case_marker`, verified `public_surfaces`, concrete
+   `given_then_evidence`, `outcome`, `outcome_kind` (`specific` or
+   `availability`), and `verdict: "pass"`. Add `known_defect_probe` exactly as
+   the recipe and connector-owned `known_defect_context` require. A named defect
+   must be `detected` red, or `verified` red then green when a fixed revision is
+   supplied; copy the exact defect text, revisions, and Scenario from the
+   connector-owned `candidate_run`/`fixed_candidate_run` evidence and never call
+   it `not_supplied`. This is a local process attestation, not authenticated
+   reviewer identity; do not describe it as cryptographic proof of independence.
+7. Run `npx -y --loglevel=error unitbob@0.2.6 put-suite-build` to upload both
    branches in one batch. Each is validated and published independently.
 
 Then tell the user, in plain business language, what is guarded on each map and

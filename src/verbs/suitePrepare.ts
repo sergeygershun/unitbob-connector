@@ -2,7 +2,12 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from '../config.ts';
 import { materializeHelper } from '../files/guardrails.ts';
-import { recipeNameFor, writeSuiteBuildRequest, type SuiteBuildBranch } from '../files/suiteBuild.ts';
+import {
+  recipeNameFor,
+  writeSuiteBuildRequest,
+  type KnownDefectContext,
+  type SuiteBuildBranch,
+} from '../files/suiteBuild.ts';
 import { anyStackPrecheck } from '../runner/precheck.ts';
 import { ensureRunner, type ProvisionResult } from '../runner/provision.ts';
 import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
@@ -23,7 +28,8 @@ interface SuitePrepareDeps {
 // unsupported project stops with one actionable message and writes nothing; a
 // no-current-map error from the server surfaces (via WireError) with guidance to
 // rebuild the map first.
-export async function suitePrepare(config: Config, _args: string[] = [], deps?: Partial<SuitePrepareDeps>): Promise<void> {
+export async function suitePrepare(config: Config, args: string[] = [], deps?: Partial<SuitePrepareDeps>): Promise<void> {
+  const defectContext = knownDefectContext(args);
   const wire = new Wire(config);
   const actual: SuitePrepareDeps = {
     getRecipe: (name) => wire.getRecipe(name),
@@ -72,14 +78,17 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
     })),
   );
 
-  const request = writeSuiteBuildRequest(config.projectRoot, branches);
+  const request = writeSuiteBuildRequest(config.projectRoot, branches, defectContext);
   const kinds = branches.map((branch) => branch.suite_kind).join(' and ');
+  const nextCommand = branches.some((branch) => branch.suite_kind === 'behavioral')
+    ? '`unitbob suite-review-prepare` before upload'
+    : '`unitbob put-suite-build`';
 
   actual.stdout.write(`Suite build request written to ${request.project_root}/.unitbob/suite-build/request.json\n`);
   actual.stdout.write(
     `Next: build ${branches.length === 1 ? 'the' : 'both'} peer ${branches.length === 1 ? 'suite' : 'suites'} (${kinds}) following each branch's \`recipe\` and \`assignment\`, ` +
-      `write your answer to ${request.output_path} as a branches array, run each locally to green, ` +
-      'then run `unitbob put-suite-build`.\n',
+      `write your answer to ${request.output_path} as a branches array, run each locally, repair broken harness steps while application failures remain red, ` +
+      `then run ${nextCommand}.\n`,
   );
 
   // A fixable runner blocker is not a failure: the structural suite still builds this run. Tell the
@@ -94,10 +103,32 @@ export async function suitePrepare(config: Config, _args: string[] = [], deps?: 
   }
 }
 
+function knownDefectContext(args: string[]): KnownDefectContext {
+  const defect = option(args, '--known-defect=');
+  const fixedRevision = option(args, '--fixed-revision=');
+  const explicitlyAbsent = args.includes('--no-known-defect');
+  if ((defect && explicitlyAbsent) || (!defect && !explicitlyAbsent)) {
+    throw new Error('Choose exactly one of --known-defect or --no-known-defect (use --known-defect=<description>).');
+  }
+  if (fixedRevision && !defect) throw new Error('--fixed-revision requires --known-defect.');
+  if (explicitlyAbsent) return { status: 'not_supplied' };
+  if (!defect) throw new Error('--known-defect requires a value.');
+  return {
+    status: 'supplied',
+    defect,
+    ...(fixedRevision ? { fixed_revision: fixedRevision } : {}),
+  };
+}
+
+function option(args: string[], prefix: string): string | undefined {
+  const match = args.find((arg) => arg.startsWith(prefix));
+  const value = match?.slice(prefix.length).trim();
+  if (match && !value) throw new Error(`${prefix.slice(0, -1)} requires a value.`);
+  return value || undefined;
+}
+
 function inferBddRunner(projectRoot: string): string {
   if (existsSync(join(projectRoot, 'package.json'))) return 'cucumber-js';
   if (['pyproject.toml', 'requirements.txt', 'Pipfile'].some((f) => existsSync(join(projectRoot, f)))) return 'pytest-bdd';
   return 'cucumber';
 }
-
-

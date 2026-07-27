@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const cliPath = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+const binPath = fileURLToPath(new URL('../src/bin.ts', import.meta.url));
 
 function help(): string {
   // `--help` exits 0; run the CLI the same way a bare client would.
-  return execFileSync(process.execPath, [cliPath, '--help'], { encoding: 'utf8' });
+  return execFileSync(process.execPath, [binPath, '--help'], { encoding: 'utf8' });
 }
 
 test('--help carries a pipeline note explaining prepare → host-build → put', () => {

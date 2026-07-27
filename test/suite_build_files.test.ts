@@ -9,6 +9,7 @@ import {
   readSuiteBuildRequest,
   recipeNameFor,
   requestPath,
+  suiteCandidateDigest,
   writeSuiteBuildRequest,
   type SuiteBuildBranch,
 } from '../src/files/suiteBuild.ts';
@@ -149,4 +150,11 @@ test('recipeNameFor maps each kind to its generation recipe', () => {
 test('readSuiteBuildRequest errors with guidance when the task is missing', () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-no-task-'));
   assert.throws(() => readSuiteBuildRequest(projectRoot), /run `npx unitbob suite-prepare` first/);
+});
+
+test('shares a golden behavioral review candidate digest with the server', () => {
+  assert.equal(
+    suiteCandidateDigest(behavioralBranch()),
+    '21190d11f9124c4d64f6373dcc40abcc03f0c1aec872ebf9ef5dd682ca8836ee',
+  );
 });

@@ -5,7 +5,7 @@ suite digest are copied from the red lamp on the map. Your code never leaves the
 machine.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.2.4 contract-prompt <suite_digest> <test_id> [fix|accept]`.
+1. Run `npx -y --loglevel=error unitbob@0.2.6 contract-prompt <suite_digest> <test_id> [fix|accept]`.
    This fetches the ready-to-run brief for that exact suite version and intent
    (the business behaviour, the latest failure, the constraints, and where the
    contract lives locally) and prints it. If it reports the check is not failing,
@@ -23,8 +23,15 @@ Do this:
    - **Accept (the behaviour changed on purpose):** change **only this contract's**
      cases in its local suite (a structural test, or a behavioral `.feature`
      scenario and, if needed, shared support files) — never application code.
-     Run the whole suite of that kind to green, re-derive `test_metadata`, and
-     republish with `npx -y --loglevel=error unitbob@0.2.4 put-suite-build`.
+     Run the whole suite of that kind once. The accepted contract must exercise
+     and pass its new expectation. Unrelated application failures remain red;
+     only undefined, ambiguous, or pending harness steps must be repaired.
+     Re-derive `test_metadata` in the suite-build output. For a behavioral suite,
+     run `npx -y --loglevel=error unitbob@0.2.6 suite-review-prepare`, send the new
+     digest-bound request through the independent BDD reviewer, replace its
+     `bdd_quality_review`, and preserve or rerun the `known_defect_probe` as
+     applicable. Only then republish with
+     `npx -y --loglevel=error unitbob@0.2.6 put-suite-build`.
      That makes a new version of only that contract system; the peer stays put.
 4. Tell the user, in plain business language, what you changed or accepted.
 

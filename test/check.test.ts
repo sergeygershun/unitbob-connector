@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { run } from '../src/verbs/run.ts';
 import { materializeBehavioral } from '../src/files/behavioral.ts';
 import { runBddSuite } from '../src/runner/bdd.ts';
@@ -229,6 +229,54 @@ test('the public run flow preserves the provisioned behavioral sidecar while ref
       return runnerResult({ report: '{"testCaseStarted":{}}\n' });
     },
   }));
+});
+
+test('run default assembly preserves and uses the provisioned behavioral sidecar', async () => {
+  const projectRoot = tmpProject();
+  const behavioralRoot = join(projectRoot, '.unitbob', 'behavioral');
+  const sidecarGemfile = join(behavioralRoot, 'Gemfile');
+  const fakeBin = join(projectRoot, 'fake-bin');
+  const fakeBundle = join(fakeBin, 'bundle');
+  const sidecarContent = 'gem "cucumber"\n';
+  let uploaded: Array<Record<string, unknown>> = [];
+
+  mkdirSync(behavioralRoot, { recursive: true });
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(join(projectRoot, 'Gemfile'), 'gem "rails"\n');
+  writeFileSync(sidecarGemfile, sidecarContent);
+  writeFileSync(
+    fakeBundle,
+    '#!/bin/sh\n' +
+      'test "$BUNDLE_GEMFILE" = ".unitbob/behavioral/Gemfile" || exit 41\n' +
+      'test -f .unitbob/behavioral/features/surface_contracts.feature || exit 42\n' +
+      'test -f .unitbob/behavioral/step_definitions/surface_steps.rb || exit 43\n' +
+      'printf \'%s\\n\' \'{"testCaseStarted":{"id":"scenario-1"}}\' > .unitbob/behavioral/cucumber_messages.ndjson\n',
+  );
+  chmodSync(fakeBundle, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = [fakeBin, originalPath].filter(Boolean).join(delimiter);
+  try {
+    await run(config(projectRoot), [], {
+      getSuites: async () => [behavioralSuite()],
+      postRunsBatch: async (runs) => {
+        uploaded = runs as Array<Record<string, unknown>>;
+        return { results: [], map_url: '' };
+      },
+      stdout: { write: () => true },
+    });
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+
+  assert.equal(readFileSync(sidecarGemfile, 'utf8'), sidecarContent);
+  assert.deepEqual(uploaded, [
+    {
+      suite_digest: 'behav-d1',
+      run_result: '{"testCaseStarted":{"id":"scenario-1"}}\n',
+    },
+  ]);
 });
 
 test('the public run flow reports a missing behavioral sidecar without invoking a fallback runner', async () => {
