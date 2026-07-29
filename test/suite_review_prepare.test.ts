@@ -83,3 +83,47 @@ test('suite-review-prepare records a separate machine run for a supplied fixed r
     run_result: 'fixed raw report',
   });
 });
+
+// The warning has to reach the user *before* the candidate is run, because the
+// run materializes the answer and that is when the forgotten file is deleted.
+// Saying it afterwards would describe a file that no longer exists.
+test('suite-review-prepare warns about the forgotten files before it runs the candidate', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-suite-review-forgot-'));
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  mkdirSync(join(projectRoot, '.unitbob', 'behavioral', 'features', 'support'), { recursive: true });
+  mkdirSync(join(projectRoot, '.unitbob', 'behavioral', 'step_definitions'), { recursive: true });
+  writeFileSync(join(projectRoot, '.unitbob', 'behavioral', 'features', 'support', 'env.rb'), '# forgotten\n');
+  writeFileSync(join(projectRoot, '.unitbob', 'behavioral', 'Gemfile'), "source 'x'\n");
+  writeSuiteBuildRequest(projectRoot, [{
+    suite_kind: 'behavioral', source_digest: 'surface-d', path_root: '.unitbob/behavioral/',
+    recipe: { name: 'generate_behavioral', version: 'b1', text: 'b' }, assignment: {},
+  }], { status: 'not_supplied' });
+  writeFileSync(outputPath(projectRoot), JSON.stringify({
+    branches: [{
+      suite_kind: 'behavioral',
+      suite_file: {
+        path: '.unitbob/behavioral/features/surface_contracts.feature',
+        content: 'Feature: Product behavior\n',
+        support_files: [{ path: '.unitbob/behavioral/step_definitions/steps.rb', content: '# steps\n' }],
+      },
+      runner_manifest: { runner: 'cucumber' },
+      test_metadata: { capabilities: [{ capability_id: 'billing', status: 'covered' }] },
+    }],
+  }));
+  const said: string[] = [];
+
+  await suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
+    runCandidate: async () => {
+      said.push('<the candidate ran>');
+      return { revision: 'sha', run_result: 'raw' };
+    },
+    stdout: { write: (chunk: string) => said.push(chunk) },
+  });
+
+  const warning = said.findIndex((line) => line.includes('will delete them'));
+  assert.ok(warning >= 0, `no warning in ${JSON.stringify(said)}`);
+  assert.match(said[warning], /features\/support\/env\.rb/);
+  // The runner environment at the suite root is not the answer's to list.
+  assert.doesNotMatch(said[warning], /Gemfile/);
+  assert.ok(warning < said.indexOf('<the candidate ran>'), 'the warning must come before the run');
+});

@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { assertUnitbobPath } from './artifactPath.ts';
 import type { SuiteArtifact } from '../wire.ts';
@@ -41,6 +41,41 @@ export function materializeBehavioral(
   }
 
   return { mainPath };
+}
+
+// Everything under the behavioral root that the next materialization will
+// delete: it wipes every top-level entry outside the runner environment and
+// writes back only the files the answer listed, so a step file the answer forgot
+// is gone and its steps come back undefined — a harness break reported far from
+// its cause. One file per capability makes forgetting one much easier than a
+// single file for the whole product ever did.
+//
+// The whole root is walked, not just the directories the answer happens to use:
+// the file most likely to be forgotten is the one in a directory the answer
+// never mentions — `features/support/env.rb` is exactly that shape.
+export function filesLostOnMaterialize(projectRoot: string, artifact: SuiteArtifact, runner: string): string[] {
+  const behavioralRoot = join(projectRoot, BEHAVIORAL_DIR);
+  if (!existsSync(behavioralRoot)) return [];
+
+  const listed = new Set([artifact.path, ...(artifact.support_files ?? []).map((file) => file.path)]);
+  const runnerEntries = RUNNER_ENVIRONMENT_ENTRIES[runner] ?? EMPTY_ENTRIES;
+
+  return readdirSync(behavioralRoot)
+    .filter((entry) => !runnerEntries.has(entry))
+    .flatMap((entry) => filesUnder(projectRoot, `${BEHAVIORAL_DIR}/${entry}`))
+    .filter((path) => !listed.has(path))
+    .sort();
+}
+
+// The real files under `relative`. Symlinks are not followed: materialization
+// removes the link, not what it points at, and naming the target here would read
+// as a warning about a file that was never in danger.
+function filesUnder(projectRoot: string, relative: string): string[] {
+  const stats = lstatSync(join(projectRoot, relative));
+  if (stats.isFile()) return [relative];
+  if (!stats.isDirectory()) return [];
+
+  return readdirSync(join(projectRoot, relative)).flatMap((entry) => filesUnder(projectRoot, `${relative}/${entry}`));
 }
 
 export function copyBehavioralRunnerEnvironment(

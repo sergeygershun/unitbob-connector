@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  candidateRunPath,
   outputPath,
   reviewOutputPath,
   suiteCandidateDigest,
@@ -205,6 +206,9 @@ test('put-suite-build names the generator-owned run report the server would stri
   assert.equal(uploaded, false);
 });
 
+// A candidate that moved after it was reviewed. The connector's run evidence
+// agrees with the review, so the reader is told their suite changed — not sent
+// to audit a review that was right when it was written.
 test('put-suite-build refuses a review created before the behavioral runner manifest changed', async () => {
   const projectRoot = tmpProject();
   writeTask(projectRoot);
@@ -219,9 +223,55 @@ test('put-suite-build refuses a review created before the behavioral runner mani
       putSuiteBuilds: async () => { uploaded = true; return okResults; },
       stdout: { write: () => true },
     }),
-    /does not review the current behavioral suite candidate/i,
+    /it has changed since — re-run/i,
   );
   assert.equal(uploaded, false);
+});
+
+// A review about some other candidate entirely: it agrees with neither the suite
+// on disk nor the run the connector made. That is the reviewer's problem, and
+// the wording stays the blunt one.
+test('put-suite-build refuses a review that belongs to another candidate', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const behavioral = behavioralBranch();
+  writeReview(projectRoot, behavioral);
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+  writeFileSync(reviewOutputPath(projectRoot), JSON.stringify({
+    candidate_digest: 'a digest from a suite this project never built',
+    bdd_quality_review: { reviewer: 'independent', scenario_reviews: [] },
+    known_defect_probe: { status: 'not_supplied' },
+  }));
+
+  await assert.rejects(
+    () => putSuiteBuild(config(projectRoot), [], {
+      putSuiteBuilds: async () => { throw new Error('must not upload'); },
+      stdout: { write: () => true },
+    }),
+    /does not review the current behavioral suite candidate/i,
+  );
+});
+
+// The connector writes this file itself, always with the defect choice it was
+// given. Missing means the file is damaged — reading it as "no defect was
+// supplied" would silently skip the fixed-revision evidence check below it.
+test('put-suite-build refuses run evidence that records no defect choice', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const behavioral = behavioralBranch();
+  writeReview(projectRoot, behavioral);
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+  const evidence = JSON.parse(readFileSync(candidateRunPath(projectRoot), 'utf8'));
+  delete evidence.known_defect_context;
+  writeFileSync(candidateRunPath(projectRoot), JSON.stringify(evidence));
+
+  await assert.rejects(
+    () => putSuiteBuild(config(projectRoot), [], {
+      putSuiteBuilds: async () => { throw new Error('must not upload'); },
+      stdout: { write: () => true },
+    }),
+    /records no known_defect_context/i,
+  );
 });
 
 test('put-suite-build refuses not_supplied when suite-prepare recorded a known defect', async () => {

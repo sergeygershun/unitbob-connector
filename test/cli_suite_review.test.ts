@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { main } from '../src/cli.ts';
-import { outputPath, reviewRequestPath, writeSuiteBuildRequest } from '../src/files/suiteBuild.ts';
+import { candidateRunPath, outputPath, reviewRequestPath, writeSuiteBuildRequest } from '../src/files/suiteBuild.ts';
 
 test('the CLI production assembly runs and binds the behavioral review candidate', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-cli-review-'));
@@ -52,7 +52,13 @@ test('the CLI production assembly runs and binds the behavioral review candidate
     else process.env.PATH = previousPath;
   }
 
+  // With no known defect there is nothing for the reviewer to read a run for, so
+  // the raw report stays in the connector's own file and out of the request.
   const request = JSON.parse(readFileSync(reviewRequestPath(projectRoot), 'utf8'));
-  assert.equal(request.candidate_run.revision, 'working-tree');
-  assert.equal(request.candidate_run.run_result, '{}\n');
+  assert.equal(request.candidate_run, undefined);
+  assert.equal(request.fixed_candidate_run, undefined);
+
+  const evidence = JSON.parse(readFileSync(candidateRunPath(projectRoot), 'utf8'));
+  assert.equal(evidence.candidate_run.revision, 'working-tree');
+  assert.equal(evidence.candidate_run.run_result, '{}\n');
 });

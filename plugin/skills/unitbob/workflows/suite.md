@@ -12,7 +12,7 @@ uploaded, never source:
 Neither replaces the other; they have independent versions, runs, and lamps.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.2.6 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.2.7 suite-prepare` with exactly one
    defect-context option. If the user or acceptance material named a known defect, append
    `--known-defect='<exact defect description>'`; when a fixed revision was
    supplied, also append `--fixed-revision='<exact revision>'`. Never omit the
@@ -42,11 +42,15 @@ Do this:
      (RSpec: `architecture_map_contracts_spec.rb` starting with
      `require_relative 'unitbob_helper'`; Vitest: `architecture_map_contracts.test.ts`;
      pytest: `test_architecture_map_contracts.py`), run it, and iterate to green.
-   - **behavioral** — for every capability, one or more `Scenario`s whose
+   - **behavioral** — one `Scenario` per promise the capability makes, whose
      Given/When/Then read as product behavior, each tagged with the capability's
-     `@case_marker`. Write the `.feature` and its step definitions under
-     `.unitbob/behavioral/`, install the fixed BDD runner's pinned version into
-     an isolated environment there if missing, then run the whole bundle. Repair
+     `@case_marker`. A whole business area behind one loop-over-every-route
+     scenario is not a contract: its red lamp tells the vibecoder that everything
+     is broken and nothing about which workflow failed. Write the `.feature` and
+     **one step-definition file per capability** (plus one shared helper file)
+     under `.unitbob/behavioral/`, install the fixed BDD runner's pinned version
+     into an isolated environment there if missing, then run the whole bundle.
+     Repair
      undefined/ambiguous/pending steps because they mean the harness is broken;
      application failures remain red. Never weaken their assertions to get green.
      The generator must not put `bdd_quality_review`, `known_defect_probe`, or
@@ -66,23 +70,29 @@ Do this:
        "runner_manifest": { "language": ..., "framework": ..., "result_format": ..., "runner": ... },
        "test_metadata": { "capabilities": [...] } },
      { "suite_kind": "behavioral",
-       "suite_file": { "path": ".unitbob/behavioral/features/surface_contracts.feature", "content": "...",
-                       "support_files": [ { "path": ".unitbob/behavioral/step_definitions/...", "content": "..." } ] },
+       "suite_file": { "path": ".unitbob/behavioral/features/surface_contracts.feature",
+                       "support_files": [ { "path": ".unitbob/behavioral/step_definitions/client_management_steps.rb" } ] },
        "runner_manifest": { "language": ..., "framework": ..., "result_format": ..., "runner": ..., "runner_version": "..." },
        "test_metadata": { "capabilities": [...] } }
    ] }
    ```
-   Copy each id's `contract_key` and `case_marker` verbatim. A branch you truly
+   **A file you already wrote to disk needs only its `path`** — the connector
+   reads the bytes from there, so do not paste a second copy into this JSON.
+   Inline `content` only for a file that is not on disk. Copy each id's
+   `contract_key` and `case_marker` verbatim. A branch you truly
    cannot build gets `{ "suite_kind": ..., "build_error": { "message": "..." } }`
    instead — it never blocks the peer branch. Never emit `spec_rb`, `rspec_id`,
    `example_id`, or `run_command`. No prose around the JSON.
 5. If no behavioral candidate was built (or it carries `build_error`), skip the
    review step and continue to step 7 so the structural peer can still publish.
-   Otherwise run `npx -y --loglevel=error unitbob@0.2.6 suite-review-prepare`. It reads the
+   Otherwise run `npx -y --loglevel=error unitbob@0.2.7 suite-review-prepare`. It reads the
    finished behavioral candidate, runs that exact candidate to capture machine
    evidence (and repeats it in a disposable worktree when a fixed revision was
-   supplied), then writes a digest-bound request to
-   `.unitbob/suite-build/review-request.json`.
+   supplied), keeps that evidence in its own
+   `.unitbob/suite-build/candidate-run.json`, and writes a digest-bound request
+   to `.unitbob/suite-build/review-request.json`. The raw runner report rides in
+   the request only when a known defect was supplied, because only then does the
+   reviewer have to cite which Scenario it turned red.
 6. Give only that request plus the referenced suite bundle to an
    **independent reviewer** in a separate agent/subagent with fresh context. If
    one is unavailable, do not upload the behavioral branch. The reviewer performs
@@ -105,7 +115,7 @@ Do this:
    connector-owned `candidate_run`/`fixed_candidate_run` evidence and never call
    it `not_supplied`. This is a local process attestation, not authenticated
    reviewer identity; do not describe it as cryptographic proof of independence.
-7. Run `npx -y --loglevel=error unitbob@0.2.6 put-suite-build` to upload both
+7. Run `npx -y --loglevel=error unitbob@0.2.7 put-suite-build` to upload both
    branches in one batch. Each is validated and published independently.
 
 Then tell the user, in plain business language, what is guarded on each map and

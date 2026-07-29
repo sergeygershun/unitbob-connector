@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -13,6 +13,7 @@ import {
   writeSuiteBuildRequest,
   type SuiteBuildBranch,
 } from '../src/files/suiteBuild.ts';
+import { filesLostOnMaterialize } from '../src/files/behavioral.ts';
 import type { SuitePacket } from '../src/wire.ts';
 
 function tmpProject(): string {
@@ -117,6 +118,113 @@ test('rejects malformed or incomplete branch output', () => {
 
   path = writeOutput(projectRoot, { branches: [{ ...structuralBranch(), suite_kind: 'mystery' }] });
   assert.throws(() => readHostSuiteOutputs(path, request), /unknown suite_kind/);
+});
+
+test('takes a file the host already wrote when the branch names it without content', () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  mkdirSync(join(projectRoot, '.unitbob', 'behavioral', 'features'), { recursive: true });
+  mkdirSync(join(projectRoot, '.unitbob', 'behavioral', 'step_definitions'), { recursive: true });
+  writeFileSync(
+    join(projectRoot, '.unitbob', 'behavioral', 'features', 'surface_contracts.feature'),
+    'Feature: from disk\n',
+  );
+  writeFileSync(
+    join(projectRoot, '.unitbob', 'behavioral', 'step_definitions', 'client_management_steps.rb'),
+    '# client steps\n',
+  );
+
+  const branch = behavioralBranch();
+  branch.suite_file = {
+    path: '.unitbob/behavioral/features/surface_contracts.feature',
+    support_files: [{ path: '.unitbob/behavioral/step_definitions/client_management_steps.rb' }],
+  };
+  const path = writeOutput(projectRoot, { branches: [branch] });
+
+  const [behavioral] = readHostSuiteOutputs(path, readSuiteBuildRequest(projectRoot));
+  const envelope = behavioral.suite_file as { content: string; support_files: { content: string }[] };
+  assert.equal(envelope.content, 'Feature: from disk\n');
+  assert.equal(envelope.support_files[0].content, '# client steps\n');
+});
+
+test('rejects a named file the host never wrote, and empty content', () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const request = readSuiteBuildRequest(projectRoot);
+
+  const missing = behavioralBranch();
+  missing.suite_file = { path: '.unitbob/behavioral/features/surface_contracts.feature' };
+  assert.throws(
+    () => readHostSuiteOutputs(writeOutput(projectRoot, { branches: [missing] }), request),
+    /no such file exists/,
+  );
+
+  const blank = structuralBranch();
+  (blank.suite_file as Record<string, unknown>).content = '   ';
+  assert.throws(
+    () => readHostSuiteOutputs(writeOutput(projectRoot, { branches: [blank] }), request),
+    /empty content/,
+  );
+});
+
+test('refuses a suite file that is a link out of the suite root', () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const secret = join(projectRoot, 'private_key');
+  writeFileSync(secret, 'ssh-rsa AAAA\n');
+  mkdirSync(join(projectRoot, '.unitbob', 'structural'), { recursive: true });
+  symlinkSync(secret, join(projectRoot, '.unitbob', 'structural', 'architecture_map_contracts_spec.rb'));
+
+  const branch = structuralBranch();
+  branch.suite_file = { path: '.unitbob/structural/architecture_map_contracts_spec.rb' };
+  const path = writeOutput(projectRoot, { branches: [branch] });
+
+  assert.throws(() => readHostSuiteOutputs(path, readSuiteBuildRequest(projectRoot)), /resolves outside the suite root/);
+});
+
+// A leaf-only symlink check passes this: the file is real, the directory holding
+// it is the link.
+test('refuses a suite file whose directory is a link out of the suite root', () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const outside = join(projectRoot, 'elsewhere');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'architecture_map_contracts_spec.rb'), '# not ours\n');
+  mkdirSync(join(projectRoot, '.unitbob'), { recursive: true });
+  symlinkSync(outside, join(projectRoot, '.unitbob', 'structural'));
+
+  const branch = structuralBranch();
+  branch.suite_file = { path: '.unitbob/structural/architecture_map_contracts_spec.rb' };
+  const path = writeOutput(projectRoot, { branches: [branch] });
+
+  assert.throws(() => readHostSuiteOutputs(path, readSuiteBuildRequest(projectRoot)), /resolves outside the suite root/);
+});
+
+test('names the files the next materialization would delete', () => {
+  const projectRoot = tmpProject();
+  const steps = join(projectRoot, '.unitbob', 'behavioral', 'step_definitions');
+  const support = join(projectRoot, '.unitbob', 'behavioral', 'features', 'support');
+  mkdirSync(steps, { recursive: true });
+  mkdirSync(support, { recursive: true });
+  writeFileSync(join(projectRoot, '.unitbob', 'behavioral', 'features', 'surface_contracts.feature'), 'Feature: x\n');
+  writeFileSync(join(steps, 'client_management_steps.rb'), '# listed\n');
+  writeFileSync(join(steps, 'billing_steps.rb'), '# forgotten\n');
+  // The directory the answer never mentions at all — the case a scan of only the
+  // listed directories misses, and the conventional home of a Cucumber helper.
+  writeFileSync(join(support, 'env.rb'), '# forgotten too\n');
+  // The separately provisioned runner environment is not the answer's to list.
+  writeFileSync(join(projectRoot, '.unitbob', 'behavioral', 'Gemfile'), "source 'x'\n");
+
+  const lost = filesLostOnMaterialize(projectRoot, {
+    path: '.unitbob/behavioral/features/surface_contracts.feature',
+    content: 'Feature: x\n',
+    support_files: [{ path: '.unitbob/behavioral/step_definitions/client_management_steps.rb', content: '# listed\n' }],
+  }, 'cucumber');
+
+  assert.deepEqual(lost, [
+    '.unitbob/behavioral/features/support/env.rb',
+    '.unitbob/behavioral/step_definitions/billing_steps.rb',
+  ]);
 });
 
 test('rejects the legacy spec_rb shape per branch', () => {

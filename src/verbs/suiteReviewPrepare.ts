@@ -4,7 +4,11 @@ import type { ExecFileSyncOptionsWithStringEncoding } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { copyBehavioralRunnerEnvironment, materializeBehavioral } from '../files/behavioral.ts';
+import {
+  copyBehavioralRunnerEnvironment,
+  filesLostOnMaterialize,
+  materializeBehavioral,
+} from '../files/behavioral.ts';
 import { runBddSuite } from '../runner/bdd.ts';
 import { boundReport } from '../runner/boundReport.ts';
 import type { SuiteArtifact } from '../wire.ts';
@@ -44,6 +48,21 @@ export async function suiteReviewPrepare(
   if (behavioral.build_error) {
     throw new Error(`The behavioral candidate could not be reviewed: ${behavioral.build_error.message}`);
   }
+
+  // Say this before the run, not after: the run materializes the answer, and
+  // that is where a forgotten file turns into undefined steps — by then it is
+  // already gone.
+  const lost = filesLostOnMaterialize(
+    config.projectRoot,
+    behavioral.suite_file as SuiteArtifact,
+    branchRunner(behavioral),
+  );
+  if (lost.length > 0) {
+    actual.stdout.write(
+      `Warning: these files sit with the suite but are not in its answer, and running it will delete them: ${lost.join(', ')}.\n`,
+    );
+  }
+
   const candidateRun = await actual.runCandidate(config.projectRoot, behavioral);
   const fixedRevision = buildRequest.known_defect_context.status === 'supplied'
     ? buildRequest.known_defect_context.fixed_revision
