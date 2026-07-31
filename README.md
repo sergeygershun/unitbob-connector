@@ -14,27 +14,19 @@ Node 18+, Python 3.10+.
 
 ## Install (once)
 
-**Claude Code** — install the plugin.
-
-With a prompt:
+**With a prompt:**
 ```
 Add the Unitbob plugin marketplace: sergeygershun/unitbob-connector
 Install the unitbob plugin
 ```
 
-Or in the terminal:
+**With commands (in the terminal):**
 ```
 claude plugin marketplace add sergeygershun/unitbob-connector
 claude plugin install unitbob@unitbob
 ```
 
 Restart the session so the commands load.
-
-**Codex, or any other agent** — there is no plugin package yet, so point the
-agent at the instructions directly. Clone this repository and tell the agent to
-follow `plugin/skills/unitbob/SKILL.md`; the workflows beside it are plain
-Markdown, and every command in them is an ordinary `npx unitbob@<version> …`.
-Nothing in the tool itself is tied to one agent.
 
 ---
 
