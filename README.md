@@ -28,6 +28,8 @@ claude plugin install unitbob@unitbob
 
 Restart the session so the commands load.
 
+In Codex it is the same — the same install, and the same phrasings below.
+
 ---
 
 ## Full cycle
