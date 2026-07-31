@@ -135,11 +135,18 @@ export async function publishAndRun(
   args: string[],
   deps?: Partial<PublishAndRunDeps>,
 ): Promise<number> {
+  // Resolved before the collaborators, so both halves of the command write to
+  // the same stream. Injecting `stdout` has to capture everything the command
+  // prints — publication lines and run summaries included — or a test can hold a
+  // fraction of the output and read it as the whole of it.
+  const stdout = deps?.stdout ?? process.stdout;
+  const stderr = deps?.stderr ?? process.stderr;
+
   const d: PublishAndRunDeps = {
-    putSuiteBuild: (cfg, a) => putSuiteBuild(cfg, a),
-    runOnly: (cfg, digests) => runOnly(cfg, digests),
-    stdout: process.stdout,
-    stderr: process.stderr,
+    putSuiteBuild: (cfg, a) => putSuiteBuild(cfg, a, { stdout }),
+    runOnly: (cfg, digests) => runOnly(cfg, digests, { stdout }),
+    stdout,
+    stderr,
     ...deps,
   };
 
