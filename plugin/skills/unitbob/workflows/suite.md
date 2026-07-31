@@ -12,7 +12,7 @@ uploaded, never source:
 Neither replaces the other; they have independent versions, runs, and lamps.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.2.7 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.2.8 suite-prepare` with exactly one
    defect-context option. If the user or acceptance material named a known defect, append
    `--known-defect='<exact defect description>'`; when a fixed revision was
    supplied, also append `--fixed-revision='<exact revision>'`. Never omit the
@@ -85,7 +85,7 @@ Do this:
    `example_id`, or `run_command`. No prose around the JSON.
 5. If no behavioral candidate was built (or it carries `build_error`), skip the
    review step and continue to step 7 so the structural peer can still publish.
-   Otherwise run `npx -y --loglevel=error unitbob@0.2.7 suite-review-prepare`. It reads the
+   Otherwise run `npx -y --loglevel=error unitbob@0.2.8 suite-review-prepare`. It reads the
    finished behavioral candidate, runs that exact candidate to capture machine
    evidence (and repeats it in a disposable worktree when a fixed revision was
    supplied), keeps that evidence in its own
@@ -115,14 +115,28 @@ Do this:
    connector-owned `candidate_run`/`fixed_candidate_run` evidence and never call
    it `not_supplied`. This is a local process attestation, not authenticated
    reviewer identity; do not describe it as cryptographic proof of independence.
-7. Run `npx -y --loglevel=error unitbob@0.2.7 put-suite-build` to upload both
-   branches in one batch. Each is validated and published independently.
+7. Run `npx -y --loglevel=error unitbob@0.2.8 put-suite-build`. It uploads both
+   branches in one batch, each validated and published independently, and then
+   runs every branch it published and prints the server's result for each plus
+   the map URL. This is the last command: it lights the lamps itself, so never
+   ask the user to run the checks to finish generating. If it reports that
+   nothing was published, or that it published but could not finish the run, say
+   so plainly and stop — the suite is safe either way, and in the second case
+   asking the user to run the Unitbob checks finishes the job.
 
 Then tell the user, in plain business language, what is guarded on each map and
-what is not yet testable, and include the map URL. If any defect tests are red,
-say plainly: "found N live defects — they show as red lamps on the map" — a red
-first suite is a discovery, not a failure. Do not copy recipe text into this
-project — it is fetched from the server each time.
+what is not yet testable, and include the map URL. Two claims, two sources:
+whether a branch was published comes from the upload lines, and what is green,
+red, or in error comes only from the server's run summaries printed after them.
+Never turn a local build run, or a branch that did not publish, into a claim
+about what the map now shows — a branch you could not publish has no results at
+all, so say it was not published and why. When the command prints a
+`Partial success` line, it names exactly those branches: report them as not
+published, and read every summary below it as covering only the branches that
+did publish. When the server's summaries report failures, say plainly: "found N
+live defects — they are red on the map" — a red first suite is a discovery, not
+a failure. Do not copy recipe text into this project — it is fetched from the
+server each time.
 
 Linking is automatic: if a command prints `Linked this project to Unitbob as X.`,
 relay that line to the user verbatim. Never ask for or guess a repo_id.

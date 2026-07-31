@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { run } from '../src/verbs/run.ts';
+import { run, runOnly } from '../src/verbs/run.ts';
 import { materializeBehavioral } from '../src/files/behavioral.ts';
 import { runBddSuite } from '../src/runner/bdd.ts';
 import type { Config } from '../src/config.ts';
@@ -277,6 +277,69 @@ test('run default assembly preserves and uses the provisioned behavioral sidecar
       run_result: '{"testCaseStarted":{"id":"scenario-1"}}\n',
     },
   ]);
+});
+
+// --- the filtered first run inside put-suite-build (spec 32-4) ----------------
+//
+// `check` answers "run everything we have". The first run answers a narrower
+// question: "run exactly what this command just published". The two share one
+// implementation and differ only in the filter.
+
+test('the filtered run executes only the identities it was given', async () => {
+  let uploaded: Array<Record<string, unknown>> = [];
+
+  await runOnly(config(tmpProject()), ['behav-d1'], batchDeps({
+    getSuites: async () => [structuralSuite(), behavioralSuite()],
+    postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
+  }));
+
+  assert.deepEqual(uploaded.map((entry) => entry.suite_digest), ['behav-d1']);
+});
+
+// Publication and this fetch are two requests. If something republished in
+// between, the version we were told to run is gone — and running the newer one
+// would file honest results against a version this user never published.
+test('the filtered run refuses the whole batch when one requested identity is gone', async () => {
+  let posted = false;
+  let ran = false;
+
+  await assert.rejects(
+    () =>
+      runOnly(config(tmpProject()), ['struct-d1', 'behav-d1'], batchDeps({
+        getSuites: async () => [structuralSuite()],
+        runStructural: async () => { ran = true; return runnerResult({ report: '{"examples":[]}' }); },
+        postRunsBatch: async () => { posted = true; return { results: [], map_url: '' }; },
+      })),
+    /behav-d1[\s\S]*no longer the current one/,
+  );
+
+  assert.equal(ran, false, 'not even the identity that was still current may run');
+  assert.equal(posted, false);
+});
+
+// A suite the server no longer lists as ready is just as absent as a replaced one.
+test('the filtered run refuses an identity the server no longer reports as ready', async () => {
+  await assert.rejects(
+    () =>
+      runOnly(config(tmpProject()), ['struct-d1'], batchDeps({
+        getSuites: async () => [{ ...structuralSuite(), status: 'not_built' }],
+        postRunsBatch: async () => { throw new Error('must not upload'); },
+      })),
+    /no longer the current one/,
+  );
+});
+
+// The standalone flow keeps its own contract: everything ready runs, and an
+// identity from some earlier suite is simply not its business.
+test('the standalone run is unfiltered and still runs every ready peer', async () => {
+  let uploaded: Array<Record<string, unknown>> = [];
+
+  await run(config(tmpProject()), [], batchDeps({
+    getSuites: async () => [structuralSuite(), behavioralSuite()],
+    postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
+  }));
+
+  assert.deepEqual(uploaded.map((entry) => entry.suite_digest), ['struct-d1', 'behav-d1']);
 });
 
 test('the public run flow reports a missing behavioral sidecar without invoking a fallback runner', async () => {

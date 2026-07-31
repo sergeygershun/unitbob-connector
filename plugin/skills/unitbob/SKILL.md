@@ -11,7 +11,7 @@ as green or red lamps. A red lamp is the only signal the user needs: something t
 structure depended on just broke.
 
 There is a `unitbob` command-line tool, run via
-`npx -y --loglevel=error unitbob@0.2.7 <verb>`. It is
+`npx -y --loglevel=error unitbob@0.2.8 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
 (Claude Code) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.
@@ -23,8 +23,10 @@ it** — do not work from memory, and do not reach for a `/unitbob:...` command:
 the file is the same thing the command runs, and it is here right now.
 
 - **Rebuild the map** → `workflows/map.md`
-- **Generate the guardrail suite** → `workflows/suite.md`
-- **Run the checks** → `workflows/check.md`
+- **Generate the guardrail suite** → `workflows/suite.md` (this also runs the new
+  suite and lights its lamps — there is no second step to ask for)
+- **Run the checks** → `workflows/check.md` (later re-runs, and recovery if a
+  generate run was interrupted)
 - **Open the map** → `workflows/show.md`
 - **Fix a red guard** (the code drifted) → `workflows/fix.md`
 

@@ -13,7 +13,7 @@ import {
   type HostBranchOutput,
   type SuiteBuildBranch,
 } from '../src/files/suiteBuild.ts';
-import { putSuiteBuild } from '../src/verbs/putSuiteBuild.ts';
+import { classifyPublication, putSuiteBuild } from '../src/verbs/putSuiteBuild.ts';
 import type { Config } from '../src/config.ts';
 import type { SuiteBuildItem, SuiteBuildResult } from '../src/wire.ts';
 
@@ -324,4 +324,41 @@ test('put-suite-build rejects the legacy spec_rb shape', async () => {
     () => putSuiteBuild(config(projectRoot), [], { putSuiteBuilds: async () => okResults, stdout: { write: () => true } }),
     /legacy spec_rb/,
   );
+});
+
+// One rule for "was this published?", shared by the printed line and the run that
+// follows it. A status this connector has never seen used to print as
+// `structural: quarantined (abc).` — a line carrying a digest and no hint of
+// trouble — immediately above "no suite was published, so nothing was run".
+test('put-suite-build reports an unrecognised status as not published, quoting the server', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch()] }));
+
+  let printed = '';
+  const results = await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async () => [{ suite_kind: 'structural', status: 'quarantined', suite_digest: 'abc' }],
+    stdout: { write: (chunk: string) => { printed += chunk; return true; } },
+  });
+
+  assert.match(printed, /structural: not published — the server answered "quarantined"\./);
+  assert.doesNotMatch(printed, /abc/, 'an unpublished branch must not show an identity to run');
+  assert.deepEqual(classifyPublication(results), { digests: [], unpublished: ['structural'] });
+});
+
+test('put-suite-build keeps the existing wording for a branch the host could not build', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  writeFileSync(
+    outputPath(projectRoot),
+    JSON.stringify({ branches: [{ suite_kind: 'structural', build_error: { message: 'no supported stack here' } }] }),
+  );
+
+  let printed = '';
+  await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async () => [{ suite_kind: 'structural', status: 'build_error', error: 'no supported stack here' }],
+    stdout: { write: (chunk: string) => { printed += chunk; return true; } },
+  });
+
+  assert.match(printed, /structural: not published — no supported stack here\./);
 });

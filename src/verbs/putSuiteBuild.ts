@@ -18,7 +18,14 @@ interface PutSuiteBuildDeps {
 // the host cannot claim a different map than each branch was given. A branch the
 // host could not build is uploaded as a `build_error`, which never rolls back the
 // peer branch. If a branch's answer is unparseable, nothing is uploaded.
-export async function putSuiteBuild(config: Config, _args: string[] = [], deps?: Partial<PutSuiteBuildDeps>): Promise<void> {
+//
+// Returns the server's per-branch results so the caller can compose the first run
+// on top of them (spec 32-4) without parsing the lines printed here.
+export async function putSuiteBuild(
+  config: Config,
+  _args: string[] = [],
+  deps?: Partial<PutSuiteBuildDeps>,
+): Promise<SuiteBuildResult[]> {
   const request = readSuiteBuildRequest(config.projectRoot);
   const outputs = readHostSuiteOutputs(request.output_path, request);
   const d: PutSuiteBuildDeps = {
@@ -72,11 +79,54 @@ export async function putSuiteBuild(config: Config, _args: string[] = [], deps?:
   for (const result of results) {
     d.stdout.write(`${printResult(result)}\n`);
   }
+  return results;
 }
 
+// The three outcomes that leave a branch published and current: a new version, an
+// identical version already stored, or a reactivated one. Each returns the
+// identity to run. Everything else — a rejected branch, a branch the host could
+// not build, or a status this connector has never seen — fails closed and is
+// never run, so a newer server can never trick an older connector into running
+// something it does not understand.
+const PUBLISHED = new Set(['created', 'unchanged', 'restored']);
+
+// Both halves of the answer come from one pass, because both are the same rule
+// read in opposite directions: `digests` is what the first run may execute, and
+// `unpublished` is what no result may ever be claimed about. Split across two
+// functions they would eventually disagree, and a branch could be both skipped by
+// the run and reported as if it had one.
+export interface PublicationSplit {
+  digests: string[];
+  unpublished: string[];
+}
+
+export function classifyPublication(results: SuiteBuildResult[]): PublicationSplit {
+  const split: PublicationSplit = { digests: [], unpublished: [] };
+
+  for (const result of results) {
+    if (!PUBLISHED.has(result.status)) {
+      split.unpublished.push(result.suite_kind);
+      continue;
+    }
+    if (!result.suite_digest) {
+      throw new Error(
+        `The server accepted the ${result.suite_kind} suite as "${result.status}" but returned no identity ` +
+          'to run it by. The suite is published; run the Unitbob checks to finish.',
+      );
+    }
+    split.digests.push(result.suite_digest);
+  }
+
+  return split;
+}
+
+// Asks `PUBLISHED` rather than naming the failing statuses again: this line and
+// the run that follows it must agree about what "published" means, or a branch the
+// command skipped gets a line that reads like a success — digest and all — right
+// above "no suite was published".
 function printResult(result: SuiteBuildResult): string {
-  if (result.status === 'error' || result.status === 'build_error') {
-    return `${result.suite_kind}: not published — ${result.error ?? 'the host could not build this suite'}.`;
+  if (!PUBLISHED.has(result.status)) {
+    return `${result.suite_kind}: not published — ${unpublishedReason(result)}.`;
   }
   const tallies = result.counts
     ? Object.entries(result.counts)
@@ -85,6 +135,16 @@ function printResult(result: SuiteBuildResult): string {
     : '';
   const digest = result.suite_digest ? ` (${result.suite_digest})` : '';
   return `${result.suite_kind}: ${result.status}${digest}${tallies ? ` — ${tallies}` : ''}.`;
+}
+
+// The server's own words when it sent any; otherwise the best true thing that can
+// be said. A status this connector does not know is quoted rather than guessed
+// at — claiming the host could not build it would invent a cause.
+function unpublishedReason(result: SuiteBuildResult): string {
+  if (result.error) return result.error;
+  if (result.status === 'build_error') return 'the host could not build this suite';
+
+  return `the server answered "${result.status}"`;
 }
 
 // Re-exported for tests that construct branches directly.

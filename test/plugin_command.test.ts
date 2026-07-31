@@ -98,6 +98,40 @@ test('suite workflow stitches suite-prepare, the host agent, and put-suite-build
   assert.doesNotMatch(text, /npx unitbob(?!@).* suite(?!-)/);
 });
 
+// Spec 32-4. The a2time session on 2026-07-29 published a structural suite, found
+// a live defect in its own local run, and told the user the defect "shows as a red
+// lamp on the map". Nothing had ever run the published suite, so the map was gray.
+// Two things had to change: one command now publishes *and* runs, and the workflow
+// may only source colors from that run's server summaries.
+test('the suite workflow ends in one publish-and-run command, with no second user turn', () => {
+  const text = workflow('suite');
+  const publishes = text.match(new RegExp(`${unitbobPattern} put-suite-build`, 'g')) ?? [];
+
+  assert.equal(publishes.length, 1, 'exactly one final publish command, which runs what it published');
+  assert.match(text, /runs every branch it published/i);
+  // Asking for the first run as a second turn is the failure this spec removed.
+  assert.match(text, /never\s+ask\s+the\s+user\s+to\s+run\s+the\s+checks\s+to\s+finish\s+generating/i);
+});
+
+test('the suite workflow never claims a local run already painted the map', () => {
+  const text = workflow('suite');
+
+  assert.doesNotMatch(text, /show as red lamps on the map/);
+  assert.match(text, /only\s+from\s+the\s+server's\s+run\s+summaries/i);
+  assert.match(text, /Never\s+turn\s+a\s+local\s+build\s+run[\s\S]{0,120}into\s+a\s+claim/i);
+});
+
+// Recovery after an interrupted first run, and every later re-run, still belong to
+// the standalone flow — it must keep running everything, not just what some
+// earlier publish returned.
+test('the check workflow stays the unfiltered standalone run', () => {
+  const text = workflow('check');
+
+  assert.match(text, new RegExp(`${unitbobPattern} run`));
+  assert.match(text, /both current/);
+  assert.doesNotMatch(text, new RegExp(`${unitbobPattern} put-suite-build`));
+});
+
 test('fix workflow drives contract-prompt and covers both fix and accept on either map', () => {
   const text = workflow('fix');
 
