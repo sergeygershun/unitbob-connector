@@ -219,7 +219,18 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
 // build your suite" describe the same event and leave the reader in completely
 // different places.
 function bootFinding(boot: BootCheck, runner: string | null): string {
-  const caveat = runner ? `\n${SIGNAL_STRENGTH[runner] ?? ''}` : '';
+  // Both halves of "what this answer is worth" travel together, on every
+  // outcome. Splitting them is how the stack caveat came to be missing from
+  // `broken`, and pinning `STRUCTURAL_ONLY` to `ok` alone would have repeated
+  // that in the same breath as the fix: on Rails the stack caveat reads
+  // "whatever stops one stops the other", which is an unscoped claim about a
+  // branch nobody asked — loudest exactly where the run stops for both.
+  // Empties are dropped rather than joined blindly, so a runner with no caveat
+  // of its own does not leave a blank line behind.
+  const caveat = [runner ? SIGNAL_STRENGTH[runner] : '', runner ? STRUCTURAL_ONLY : '']
+    .filter(Boolean)
+    .map((line) => `\n${line}`)
+    .join('');
 
   if (boot.status === 'ok') {
     return `Checked that the suite can start: it does.${caveat}\n`;
@@ -251,9 +262,34 @@ function bootFinding(boot: BootCheck, runner: string | null): string {
     `  ${boot.message}\n\n` +
     `${boot.detail}\n\n` +
     'No suite was written and nothing was uploaded — every test would have died on that line ' +
-    `before reaching its first assertion. ${next}\n`
+    // The caveat belongs here most of all, and this was the one branch it did
+    // not reach — found on the fifth implementation review, 2026-08-03. On
+    // pytest and vitest the check collects the project's whole test tree, so
+    // the line above may come from a test of the project's own that the Unitbob
+    // suite would never have imported. Printing "found a defect" and keeping
+    // that back sends someone to fix a file this product was never going to
+    // touch, which is the same over-claim the spec accepted the wide check only
+    // on condition of disclosing.
+    `before reaching its first assertion. ${next}${caveat}\n`
   );
 }
+
+// Spec 32-6 says the boot rule is one rule for both branches; this check asks
+// one of them. It is made against the *structural* runner, which is what
+// `precheck` identified and what the materialized helper belongs to. The
+// behavioral branch starts elsewhere — cucumber with its own `features/support`,
+// cucumber-js with its own — and there is nothing of ours to load there yet:
+// at this point in `suite-prepare` the behavioral suite has not been generated.
+// Asking the question anyway would mean booting the project's own feature
+// files, which is *wider* than the condition that stops the Unitbob run — the
+// one thing this module's governing rule forbids ("the condition we test must
+// equal the condition that makes a run impossible, never exceed it").
+//
+// So the boundary is stated instead of crossed. Recorded on the fifth
+// implementation review, 2026-08-03, and written into the spec beside it.
+const STRUCTURAL_ONLY =
+  'This says nothing about the product-behaviour branch: it starts with a runner of its own, ' +
+  'which has nothing of ours to load until its suite exists, so it was not asked.';
 
 const NOT_CHECKED_REASON: Record<
   'no_runner' | 'runner_too_old' | 'runner_could_not_answer' | 'timed_out' | 'nothing_to_load',

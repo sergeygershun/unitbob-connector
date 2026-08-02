@@ -539,3 +539,58 @@ test('the finding is printed even when the suite starts, with the stack caveat',
   assert.match(output, /Checked that the suite can start: it does\./);
   assert.match(output, /Full signal on this stack/);
 });
+
+// Found on the fifth implementation review, 2026-08-03. The caveat rode along
+// with `ok` and with `not_checked` and fell off `broken` — the one answer that
+// stops the run. On pytest and vitest the check collects the project's *whole*
+// test tree, so a failure can belong to a test of the project's own that the
+// Unitbob suite would never have imported. Withholding that where generation
+// stops sends the vibecoder to fix a file this product was never going to touch.
+test('a stop on a wide-signal stack carries the caveat that made it wide', async () => {
+  await assert.rejects(
+    suitePrepare(config(railsProject()), ['--no-known-defect'], {
+      precheck: () => ({ ok: true, runner: 'pytest' }),
+      bootCheck: async () => ({
+        status: 'broken',
+        cause: 'defect_in_code',
+        message: "ModuleNotFoundError: No module named 'legacy'",
+        detail: 'tests/test_legacy.py:3',
+      }),
+      ensureRunner: okRunner,
+      runnerEnvelope: okEnvelope,
+      getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+      getSuitePacketsBatch: async () => packets(),
+      stdout: { write: () => true },
+    }),
+    (err: Error) => {
+      assert.match(err.message, /Found a defect that stops your test suite from starting/);
+      assert.match(err.message, /Partial signal on this stack/);
+      assert.match(err.message, /one of the project's own tests/);
+      // Both halves of the caveat, or the stop claims more than was asked: this
+      // refuses the behavioural branch too, on the word of a check that never
+      // looked at it.
+      assert.match(err.message, /says nothing about the product-behaviour branch/i);
+      return true;
+    },
+  );
+});
+
+// Recorded on the fifth implementation review, 2026-08-03. One branch was
+// asked, two branches are about to be built. "The suite can start" read as a
+// statement about both.
+test('a clean start claims only the branch that was actually asked', async () => {
+  const projectRoot = railsProject();
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  assert.match(output, /says nothing about the product-behaviour branch/i);
+});
