@@ -7,6 +7,7 @@ import { runVitestSuite } from '../runner/vitest.ts';
 import { runPytestSuite } from '../runner/pytest.ts';
 import { runBddSuite } from '../runner/bdd.ts';
 import type { RunnerResult } from '../runner/types.ts';
+import { enterUrl } from '../links.ts';
 import { boundReport } from '../runner/boundReport.ts';
 import { Wire, type RunResultItem, type SuiteListItem } from '../wire.ts';
 
@@ -86,7 +87,9 @@ async function execute(config: Config, d: Deps, only: string[] | null): Promise<
 
   const { results, map_url } = await d.postRunsBatch(runs);
   for (const result of results) d.stdout.write(`${result.summary}\n`);
-  if (map_url) d.stdout.write(`${map_url}\n`);
+  // The token joins the address here rather than on the server, so it stays out
+  // of response bodies and out of the brain's logs (spec 33).
+  if (map_url) d.stdout.write(`${enterUrl(config, map_url)}\n`);
 }
 
 // All-or-nothing. Publication and this fetch are two requests, so another client

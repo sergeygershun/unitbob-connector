@@ -10,6 +10,7 @@ import {
   locateLinkedRoot,
   readLocalRepoId,
   readLocalServer,
+  readLocalToken,
   writeConfigFile,
   type Config,
 } from './config.ts';
@@ -19,13 +20,18 @@ import { registerRepo, WireError } from './wire.ts';
 // explicit argument) overrides it — see resolution order in ensureLinked.
 export const DEFAULT_SERVER = 'https://unitbob-73a4082838d3.herokuapp.com';
 
-// Make sure this project is linked, resolving the repo by name on every run
-// (cheap — the server find-or-creates) and reconciling with the local file:
+// Make sure this project is linked.
+//
+// Registering is now a once-per-project event (spec 33). It used to run on every
+// command, resolving the repo by folder name and comparing ids — a check that
+// stopped meaning anything the moment a name stopped being a key, on the one
+// endpoint that answers without a token. What confirms the link now is simply
+// the first real call: it carries the token, and a wrong one gets a 404 with an
+// explanation.
+//
 //   - no working link (file missing / repo_id 0 / non-int) → register, write
-//     the file, announce in one calm line;
-//   - the file's id matches the name's server id → proceed silently;
-//   - mismatch → fail here, before any expensive work — never silently re-link,
-//     the file may point at a real repo the user cares about.
+//     the file with its token, announce in one calm line;
+//   - already linked → proceed silently, without touching the server.
 //
 // The server is resolved in order: explicit argument → `server` from the
 // project's own `.unitbob.json` → the public default. The file must win over
@@ -51,23 +57,30 @@ export async function ensureLinked(
   const fileId = readLocalRepoId(root); // only the root's own file — no walk-up
   const name = projectName(root);
 
-  // Refuse before touching the server, so a stray run can't mint a junk repo.
-  if (fileId === null) assertProjectRoot(root);
-
-  const authId = await registerRepo(resolvedServer, name);
-
-  if (fileId === null) {
-    writeConfigFile(root, { server: resolvedServer, repo_id: authId });
-    ensureGitignored(root, out);
-    out.write(`Linked this project to Unitbob as ${name}.\n`);
-  } else if (fileId !== authId) {
-    throw new WireError(
-      `${CONFIG_FILE} points at repo ${fileId}, but "${name}" is repo ${authId} on the server. ` +
-        `Fix or remove ${CONFIG_FILE} before continuing.`,
-    );
+  if (fileId !== null) {
+    const token = readLocalToken(root);
+    if (token === null) {
+      // Linked before the project had a key of its own. There is no way to mint
+      // one for an existing project — that would be a door into it — so the only
+      // honest instruction is to link again.
+      throw new WireError(
+        `${CONFIG_FILE} has no project token. It was written by an older Unitbob, and the ` +
+          `server now requires one. Delete ${CONFIG_FILE} to link this project again ` +
+          '(the old project, along with its map and checks, stays where it is).',
+      );
+    }
+    return { server: resolvedServer, repoId: fileId, token, projectRoot: root };
   }
 
-  return { server: resolvedServer, repoId: authId, projectRoot: root };
+  // Refuse before touching the server, so a stray run can't mint a junk repo.
+  assertProjectRoot(root);
+
+  const { id, token } = await registerRepo(resolvedServer, name);
+  writeConfigFile(root, { server: resolvedServer, repo_id: id, token });
+  ensureGitignored(root, out);
+  out.write(`Linked this project to Unitbob as ${name}.\n`);
+
+  return { server: resolvedServer, repoId: id, token, projectRoot: root };
 }
 
 // The linking name is the *project's* name, not the checkout's (spec 29). A

@@ -23,7 +23,12 @@ import type { SuiteBuildResult, SuiteListItem } from '../src/wire.ts';
 // the exit codes, not the wording.
 
 function config(): Config {
-  return { server: 'https://host', repoId: 3, projectRoot: mkdtempSync(join(tmpdir(), 'unitbob-publish-run-')) };
+  return {
+    server: 'https://host',
+    repoId: 3,
+    token: 'secret-token',
+    projectRoot: mkdtempSync(join(tmpdir(), 'unitbob-publish-run-')),
+  };
 }
 
 function ok(kind: string, digest: string, status = 'created'): SuiteBuildResult {
@@ -245,7 +250,7 @@ async function runCli(projectRoot: string): Promise<CliRun> {
 // `build_error` rather than a real candidate because a real one would need its
 // independent review, which is not what these tests are about.
 function writeProject(projectRoot: string, server: string): void {
-  writeConfigFile(projectRoot, { server, repo_id: 3 });
+  writeConfigFile(projectRoot, { server, repo_id: 3, token: 'secret-token' });
   mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
   writeSuiteBuildRequest(projectRoot, [
     {
@@ -306,7 +311,6 @@ function json(res: ServerResponse, status: number, payload: unknown): void {
 test('the command exits 1 when nothing published, and never enters the run path', async () => {
   await withServer(
     (url, res) => {
-      if (url === '/repos/register') return json(res, 200, { id: 3 });
       if (url === '/repos/3/suite_builds') {
         return json(res, 200, {
           results: [
@@ -321,7 +325,7 @@ test('the command exits 1 when nothing published, and never enters the run path'
       const { code, stdout, stderr } = await run();
 
       assert.equal(code, 1, 'a published-nothing outcome must survive out through main and bin');
-      assert.deepEqual(urls, ['/repos/register', '/repos/3/suite_builds'], 'the run path is never entered');
+      assert.deepEqual(urls, ['/repos/3/suite_builds'], 'the run path is never entered');
       assert.match(stdout, /structural: not published/);
       assert.match(stderr, /nothing was run/i);
     },
@@ -331,7 +335,6 @@ test('the command exits 1 when nothing published, and never enters the run path'
 test('a partial publication prints publication lines, the partial warning, the run summary, then the map URL', async () => {
   await withServer(
     (url, res) => {
-      if (url === '/repos/register') return json(res, 200, { id: 3 });
       if (url === '/repos/3/suite_builds') {
         return json(res, 200, {
           results: [
@@ -366,13 +369,13 @@ test('a partial publication prints publication lines, the partial warning, the r
       // branch uploads a structured suite error. The protocol exchange still
       // completed, so the command succeeded (spec 32-4, decision 10).
       assert.equal(code, 0);
-      assert.deepEqual(urls, ['/repos/register', '/repos/3/suite_builds', '/repos/3/suites', '/repos/3/runs/batch']);
+      assert.deepEqual(urls, ['/repos/3/suite_builds', '/repos/3/suites', '/repos/3/runs/batch']);
 
       const publication = stdout.indexOf('structural: created');
       const notPublished = stdout.indexOf('behavioral: not published');
       const partial = stdout.indexOf('Partial success. No run summary below covers: behavioral.');
       const summary = stdout.indexOf('Internal structure checks could not run.');
-      const mapUrl = stdout.indexOf('http://host/repos/3/map');
+      const mapUrl = stdout.indexOf('/repos/3/enter?next=%2Frepos%2F3%2Fmap#t=secret-token');
 
       assert.ok(publication >= 0, `publication line missing from:\n${stdout}`);
       assert.ok(notPublished > publication, 'both publication outcomes are reported');

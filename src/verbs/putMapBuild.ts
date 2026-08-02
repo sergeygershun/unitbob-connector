@@ -7,6 +7,7 @@ import {
   readSurfaceDocument,
   readSurfacesInventory,
 } from '../files/mapBuild.ts';
+import { enterUrl } from '../links.ts';
 import { inventoryProblems } from '../surfaces/routeInventory.ts';
 import { Wire } from '../wire.ts';
 
@@ -51,7 +52,9 @@ export async function putMapBuild(config: Config, _args: string[] = [], deps?: P
   process.stdout.write(
     `Map uploaded (map ${result.map_digest}, surface ${result.surface_digest}, graph ${result.graph_digest}) ` +
       `${result.reused ? 'reused' : 'created'} version ${result.map_version_id}.\n` +
-      `${result.map_url}\n`,
+      // The server hands back a clean address; the token is added here, at the
+      // moment of printing, so it never rides in a response body or a server log.
+      `${enterUrl(config, result.map_url)}\n`,
   );
 }
 

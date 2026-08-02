@@ -14,7 +14,7 @@ interface Hit {
   body: string;
 }
 
-// A tiny register endpoint: records hits, answers { id, name }.
+// A tiny register endpoint: records hits, answers { id, name, token }.
 async function withRegisterServer(
   id: number,
   fn: (server: string, hits: Hit[]) => Promise<void>,
@@ -26,7 +26,7 @@ async function withRegisterServer(
     req.on('end', () => {
       hits.push({ method: req.method ?? '', url: req.url ?? '', body });
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ id, name: JSON.parse(body).name }));
+      res.end(JSON.stringify({ id, name: JSON.parse(body).name, token: `token-for-${id}` }));
     });
   });
 
@@ -59,9 +59,9 @@ function outCollector(): { write: (chunk: string) => boolean; text: () => string
   };
 }
 
-test('registerRepo posts the name and returns the id', async () => {
+test('registerRepo posts the name and returns the id with the project token', async () => {
   await withRegisterServer(7, async (server, hits) => {
-    assert.equal(await registerRepo(server, 'a2time'), 7);
+    assert.deepEqual(await registerRepo(server, 'a2time'), { id: 7, token: 'token-for-7' });
     assert.equal(hits[0].method, 'POST');
     assert.equal(hits[0].url, '/repos/register');
     assert.deepEqual(JSON.parse(hits[0].body), { name: 'a2time' });
@@ -80,12 +80,14 @@ test('ensureLinked registers a fresh project, writes the file, and announces onc
     const dir = tmpProject('a2time');
     const out = outCollector();
     const config = await ensureLinked(dir, server, out);
-    assert.deepEqual(config, { server, repoId: 2, projectRoot: dir });
+    assert.deepEqual(config, { server, repoId: 2, token: 'token-for-2', projectRoot: dir });
 
     assert.match(out.text(), /Linked this project to Unitbob as a2time\./);
+    // The token is the project's only key, and it is written down exactly once.
     assert.deepEqual(JSON.parse(readFileSync(join(dir, '.unitbob.json'), 'utf8')), {
       server,
       repo_id: 2,
+      token: 'token-for-2',
     });
     // The fresh link also git-ignores the connector's files.
     assert.match(readFileSync(join(dir, '.gitignore'), 'utf8'), /\.unitbob\.json/);
@@ -106,29 +108,56 @@ test('ensureLinked heals a legacy repo_id: 0 file', async () => {
   });
 });
 
-test('ensureLinked is silent when the file matches the server', async () => {
+// Spec 33. Registering is a once-per-project event now. It used to run on every
+// command to reconcile the id by folder name — a check that stopped meaning
+// anything the moment a name stopped being a key, on the one endpoint that
+// answers without a token.
+test('ensureLinked never calls register for a project that is already linked', async () => {
+  await withRegisterServer(2, async (server, hits) => {
+    const dir = tmpProject('a2time');
+    writeFileSync(
+      join(dir, '.unitbob.json'),
+      JSON.stringify({ server, repo_id: 2, token: 'kept' }),
+    );
+
+    const out = outCollector();
+    const config = await ensureLinked(dir, server, out);
+    assert.deepEqual(config, { server, repoId: 2, token: 'kept', projectRoot: dir });
+
+    assert.equal(out.text(), '');
+    assert.equal(hits.length, 0);
+  });
+});
+
+// A project linked before spec 33 has an id and no key. One cannot be minted for
+// it — that would be a door into someone's project — so the only honest thing to
+// say is "link again".
+test('ensureLinked explains a config written before tokens existed', async () => {
   await withRegisterServer(2, async (server, hits) => {
     const dir = tmpProject('a2time');
     writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server, repo_id: 2 }));
 
-    const out = outCollector();
-    const config = await ensureLinked(dir, server, out);
-    assert.equal(config.repoId, 2);
-
-    assert.equal(out.text(), '');
-    assert.equal(hits.length, 1); // still resolved by name — that is the reconciliation
+    await assert.rejects(
+      ensureLinked(dir, server, outCollector()),
+      (err: Error) =>
+        err instanceof WireError &&
+        /no project token/.test(err.message) &&
+        /Delete \.unitbob\.json/.test(err.message),
+    );
+    assert.equal(hits.length, 0);
   });
 });
 
 test('ensureLinked uses the server from .unitbob.json when no explicit server is given', async () => {
-  await withRegisterServer(2, async (server, hits) => {
+  await withRegisterServer(2, async (server) => {
     const dir = tmpProject('a2time');
-    writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server, repo_id: 2 }));
+    writeFileSync(
+      join(dir, '.unitbob.json'),
+      JSON.stringify({ server, repo_id: 2, token: 'kept' }),
+    );
 
     const result = await ensureLinked(dir, undefined, outCollector()); // no server argument — the file decides
-    assert.deepEqual(result, { server, repoId: 2, projectRoot: dir });
-
-    assert.equal(hits.length, 1); // resolved against the file's server, not the default
+    assert.deepEqual(result, { server, repoId: 2, token: 'kept', projectRoot: dir });
   });
 });
 
@@ -145,36 +174,21 @@ test('ensureLinked heals a legacy repo_id against the server named in the file',
     assert.deepEqual(JSON.parse(readFileSync(join(dir, '.unitbob.json'), 'utf8')), {
       server,
       repo_id: 6,
+      token: 'token-for-6',
     });
   });
 });
 
 test('an explicit server argument overrides the file', async () => {
-  await withRegisterServer(2, async (server, hits) => {
+  await withRegisterServer(2, async (server) => {
     const dir = tmpProject('a2time');
     writeFileSync(
       join(dir, '.unitbob.json'),
-      JSON.stringify({ server: 'http://127.0.0.1:1', repo_id: 2 }),
+      JSON.stringify({ server: 'http://127.0.0.1:1', repo_id: 2, token: 'kept' }),
     );
 
     const config = await ensureLinked(dir, server, outCollector());
     assert.equal(config.server, server);
-
-    assert.equal(hits.length, 1);
-  });
-});
-
-test('ensureLinked fails early on a mismatched id and leaves the file alone', async () => {
-  await withRegisterServer(2, async (server) => {
-    const dir = tmpProject('a2time');
-    writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server, repo_id: 9 }));
-
-    await assert.rejects(
-      ensureLinked(dir, server),
-      (err: Error) =>
-        err instanceof WireError && /points at repo 9/.test(err.message) && /repo 2/.test(err.message),
-    );
-    assert.equal(JSON.parse(readFileSync(join(dir, '.unitbob.json'), 'utf8')).repo_id, 9);
   });
 });
 
@@ -323,4 +337,18 @@ test('assertProjectRoot refuses node_modules even without an enclosing .git', ()
     () => assertProjectRoot(dep),
     (err: Error) => err instanceof WireError && /inside a dependency folder/.test(err.message),
   );
+});
+
+// The token lives in `.unitbob.json`, so that file must never be committed:
+// a token in a public repository hands the project to whoever reads it.
+// `ensureGitignored` already covered it — this keeps it covered.
+test('linking git-ignores the file the token lives in', async () => {
+  await withRegisterServer(11, async (server) => {
+    const dir = tmpProject('a2time');
+    await ensureLinked(dir, server, outCollector());
+
+    const gitignore = readFileSync(join(dir, '.gitignore'), 'utf8');
+    assert.match(gitignore, /^\.unitbob\.json$/m);
+    assert.match(readFileSync(join(dir, '.unitbob.json'), 'utf8'), /"token"/);
+  });
 });

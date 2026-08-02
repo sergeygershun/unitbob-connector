@@ -1,6 +1,13 @@
 // Per-project config for the connector. Lives in `.unitbob.json` at the project
-// root: { "server": "http://…", "repo_id": 3 }. No secret — auth is deferred
-// (spec 15, decision #3). Linking is automatic (spec 28): every verb goes
+// root: { "server": "http://…", "repo_id": 3, "token": "…" }.
+//
+// The token is the project's key (spec 33): the brain mints it at register, every
+// wire call carries it, and this file is the only place a person has it. It is
+// gitignored — see ensureGitignored — because a committed token hands the project
+// to whoever reads the repository. Lose the file and the project is gone: there
+// is no recovery and no rotation, which is written down in the spec as accepted.
+//
+// Linking is automatic (spec 28): every verb goes
 // through `ensureLinked` (src/link.ts), which registers the project by folder
 // name when there is no working link. Only the project root's own file counts —
 // never a parent directory's (no walk-up).
@@ -11,6 +18,7 @@ import { dirname, join } from 'node:path';
 export interface Config {
   server: string;
   repoId: number;
+  token: string;
   projectRoot: string;
 }
 
@@ -31,6 +39,14 @@ export function readLocalRepoId(cwd: string): number | null {
 export function readLocalServer(cwd: string): string | null {
   const server = readConfigField(cwd, 'server');
   return typeof server === 'string' && /^https?:\/\//.test(server.trim()) ? server.trim() : null;
+}
+
+// The token stored at `cwd`, or null when there is none. A project linked
+// before spec 33 has an id and no token; its calls now 404, and the connector
+// says so in words rather than showing a bare status.
+export function readLocalToken(cwd: string): string | null {
+  const token = readConfigField(cwd, 'token');
+  return typeof token === 'string' && token.length > 0 ? token : null;
 }
 
 function readConfigField(cwd: string, field: string): unknown {
@@ -69,6 +85,9 @@ export function locateLinkedRoot(cwd: string): string | null {
   }
 }
 
-export function writeConfigFile(cwd: string, config: { server: string; repo_id: number }): void {
+export function writeConfigFile(
+  cwd: string,
+  config: { server: string; repo_id: number; token: string },
+): void {
   writeFileSync(join(cwd, CONFIG_FILE), `${JSON.stringify(config, null, 2)}\n`);
 }

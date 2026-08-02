@@ -15,7 +15,7 @@ function tmpProject(): string {
 }
 
 function config(projectRoot: string): Config {
-  return { server: 'https://host', repoId: 3, projectRoot };
+  return { server: 'https://host', repoId: 3, token: 'secret-token', projectRoot };
 }
 
 const okStack = () => ({ ok: true });
@@ -122,7 +122,9 @@ test('runs both peer suites and ships one batch of two run_results', async () =>
   ]);
   assert.match(output, /Architecture checks passed/);
   assert.match(output, /Product behaviour checks passed/);
-  assert.match(output, /https:\/\/host\/repos\/3\/map/);
+  // The map link is printed through the exchanger, with the token added here at
+  // the moment of printing (spec 33).
+  assert.match(output, /\/repos\/3\/enter\?next=%2Frepos%2F3%2Fmap#t=secret-token/);
 });
 
 test('a structural stack mismatch becomes that branch suite_error; the behavioral branch still runs', async () => {

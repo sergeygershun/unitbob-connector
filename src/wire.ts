@@ -152,10 +152,22 @@ export interface FixPacket {
 // Verbs surface its message and exit non-zero; they never fabricate a result.
 export class WireError extends Error {}
 
+// The pair a new project is born with (spec 33): the brain's internal id, and
+// the token that is the only proof of ownership there is.
+export interface RepoRegistration {
+  id: number;
+  token: string;
+}
+
 // POST /repos/register — the linking bootstrap (spec 28). A standalone function
 // rather than a Wire method because at link time there is no Config yet: only a
-// server URL and the project's folder name. Idempotent on the server.
-export async function registerRepo(server: string, name: string): Promise<number> {
+// server URL and the project's folder name.
+//
+// It is no longer idempotent, and must not be called on an already-linked
+// project: since spec 33 every call mints a brand-new project. Looking one up by
+// folder name is exactly what used to let two people with a `myapp` write into
+// the same repository.
+export async function registerRepo(server: string, name: string): Promise<RepoRegistration> {
   const url = `${server}/repos/register`;
   let res: Response;
   try {
@@ -181,11 +193,17 @@ export async function registerRepo(server: string, name: string): Promise<number
     throw new WireError(`POST ${url} failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`);
   }
 
-  const payload = (await res.json()) as { id?: unknown };
+  const payload = (await res.json()) as { id?: unknown; token?: unknown };
   if (typeof payload.id !== 'number' || !Number.isInteger(payload.id)) {
     throw new WireError(`POST ${url} returned a malformed payload: expected an integer id.`);
   }
-  return payload.id;
+  if (typeof payload.token !== 'string' || payload.token.length === 0) {
+    throw new WireError(
+      `POST ${url} returned no project token — this Unitbob server is older than this connector. ` +
+        'Upgrade the server, or pin an older unitbob version.',
+    );
+  }
+  return { id: payload.id, token: payload.token };
 }
 
 export class Wire {
@@ -373,11 +391,16 @@ export class Wire {
     return suite as unknown as SuiteBlob;
   }
 
+  // Every wire call carries the project's token (spec 33). Without it the brain
+  // answers 404 — never 403, which would confirm the project exists.
   private async send(method: string, url: string, body?: unknown): Promise<Response> {
+    const headers: Record<string, string> = { authorization: `Bearer ${this.config.token}` };
+    if (body !== undefined) headers['content-type'] = 'application/json';
+
     try {
       return await fetch(url, {
         method,
-        headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+        headers,
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (err) {
@@ -391,6 +414,18 @@ export class Wire {
 
   private async ensureOk(res: Response, what: string): Promise<void> {
     if (res.ok) return;
+
+    // A 404 on the wire means one of two things and there is no way to tell them
+    // apart from here — by design, since telling them apart is what would let a
+    // stranger discover which projects exist. Both have the same cure.
+    if (res.status === 404) {
+      throw new WireError(
+        `This project is linked to a repository the server at ${this.config.server} does not have, ` +
+          'or the token in .unitbob.json does not open it. Delete .unitbob.json to link again ' +
+          '(the old project, along with its map and checks, stays where it is).',
+      );
+    }
+
     let detail = '';
     try {
       detail = (await res.text()).slice(0, 500);

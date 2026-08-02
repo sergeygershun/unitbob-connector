@@ -9,6 +9,7 @@ interface Hit {
   method: string;
   url: string;
   body: string;
+  authorization: string | undefined;
 }
 
 // Start a tiny HTTP server that records every request and answers via `handler`.
@@ -21,7 +22,12 @@ async function withServer(
     let body = '';
     req.on('data', (chunk) => (body += chunk));
     req.on('end', () => {
-      const hit = { method: req.method ?? '', url: req.url ?? '', body };
+      const hit = {
+        method: req.method ?? '',
+        url: req.url ?? '',
+        body,
+        authorization: req.headers.authorization,
+      };
       hits.push(hit);
       handler(hit, res);
     });
@@ -29,7 +35,12 @@ async function withServer(
 
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const { port } = server.address() as AddressInfo;
-  const config: Config = { server: `http://127.0.0.1:${port}`, repoId: 3, projectRoot: '/project' };
+  const config: Config = {
+    server: `http://127.0.0.1:${port}`,
+    repoId: 3,
+    token: 'secret-token',
+    projectRoot: '/project',
+  };
   try {
     await fn(config, hits);
   } finally {
@@ -332,9 +343,56 @@ test('a batch endpoint answering without its array is a WireError', async () => 
 
 test('an unreachable server throws an actionable WireError, never a fabricated result', async () => {
   // Port 1 is reserved and nothing listens there → connection refused.
-  const config: Config = { server: 'http://127.0.0.1:1', repoId: 3, projectRoot: '/project' };
+  const config: Config = {
+    server: 'http://127.0.0.1:1',
+    repoId: 3,
+    token: 'secret-token',
+    projectRoot: '/project',
+  };
   await assert.rejects(
     () => new Wire(config).getLamps(),
     (err: unknown) => err instanceof WireError && /Cannot reach the Unitbob server/.test((err as Error).message),
+  );
+});
+
+// Spec 33. The project's token rides on every wire call; without it the brain
+// answers 404, and it answers the same 404 for a token that belongs to someone
+// else — a 403 would confirm the project exists.
+test('every wire call carries the project token', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { suites: [] }),
+    async (config, hits) => {
+      await new Wire(config).getSuites();
+      assert.equal(hits[0].authorization, 'Bearer secret-token');
+    },
+  );
+});
+
+test('a 404 on the wire is explained, not shown as a bare status', async () => {
+  await withServer(
+    (_hit, res) => json(res, 404, {}),
+    async (config) => {
+      await assert.rejects(
+        new Wire(config).getSuites(),
+        (err: Error) =>
+          err instanceof WireError &&
+          /does not have/.test(err.message) &&
+          /Delete \.unitbob\.json/.test(err.message),
+      );
+    },
+  );
+});
+
+// The recipe endpoint keeps its own 404 message: there the missing thing is the
+// recipe, not the project.
+test('an unknown recipe still says so by name', async () => {
+  await withServer(
+    (_hit, res) => json(res, 404, {}),
+    async (config) => {
+      await assert.rejects(
+        new Wire(config).getRecipe('nope'),
+        (err: Error) => err instanceof WireError && /Unknown recipe "nope"/.test(err.message),
+      );
+    },
   );
 });
