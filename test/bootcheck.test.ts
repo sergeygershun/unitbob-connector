@@ -83,18 +83,62 @@ test('a missing gem reads as environment, not as a defect', async () => {
   assert.equal(result.status === 'broken' && result.cause, 'environment_not_ready');
 });
 
-// The half a Rails-shaped reading misses. Ruby resolves gems before the first
-// application file, so "missing dependency" there never has a project frame.
-// Python and JS resolve the import from inside a project file, so the frame is
-// present and the rule "project frame means defect" would call an un-run
+// The half a Rails-shaped reading misses, and the pair of tests that actually
+// proves both halves are load-bearing.
+//
+// The first version of this test used a project whose files did not exist, so
+// "is there a frame in the project's own code" answered no for the wrong
+// reason and the dependency rule alone decided the outcome. It passed with the
+// second condition deleted — it guarded nothing, which is why it did not catch
+// the Python misclassification the sibling test below now pins.
+//
+// Here the frame is a file that really is in the project. Ruby resolves gems
+// through `bundler/setup` before the first application file, so a missing gem
+// there never has a project frame; Python and JS resolve the import from inside
+// one, so "project frame means defect" on its own would call an un-run
 // `pip install` a bug in the user's code.
-test('a missing module inside a project file is still environment, not a defect', async () => {
+function pythonProject(): string {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, 'mypackage'), { recursive: true });
+  writeFileSync(join(projectRoot, 'mypackage', 'billing.py'), 'x = 1\n');
+  return projectRoot;
+}
+
+test('a missing module inside a real project file is still environment, not a defect', async () => {
   const stdout = [
-    'tests/test_foo.py:3: in <module>',
+    'mypackage/billing.py:3: in <module>',
     '    import requests',
     "E   ModuleNotFoundError: No module named 'requests'",
   ].join('\n');
-  const result = await bootCheck(tmpProject(), 'pytest', fakeRunner([{ code: 2, stdout }]));
+  const result = await bootCheck(pythonProject(), 'pytest', fakeRunner([{ code: 2, stdout }]));
+
+  // The frame *is* in the project's own code, so only the dependency rule can
+  // produce this answer. Delete that rule and this test fails.
+  assert.equal(result.status === 'broken' && result.cause, 'environment_not_ready');
+});
+
+// The other direction, and the one the first draft got wrong: the same project
+// frame, an error that is not a missing dependency. pytest prints frames
+// relative to the working directory, so neither the Rails directory names nor
+// an absolute-path match sees this — the file has to be recognised by existing.
+test('a real defect in the project\'s own Python file is a defect, not environment', async () => {
+  const stdout = [
+    'mypackage/billing.py:12: in <module>',
+    'E   NameError: name "Decimal" is not defined',
+  ].join('\n');
+  const result = await bootCheck(pythonProject(), 'pytest', fakeRunner([{ code: 2, stdout }]));
+
+  assert.equal(result.status === 'broken' && result.cause, 'defect_in_code');
+});
+
+// A frame that names a file this project does not have is not this project's
+// code, however plausible the path looks.
+test('a frame in an installed dependency is not the project\'s own code', async () => {
+  const stdout = [
+    '.venv/lib/python3.12/site-packages/requests/api.py:59: in request',
+    'E   TypeError: unhashable type',
+  ].join('\n');
+  const result = await bootCheck(pythonProject(), 'pytest', fakeRunner([{ code: 2, stdout }]));
 
   assert.equal(result.status === 'broken' && result.cause, 'environment_not_ready');
 });
@@ -123,19 +167,48 @@ test('pytest: no tests to collect is not checked, not broken', async () => {
   assert.deepEqual(result, { status: 'not_checked', reason: 'nothing_to_load' });
 });
 
+// `list` is a subcommand only from Vitest 2.1, so the version is asked first.
+// Measured on 1.6.0: `vitest list` there is a filename filter, which reported
+// "No test files found" on a project full of tests and, when a name happened to
+// match, started watch mode and hung until the timeout.
+function vitestRunner(version: string, ...results: { code: number | null; stdout?: string; stderr?: string }[]) {
+  return fakeRunner([{ code: 0, stdout: `vitest/${version} darwin-arm64` }, ...results]);
+}
+
 test('vitest: listing the test files succeeds', async () => {
-  const deps = fakeRunner([{ code: 0 }]);
+  const deps = vitestRunner('2.1.8', { code: 0 });
   const result = await bootCheck(vitestProject(), 'vitest', deps);
 
   assert.deepEqual(result, { status: 'ok' });
-  assert.match(deps.calls[0], /vitest list$/);
+  assert.match(deps.calls[0], /vitest --version$/);
+  assert.match(deps.calls[1], /vitest list$/);
+});
+
+test('vitest older than the list subcommand is not checked, and never run', async () => {
+  const deps = vitestRunner('1.6.0');
+  const result = await bootCheck(vitestProject(), 'vitest', deps);
+
+  assert.deepEqual(result, { status: 'not_checked', reason: 'no_runner' });
+  // Only the version was asked. `list` is never attempted, so it can neither
+  // answer about the wrong thing nor hang for two minutes.
+  assert.equal(deps.calls.length, 1);
+  assert.match(deps.calls[0], /--version$/);
+});
+
+test('a vitest whose version cannot be read is not checked, not broken', async () => {
+  const deps = fakeRunner([{ code: 0, stdout: 'something unexpected' }]);
+
+  assert.deepEqual(await bootCheck(vitestProject(), 'vitest', deps), {
+    status: 'not_checked',
+    reason: 'no_runner',
+  });
 });
 
 test('vitest: a project with no test files is not checked, not broken', async () => {
   const result = await bootCheck(
     vitestProject(),
     'vitest',
-    fakeRunner([{ code: 1, stderr: 'No test files found, exiting with code 1' }]),
+    vitestRunner('2.1.8', { code: 1, stderr: 'No test files found, exiting with code 1' }),
   );
 
   assert.deepEqual(result, { status: 'not_checked', reason: 'nothing_to_load' });
@@ -145,7 +218,7 @@ test('vitest: an unparseable test file is broken', async () => {
   const result = await bootCheck(
     vitestProject(),
     'vitest',
-    fakeRunner([{ code: 1, stderr: 'Error: Transform failed with 1 error:\nsrc/cart.ts:4:2: ERROR: Expected ")"' }]),
+    vitestRunner('2.1.8', { code: 1, stderr: 'Error: Transform failed with 1 error:\nsrc/cart.ts:4:2: ERROR: Expected ")"' }),
   );
 
   assert.equal(result.status, 'broken');
@@ -258,6 +331,20 @@ test('a database.yml we cannot read two names out of stops the repair', () => {
 // The project's own dependencies rewrite Gemfile.lock and package-lock.json,
 // which are the user's files — outside the sandbox rule that lets us write a
 // sidecar Gemfile and a test database. They are named to the human instead.
+// Preparing the test database drops and reloads the schema. Doing that because
+// a model has a syntax error is a side effect nobody asked for and a wait that
+// buys nothing — the retry would fail on the same line.
+test('a failure that is not about the database does not trigger a prepare', async () => {
+  const projectRoot = withDatabaseYml(railsProject(), SEPARATE_DATABASES);
+  const deps = fakeRunner([{ code: 1, stderr: "app/models/report.rb:1: syntax error, unexpected end (SyntaxError)" }]);
+
+  const result = await bootCheck(projectRoot, 'rspec', deps);
+
+  assert.equal(result.status, 'broken');
+  assert.equal(deps.calls.length, 1, 'the load was attempted once and nothing was prepared');
+  assert.ok(!deps.calls.some((call) => call.includes('db:test:prepare')));
+});
+
 test('the project\'s own dependencies are never installed', async () => {
   const projectRoot = withDatabaseYml(railsProject(), SEPARATE_DATABASES);
   const deps = fakeRunner([{ code: 1, stderr: 'Bundler::GemNotFound: Could not find rake-13.0.6' }, { code: 0 }, { code: 1, stderr: 'Bundler::GemNotFound' }]);

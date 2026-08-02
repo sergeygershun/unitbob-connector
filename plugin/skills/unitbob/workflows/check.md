@@ -1,7 +1,7 @@
 Run every Unitbob contract suite for this project and report the result.
 
 Do this:
-1. `npx -y --loglevel=error unitbob@0.2.9 run` — this fetches both current
+1. `npx -y --loglevel=error unitbob@0.2.10 run` — this fetches both current
    suites (structural and behavioral), runs each `ready` one locally with its own
    runner (RSpec/Vitest/pytest for structural; `cucumber`/`@cucumber/cucumber`/
    `pytest-bdd` for behavioral — the connector picks the command, nothing to

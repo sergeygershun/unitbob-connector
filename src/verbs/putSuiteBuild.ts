@@ -1,13 +1,13 @@
 import type { Config } from '../config.ts';
 import {
   readBehavioralReview,
-  readHostSuiteOutputs,
+  readHostSuiteOutputsPerBranch,
   readSuiteBuildRequest,
   type HostBranchOutput,
   type SuiteBuildBranch,
   type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
-import { collectBuildProblems, formatProblems } from './validateBuild.ts';
+import { collectBuildProblems, formatBranchProblems } from './validateBuild.ts';
 import { Wire, type SuiteBuildItem, type SuiteBuildResult } from '../wire.ts';
 
 interface PutSuiteBuildDeps {
@@ -24,8 +24,11 @@ interface PutSuiteBuildDeps {
 // and its peer still goes up — one branch's problem is never the other's.
 //
 // The line between "skip this branch" and "upload nothing" is whose problem it
-// is: a malformed answer file is the whole answer and stops everything, while a
-// missing or stale review belongs to the behavioral branch alone.
+// is. The answer *file* is the whole answer: missing, unparseable, or carrying
+// no branches array, it stops everything, because there is no second problem to
+// find. Everything smaller belongs to one branch — a malformed entry, a review
+// that will not bind, a marker the local check could not account for — and its
+// peer still goes up.
 //
 // Returns the server's per-branch results so the caller can compose the first run
 // on top of them (spec 32-4) without parsing the lines printed here.
@@ -35,26 +38,46 @@ export async function putSuiteBuild(
   deps?: Partial<PutSuiteBuildDeps>,
 ): Promise<SuiteBuildResult[]> {
   const request = readSuiteBuildRequest(config.projectRoot);
-  const outputs = readHostSuiteOutputs(request.output_path, request);
+  // Spec 32-6: read branch by branch, so one unreadable entry neither hides the
+  // next branch's problems nor sinks a peer that is finished and correct.
+  const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
   const d: PutSuiteBuildDeps = {
     putSuiteBuilds: (items) => new Wire(config).putSuiteBuilds(items),
     stdout: process.stdout,
     ...deps,
   };
 
-  // Spec 32-6: the same check `unitbob validate-build` runs, run here too, so it
-  // cannot be skipped by going straight to the upload. It stops the whole
-  // command rather than dropping a branch: these are format mistakes in the
-  // answer, they are named in full, and they are fixed by answering again.
-  const problems = collectBuildProblems(request, outputs);
-  if (problems.length > 0) throw new Error(formatProblems(problems));
-
   const digestFor = new Map(request.branches.map((branch) => [branch.suite_kind, branch.source_digest]));
 
   const items: SuiteBuildItem[] = [];
-  const blocked: SuiteBuildResult[] = [];
+  const blocked: SuiteBuildResult[] = unreadable.map((entry) => ({
+    suite_kind: entry.suite_kind,
+    status: BLOCKED_STATUS,
+    error: entry.message,
+  }));
+
+  // The same check `unitbob validate-build` runs, run here too so it cannot be
+  // skipped by going straight to the upload — but reported the way every other
+  // local failure here is reported: against the branch it belongs to.
+  //
+  // An earlier draft threw and stopped the command, which quietly undid spec
+  // 32-5 Phase 4: one missing marker in the behavioral answer would have left a
+  // finished structural suite unpublished. Every problem this check raises is
+  // already named against a branch, so it blocks that branch and never the
+  // batch. That also bounds what a false positive in a local check can cost —
+  // one branch, with the peer still going up and the server still the authority.
+  const problemsFor = new Map<string, string[]>();
+  for (const problem of collectBuildProblems(request, outputs)) {
+    problemsFor.set(problem.branch, [...(problemsFor.get(problem.branch) ?? []), problem.message]);
+  }
 
   for (const output of outputs) {
+    const failed = problemsFor.get(output.suite_kind);
+    if (failed) {
+      blocked.push({ suite_kind: output.suite_kind, status: BLOCKED_STATUS, error: formatBranchProblems(failed) });
+      continue;
+    }
+
     const sourceDigest = digestFor.get(output.suite_kind) ?? '';
     if (output.build_error) {
       items.push({ suite_kind: output.suite_kind, source_digest: sourceDigest, build_error: output.build_error });

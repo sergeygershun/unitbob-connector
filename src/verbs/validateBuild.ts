@@ -1,6 +1,6 @@
 import type { Config } from '../config.ts';
 import {
-  readHostSuiteOutputs,
+  readHostSuiteOutputsPerBranch,
   readSuiteBuildRequest,
   type HostBranchOutput,
   type SuiteBuildBranch,
@@ -26,6 +26,17 @@ import {
 // only compares the two documents in front of it. That is the same line spec
 // 32-5 drew for `runner_manifest`: selecting and checking against a server-owned
 // envelope is transport; authoring one would not be.
+//
+// The cost of that exception, stated plainly: these rules also exist in
+// `GuardrailSuiteOutputValidator`, and two copies can drift. Drift in one
+// direction is harmless — the server rejects something this passed, which is
+// the order of authority anyway. Drift in the other direction is not: a false
+// positive here refuses an answer the server would have taken. That is why
+// `put-suite-build` reports these against one branch instead of stopping the
+// command — a wrong check can cost a branch, never the batch, and the peer goes
+// up regardless. If these ever need to be more than a fast pre-read of the
+// obvious mistakes, the rules should come down the wire from the server rather
+// than be copied more thoroughly.
 export interface BuildProblem {
   branch: string;
   message: string;
@@ -56,7 +67,7 @@ export function collectBuildProblems(
     if (output.build_error) continue;
 
     const branch = branchFor.get(output.suite_kind);
-    if (!branch) continue; // readHostSuiteOutputs already refused this one
+    if (!branch) continue; // reading the answer already refused this one
 
     const add = (message: string): void => { problems.push({ branch: output.suite_kind, message }); };
     checkRunnerManifest(branch, output, add);
@@ -235,15 +246,27 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
-// Reads the task and the answer and reports every problem it can see. Both
-// halves matter: reading the answer is itself a check (safe paths, files that
-// exist, a parseable envelope), and it stops at the first problem because a
-// malformed answer file has no second problem to find — there is no document to
-// go on reading.
+// Reads the task and the answer and reports every problem it can see. Reading
+// the answer is itself a check — safe paths, files that exist, a parseable
+// envelope — and it is done branch by branch, so a bad entry in one contributes
+// its problem and the other is still examined. Only the answer file as a whole
+// can stop the pass, because then there is no document left to read.
 export function validateBuildProblems(config: Config): BuildProblem[] {
   const request = readSuiteBuildRequest(config.projectRoot);
-  const outputs = readHostSuiteOutputs(request.output_path, request);
-  return collectBuildProblems(request, outputs);
+  const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
+
+  return [
+    ...unreadable.map((entry) => ({ branch: entry.suite_kind, message: entry.message })),
+    ...collectBuildProblems(request, outputs),
+  ];
+}
+
+// One branch's problems, for the line that reports it unpublished alongside its
+// peer. `put-suite-build` blocks per branch, so its message is per branch too.
+export function formatBranchProblems(messages: string[]): string {
+  if (messages.length === 1) return messages[0];
+
+  return `${messages.length} problems in this branch's answer:\n${messages.map((m) => `      - ${m}`).join('\n')}`;
 }
 
 // One report, not a queue of one-at-a-time discoveries. Fixing one thing to be

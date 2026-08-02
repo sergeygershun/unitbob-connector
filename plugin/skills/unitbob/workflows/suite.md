@@ -12,7 +12,7 @@ uploaded, never source:
 Neither replaces the other; they have independent versions, runs, and lamps.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.2.9 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.2.10 suite-prepare` with exactly one
    defect-context option. If the user or acceptance material named a known defect, append
    `--known-defect='<exact defect description>'`; when a fixed revision was
    supplied, also append `--fixed-revision='<exact revision>'`. Never omit the
@@ -102,7 +102,7 @@ Do this:
    cannot build gets `{ "suite_kind": ..., "build_error": { "message": "..." } }`
    instead — it never blocks the peer branch. Never emit `spec_rb`, `rspec_id`,
    `example_id`, or `run_command`. No prose around the JSON.
-5. Run `npx -y --loglevel=error unitbob@0.2.9 validate-build`. It checks your
+5. Run `npx -y --loglevel=error unitbob@0.2.10 validate-build`. It checks your
    answer against the request in seconds — the manifest you copied verbatim,
    every assigned id answered exactly once, markers unchanged and actually
    present in the files you wrote, paths safe and files on disk. It names
@@ -112,7 +112,7 @@ Do this:
    has the last word, so a clean result here is not a promise it will publish.
 6. If no behavioral candidate was built (or it carries `build_error`), skip the
    review step and continue to step 8 so the structural peer can still publish.
-   Otherwise run `npx -y --loglevel=error unitbob@0.2.9 suite-review-prepare`. It reads the
+   Otherwise run `npx -y --loglevel=error unitbob@0.2.10 suite-review-prepare`. It reads the
    finished behavioral candidate, runs that exact candidate to capture machine
    evidence (and repeats it in a disposable worktree when a fixed revision was
    supplied), keeps that evidence in its own
@@ -142,7 +142,7 @@ Do this:
    connector-owned `candidate_run`/`fixed_candidate_run` evidence and never call
    it `not_supplied`. This is a local process attestation, not authenticated
    reviewer identity; do not describe it as cryptographic proof of independence.
-8. Run `npx -y --loglevel=error unitbob@0.2.9 put-suite-build`. It uploads both
+8. Run `npx -y --loglevel=error unitbob@0.2.10 put-suite-build`. It uploads both
    branches in one batch, each validated and published independently, and then
    runs every branch it published and prints the server's result for each plus
    the map URL. This is the last command: it lights the lamps itself, so never

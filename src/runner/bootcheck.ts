@@ -111,9 +111,24 @@ async function rubyBootCheck(projectRoot: string, deps: BootCheckDeps): Promise<
   // Repair what we are allowed to repair, then ask once more. A vibecoder has
   // no test database — demanding one would turn away nearly every user we have.
   // Never in a loop: one attempt, one retry, then the answer stands.
+  //
+  // Only when the failure is about the database, though. Preparing it is not
+  // free — it drops and reloads the schema, tens of seconds on a large app —
+  // and doing that in response to a syntax error is a side effect nobody asked
+  // for and a wait that buys nothing.
+  if (!looksLikeDatabase(first.detail)) return first;
   if (!(await prepareTestDatabase(projectRoot, deps))) return first;
 
   return loadRubyHelper(projectRoot, helper, deps);
+}
+
+// Is this failure about the database at all? Kept as one broad signal rather
+// than a list of adapter error classes — the same reason the cause heuristics
+// stay generic. Being wrong here is cheap in one direction (a preparation we
+// did not need) and cheap in the other (we return the failure we already have,
+// which is honest either way).
+function looksLikeDatabase(detail: string): boolean {
+  return /database|migration|schema|ActiveRecord::(NoDatabase|StatementInvalid|PendingMigration)/i.test(detail);
 }
 
 async function loadRubyHelper(
@@ -175,12 +190,44 @@ async function vitestBootCheck(projectRoot: string, deps: BootCheckDeps): Promis
   // user's project is not this check's business.
   if (!existsSync(local)) return { status: 'not_checked', reason: 'no_runner' };
 
+  // `list` is a subcommand only from Vitest 2.1. Older versions read it as a
+  // *filename filter* and go on to run whatever it matches, which was measured
+  // doing two unhelpful things: reporting "No test files found" on a project
+  // that plainly has tests, and — when a file happened to match — starting watch
+  // mode and hanging until the timeout killed it, two minutes for nothing.
+  //
+  // Neither is `broken`, so no healthy project was ever refused. But a check
+  // that quietly answers about the wrong thing is worse than one that says it
+  // did not run, so ask the version first and decline outright when the
+  // subcommand does not exist.
+  if (!(await supportsList(projectRoot, local, deps))) {
+    return { status: 'not_checked', reason: 'no_runner' };
+  }
+
   const result = await attempt(deps, local, ['list'], { cwd: projectRoot });
   return classify(projectRoot, 'vitest', result, (proc) => {
     if (proc.code === 0) return 'ok';
     if (/no test files found/i.test(`${proc.stdout}\n${proc.stderr}`)) return 'nothing_to_load';
     return 'broken';
   });
+}
+
+// The first Vitest that has a `list` subcommand. Below this it is a filter.
+const VITEST_LIST_FROM = { major: 2, minor: 1 };
+
+// `vitest --version` prints e.g. `vitest/1.6.0 darwin-arm64 node-v25.2.1`. A
+// version we cannot read is treated as unsupported: guessing wrong here costs
+// either a silent non-answer or a two-minute hang, and both are worse than
+// saying plainly that the check did not run.
+async function supportsList(projectRoot: string, binary: string, deps: BootCheckDeps): Promise<boolean> {
+  const result = await attempt(deps, binary, ['--version'], { cwd: projectRoot });
+  if (!result || result.code !== 0) return false;
+
+  const found = /vitest\/(\d+)\.(\d+)/i.exec(`${result.stdout}\n${result.stderr}`);
+  if (!found) return false;
+
+  const [major, minor] = [Number(found[1]), Number(found[2])];
+  return major > VITEST_LIST_FROM.major || (major === VITEST_LIST_FROM.major && minor >= VITEST_LIST_FROM.minor);
 }
 
 // Runs one command, turning "this binary is not on the machine" into null (the
@@ -259,32 +306,53 @@ function causeOf(output: string, projectRoot: string, runner: string): 'defect_i
 // There is a project frame, and it is an un-run `pip install`. Hence the second
 // condition above.
 function hasProjectFrame(output: string, projectRoot: string, runner: string): boolean {
-  // A leading `/` counts: runners print these paths both relative to the
-  // project and absolute, and both are the same frame. Over-matching a
-  // dependency's own `app/` directory is harmless here, because the
-  // dependency-missing test above has already had its say.
+  // Line by line, because a stack frame names one file and the question is
+  // asked of that file. Judging the whole output at once let `.venv/lib/...`
+  // answer yes on the strength of its `lib/`, which is how a `TypeError` deep
+  // inside a dependency came back as a defect in the user's code.
   const ownDirs = runner === 'vitest' ? ['src'] : ['app', 'lib'];
-  for (const dir of ownDirs) {
-    if (new RegExp(`(^|[\\s"'(\\[/])${dir}/`, 'm').test(output)) return true;
+  const conventional = new RegExp(`(^|[\\s"'(\\[/])(${ownDirs.join('|')})/`);
+
+  for (const line of output.split('\n')) {
+    // Wherever a dependency is installed, it is not this project's code — and
+    // that has to be decided before anything below gets a chance to say yes.
+    if (INSTALLED_DEPENDENCY.test(line)) continue;
+
+    // The conventional homes of business code, relative or absolute.
+    if (conventional.test(line)) return true;
+    if (line.includes(projectRoot)) return true;
+
+    // Python names no fixed layout the way Rails does, and pytest prints frames
+    // relative to the working directory — `mypackage/billing.py:12`, matching
+    // neither of the two rules above. So fall back to the only thing that
+    // generalises: the file in this frame is a file this repository has.
+    //
+    // Data-driven, so it needs no list of package names and holds for
+    // src-layout, flat-layout and anything else. Without it a genuine
+    // `NameError` in the user's own module was reported as "your environment is
+    // not ready", sending them to run `pip install` over a typo.
+    for (const [, candidate] of line.matchAll(SOURCE_FRAME)) {
+      if (existsSync(join(projectRoot, candidate))) return true;
+    }
   }
 
-  // Python has no fixed layout to name, so the project's own code is defined by
-  // where it sits: inside the repository and outside the places dependencies
-  // are installed into. That rule needs no list of package names and holds for
-  // any layout.
-  return output
-    .split('\n')
-    .some(
-      (line) =>
-        line.includes(projectRoot) &&
-        !/site-packages|dist-packages|node_modules|[/.]venv\//.test(line),
-    );
+  return false;
 }
+
+// Where a dependency lives once installed — never the project's own code, in
+// any of the three languages.
+const INSTALLED_DEPENDENCY = /site-packages|dist-packages|node_modules|[/.]venv[/\\]|\/gems\//;
+
+// A `path/to/file.ext:LINE` frame, as every one of these runners prints them.
+const SOURCE_FRAME = /([\w.\-/\\]+\.(?:py|rb|ts|tsx|js|jsx|mjs|cjs)):\d+/g;
 
 // The runner's own words, never a paraphrase. A vibecoder can search for this
 // string; a summary of it they cannot. File and line come along when the runner
 // put them on the same line, and are not manufactured when it did not.
-function firstErrorLine(output: string): string {
+//
+// Exported because spec 32-7 asks a second tool to load the application (the
+// router), and one rule for quoting a failed load is better than two.
+export function firstErrorLine(output: string): string {
   const lines = output.split('\n').map((line) => line.trim()).filter(Boolean);
   const looksLikeError =
     /(^|[^A-Za-z])(error|exception|traceback)|:\d+:in |^E\s|\(.*Error\)/i;

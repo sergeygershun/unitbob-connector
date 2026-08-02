@@ -345,6 +345,55 @@ function readKnownDefectContext(value: unknown, path: string): KnownDefectContex
 // build_error, which the connector relays. Anything unparseable throws and
 // nothing is uploaded.
 export function readHostSuiteOutputs(path: string, request: SuiteBuildRequest): HostBranchOutput[] {
+  const { entries, rootFor } = openAnswer(path, request);
+  return entries.map((entry) => readBranch(entry, rootFor, path, request.project_root));
+}
+
+// A branch whose entry could not be read at all, named so the caller can report
+// it against that branch instead of against the whole answer.
+export interface UnreadableBranch {
+  suite_kind: string;
+  message: string;
+}
+
+// The same read, but one branch's bad entry does not hide the next branch's.
+//
+// Spec 32-6, after review: the throwing form above stops at the first problem,
+// so an unsafe path in one branch concealed every remaining problem in its peer
+// — and the promise this validation was built on is that all problems are named
+// in one pass. It also sank a finished peer branch, which is the exact rule spec
+// 32-5 Phase 4 established against.
+//
+// What still throws is the answer as a whole: a file that is missing, is not
+// JSON, or carries no branches array has no second problem to go and find,
+// because there is no document left to read.
+export function readHostSuiteOutputsPerBranch(
+  path: string,
+  request: SuiteBuildRequest,
+): { outputs: HostBranchOutput[]; unreadable: UnreadableBranch[] } {
+  const { entries, rootFor } = openAnswer(path, request);
+  const outputs: HostBranchOutput[] = [];
+  const unreadable: UnreadableBranch[] = [];
+
+  for (const entry of entries) {
+    try {
+      outputs.push(readBranch(entry, rootFor, path, request.project_root));
+    } catch (err) {
+      const kind = (entry as Record<string, unknown> | null)?.suite_kind;
+      unreadable.push({
+        suite_kind: typeof kind === 'string' && kind ? kind : 'unknown branch',
+        message: (err as Error).message,
+      });
+    }
+  }
+
+  return { outputs, unreadable };
+}
+
+function openAnswer(
+  path: string,
+  request: SuiteBuildRequest,
+): { entries: unknown[]; rootFor: Map<string, string> } {
   if (!existsSync(path)) {
     throw new Error(`${path} not found — the host suite builder did not write its output.`);
   }
@@ -355,8 +404,10 @@ export function readHostSuiteOutputs(path: string, request: SuiteBuildRequest): 
     throw new Error(`${path} is malformed: expected a branches array, one entry per contract system.`);
   }
 
-  const rootFor = new Map(request.branches.map((branch) => [branch.suite_kind, branch.path_root]));
-  return branches.map((entry) => readBranch(entry, rootFor, path, request.project_root));
+  return {
+    entries: branches,
+    rootFor: new Map(request.branches.map((branch) => [branch.suite_kind, branch.path_root])),
+  };
 }
 
 function readBranch(entry: unknown, rootFor: Map<string, string>, path: string, projectRoot: string): HostBranchOutput {

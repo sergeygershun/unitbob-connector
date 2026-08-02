@@ -278,23 +278,31 @@ test('put-suite-build refuses not_supplied when suite-prepare recorded a known d
   await assertBehavioralBlocked(projectRoot, /known defect.*not_supplied/i);
 });
 
-test('put-suite-build rejects a behavioral branch whose file escapes the behavioral root', async () => {
+// The property that matters is that the escaping file never leaves this
+// machine, and it does not: the branch carrying it is blocked and named. Its
+// structural peer, separately checked and safe, publishes — refusing it would
+// add no safety, and 32-5 Phase 4 is explicit that one branch's problem is not
+// the other's.
+test('a behavioral file that escapes its root is blocked, and never uploaded', async () => {
   const projectRoot = tmpProject();
   writeTask(projectRoot);
   const escaped = behavioralBranch();
   (escaped.suite_file as Record<string, unknown>).path = 'features/pwned.feature';
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), escaped] }));
 
-  let uploaded = false;
-  await assert.rejects(
-    () =>
-      putSuiteBuild(config(projectRoot), [], {
-        putSuiteBuilds: async () => { uploaded = true; throw new Error('should not upload'); },
-        stdout: { write: () => true },
-      }),
-    /\.unitbob\/behavioral\//,
-  );
-  assert.equal(uploaded, false);
+  let uploaded: SuiteBuildItem[] = [];
+  const results = await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async (items) => {
+      uploaded = items;
+      return okResults.filter((result) => items.some((item) => item.suite_kind === result.suite_kind));
+    },
+    stdout: { write: () => true },
+  });
+
+  assert.deepEqual(uploaded.map((item) => item.suite_kind), ['structural']);
+  assert.ok(!JSON.stringify(uploaded).includes('pwned.feature'), 'the escaping path never left this machine');
+  assert.match(results.find((r) => r.suite_kind === 'behavioral')?.error ?? '', /\.unitbob\/behavioral\//);
+  assert.deepEqual(classifyPublication(results), { digests: ['s'], unpublished: ['behavioral'] });
 });
 
 test('put-suite-build rejects the legacy spec_rb shape', async () => {
@@ -305,10 +313,16 @@ test('put-suite-build rejects the legacy spec_rb shape', async () => {
     JSON.stringify({ branches: [{ suite_kind: 'structural', spec_rb: "require 'rails_helper'\n" }] }),
   );
 
-  await assert.rejects(
-    () => putSuiteBuild(config(projectRoot), [], { putSuiteBuilds: async () => okResults, stdout: { write: () => true } }),
-    /legacy spec_rb/,
-  );
+  let uploaded = false;
+  const results = await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async () => { uploaded = true; return okResults; },
+    stdout: { write: () => true },
+  });
+
+  // The only branch in the answer, so there is nothing left to publish.
+  assert.equal(uploaded, false);
+  assert.match(results[0]?.error ?? '', /legacy spec_rb/);
+  assert.deepEqual(classifyPublication(results), { digests: [], unpublished: ['structural'] });
 });
 
 // One rule for "was this published?", shared by the printed line and the run that
@@ -366,35 +380,113 @@ test('put-suite-build asks the server for nothing when every branch is blocked',
   assert.deepEqual(classifyPublication(results), { digests: [], unpublished: ['behavioral'] });
 });
 
-// Spec 32-6 Phase 3. The same check as `unitbob validate-build`, run here as
-// well, so going straight to the upload cannot skip it. It stops the command
-// rather than dropping one branch: these are format mistakes in the answer, and
-// they are fixed by answering again, not by publishing half of it.
-test('put-suite-build refuses an answer that does not match the request, and uploads nothing', async () => {
+// Spec 32-6 Phase 3. The same check as `unitbob validate-build`, run here too
+// so going straight to the upload cannot skip it — and reported against the
+// branch it belongs to, like every other local failure in this command.
+//
+// The first draft threw and stopped everything. That quietly undid the rule
+// above: one missing marker in the behavioral answer would have left a finished
+// structural suite unpublished. These tests are what stops it coming back.
+test('a branch whose answer fails the local check is blocked, and its peer still publishes', async () => {
   const projectRoot = tmpProject();
   mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
-  // The request issues the envelope (spec 32-5), which is what makes a mismatch
-  // in the answer checkable at all.
-  writeSuiteBuildRequest(projectRoot, [{
-    ...branches()[0],
-    runner_manifest: { language: 'ruby', framework: 'rspec', result_format: 'rspec_json', runner: 'rspec' },
-  }]);
+
+  // A real assignment on the behavioral branch only, so the structural peer has
+  // nothing to account for and is unaffected.
+  const task = branches();
+  task[1].assignment = {
+    capabilities: [{ capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ubc_0123456789ab' }],
+  };
+  writeSuiteBuildRequest(projectRoot, task);
+
+  const behavioral = behavioralBranch();
+  // Answered "covered" with a marker the server never minted.
+  behavioral.test_metadata = {
+    capabilities: [{
+      capability_id: 'checkout', status: 'covered',
+      contract_key: 'contract:checkout', case_marker: 'ubc_ffffffffffff',
+    }],
+  };
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+  writeReview(projectRoot, behavioral);
+
+  await assertBehavioralBlocked(projectRoot, /must be copied verbatim as "ubc_0123456789ab"/);
+});
+
+// Reading the answer is itself a check, and it is done branch by branch for the
+// same reason: an unsafe path in one entry used to throw and take the whole
+// batch, peer included, and hid every other problem while it was at it.
+test('a branch whose entry cannot even be read is blocked, and its peer still publishes', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+
+  const behavioral = behavioralBranch();
+  delete behavioral.runner_manifest;
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+
+  await assertBehavioralBlocked(projectRoot, /missing runner_manifest/);
+});
+
+// Both branches wrong is still not an exception: nothing is uploaded because
+// there is nothing left to upload, not because the command gave up early.
+test('every branch failing the local check uploads nothing and still reports both', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+
+  const task = branches();
+  const assignment = (id: string) => ({
+    capabilities: [{ capability_id: id, contract_key: `contract:${id}`, case_marker: 'ubc_0123456789ab' }],
+  });
+  task[0].assignment = assignment('billing_charge');
+  task[1].assignment = assignment('checkout');
+  writeSuiteBuildRequest(projectRoot, task);
+
   const structural = structuralBranch();
-  structural.runner_manifest = { language: 'ruby', framework: 'minitest', result_format: 'rspec_json', runner: 'rspec' };
-  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structural] }));
+  structural.test_metadata = { capabilities: [{ interface_id: 'billing_charge', status: 'sort-of' }] };
+  const behavioral = behavioralBranch();
+  behavioral.test_metadata = { capabilities: [{ capability_id: 'checkout', status: 'sort-of' }] };
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structural, behavioral] }));
+  writeReview(projectRoot, behavioral);
 
   let uploaded = false;
+  const results = await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async () => { uploaded = true; return []; },
+    stdout: { write: () => true },
+  });
 
-  await assert.rejects(
-    putSuiteBuild(config(projectRoot), [], {
-      putSuiteBuilds: async () => { uploaded = true; return []; },
-      stdout: { write: () => true },
-    }),
-    (err: Error) => {
-      assert.match(err.message, /runner_manifest does not match the one the request issued/);
-      return true;
-    },
-  );
+  assert.equal(uploaded, false, 'an empty batch is never sent to the server');
+  assert.deepEqual(results.map((r) => r.status), ['not_ready', 'not_ready']);
+  for (const result of results) assert.match(result.error ?? '', /must be answered "covered" or "unguarded"/);
+});
 
-  assert.equal(uploaded, false, 'nothing reached the server');
+// Several problems in one branch arrive together, not one per attempt.
+test('a branch reports all of its problems in one line, not the first one', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+
+  const task = branches();
+  task[1].assignment = {
+    capabilities: [
+      { capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ubc_0123456789ab' },
+      { capability_id: 'refunds', contract_key: 'contract:refunds', case_marker: 'ubc_ba9876543210' },
+    ],
+  };
+  writeSuiteBuildRequest(projectRoot, task);
+
+  const behavioral = behavioralBranch();
+  behavioral.test_metadata = {
+    capabilities: [{ capability_id: 'checkout', status: 'unguarded', reason: '' }],
+  };
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+  writeReview(projectRoot, behavioral);
+
+  const results = await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async (items) => okResults.filter((r) => items.some((i) => i.suite_kind === r.suite_kind)),
+    stdout: { write: () => true },
+  });
+
+  const behavioralResult = results.find((r) => r.suite_kind === 'behavioral');
+  // The empty reason and the unanswered id, in one report.
+  assert.match(behavioralResult?.error ?? '', /gives no business reason/);
+  assert.match(behavioralResult?.error ?? '', /no answer for 1 assigned id\(s\): refunds/);
 });
