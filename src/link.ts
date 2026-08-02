@@ -69,6 +69,10 @@ export async function ensureLinked(
           '(the old project, along with its map and checks, stays where it is).',
       );
     }
+    // Checked on every command, not only at linking: the file holds the only key
+    // the project has, and a `.gitignore` rewritten since is how that key ends
+    // up in a public repository. Costs nothing when the entry is already there.
+    ensureGitignored(root, out);
     return { server: resolvedServer, repoId: fileId, token, projectRoot: root };
   }
 

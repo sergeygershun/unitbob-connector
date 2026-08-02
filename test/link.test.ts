@@ -119,6 +119,9 @@ test('ensureLinked never calls register for a project that is already linked', a
       join(dir, '.unitbob.json'),
       JSON.stringify({ server, repo_id: 2, token: 'kept' }),
     );
+    // The state a linked project is actually in: linking wrote this entry the
+    // first time round. With it in place there is nothing to say.
+    writeFileSync(join(dir, '.gitignore'), '.unitbob.json\n.unitbob/\n');
 
     const out = outCollector();
     const config = await ensureLinked(dir, server, out);
@@ -350,5 +353,24 @@ test('linking git-ignores the file the token lives in', async () => {
     const gitignore = readFileSync(join(dir, '.gitignore'), 'utf8');
     assert.match(gitignore, /^\.unitbob\.json$/m);
     assert.match(readFileSync(join(dir, '.unitbob.json'), 'utf8'), /"token"/);
+  });
+});
+
+// Checked at linking time only, the guard covers the file for exactly as long
+// as nobody edits `.gitignore` afterwards. Before spec 33 that was a tidiness
+// question; now the file holds the only key the project has, and the entry
+// going missing is how it ends up in a public repository.
+test('a later command puts the entry back if the project lost it', async () => {
+  await withRegisterServer(4, async (server, hits) => {
+    const dir = tmpProject('a2time');
+    writeFileSync(join(dir, '.unitbob.json'), JSON.stringify({ server, repo_id: 4, token: 'kept' }));
+    writeFileSync(join(dir, '.gitignore'), 'node_modules\n'); // someone rewrote it
+
+    const out = outCollector();
+    await ensureLinked(dir, server, out);
+
+    assert.match(readFileSync(join(dir, '.gitignore'), 'utf8'), /^\.unitbob\.json$/m);
+    assert.match(out.text(), /Added .* to \.gitignore/); // said out loud, not done behind their back
+    assert.equal(hits.length, 0); // and still without asking the server anything
   });
 });
