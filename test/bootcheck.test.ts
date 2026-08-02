@@ -157,13 +157,30 @@ test('pytest: collection succeeds, so the suite can start', async () => {
 // pytest's own exit vocabulary. Only "your code did not load" is an answer about
 // the project; a bad invocation or an internal error says nothing about it and
 // must never read as "your suite cannot start".
+//
+// The reason is `runner_could_not_answer`, never `no_runner`: pytest is
+// installed and was reached, it only declined the question. Telling someone
+// their runner is missing sends them to fix a thing that works — the same
+// mistake `runner_too_old` was added to stop making about vitest.
 test('pytest: a usage or internal error is not checked, not broken', async () => {
   for (const code of [3, 4]) {
     assert.deepEqual(await bootCheck(tmpProject(), 'pytest', fakeRunner([{ code, stdout: 'ERROR: usage' }])), {
       status: 'not_checked',
-      reason: 'no_runner',
+      reason: 'runner_could_not_answer',
     }, `exit ${code}`);
   }
+});
+
+// Ruby's own standard library sits under `…/lib/ruby/`, which the `lib/` rule
+// for business code would otherwise claim as this project's own.
+test('a frame in the language\'s own standard library is not the project\'s code', async () => {
+  const stderr = [
+    "/opt/homebrew/lib/ruby/3.3.0/psych.rb:456:in `parse': (<unknown>): could not find expected ':'",
+    "\tfrom /opt/homebrew/lib/ruby/3.3.0/psych.rb:324:in `load'",
+  ].join('\n');
+  const result = await bootCheck(railsProject(), 'rspec', fakeRunner([{ code: 1, stderr }]));
+
+  assert.equal(result.status === 'broken' && result.cause, 'environment_not_ready');
 });
 
 test('pytest: an import error in collected code is broken', async () => {

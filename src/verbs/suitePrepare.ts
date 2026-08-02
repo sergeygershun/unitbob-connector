@@ -255,7 +255,10 @@ function bootFinding(boot: BootCheck, runner: string | null): string {
   );
 }
 
-const NOT_CHECKED_REASON: Record<'no_runner' | 'runner_too_old' | 'timed_out' | 'nothing_to_load', string> = {
+const NOT_CHECKED_REASON: Record<
+  'no_runner' | 'runner_too_old' | 'runner_could_not_answer' | 'timed_out' | 'nothing_to_load',
+  string
+> = {
   no_runner: 'Did not check whether the suite can start: no runner available to load it with.',
   // Distinct from `no_runner` on purpose. The runner is installed and working;
   // it is only too old to be asked this particular question, and "no runner
@@ -263,6 +266,13 @@ const NOT_CHECKED_REASON: Record<'no_runner' | 'runner_too_old' | 'timed_out' | 
   runner_too_old:
     'Did not check whether the suite can start: the installed runner is too old to be asked. ' +
     'Nothing is wrong with it — this check simply has no way to pose the question to that version.',
+  // Distinct for the same reason, one step further along: the runner is there
+  // and current, it was reached, and it declined to answer — pytest exiting on
+  // a usage or internal error of its own. That says nothing about the project,
+  // and "no runner available" would again send someone after the wrong thing.
+  runner_could_not_answer:
+    'Did not check whether the suite can start: the runner could not answer the question — it ' +
+    'stopped on an error of its own before loading anything. Nothing was learned about your code either way.',
   timed_out: 'Did not check whether the suite can start: loading it took too long and was stopped.',
   nothing_to_load: 'Did not check whether the suite can start: there was nothing to load yet.',
 };

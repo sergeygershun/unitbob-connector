@@ -29,7 +29,10 @@ export type BootCheck =
       message: string;
       detail: string;
     }
-  | { status: 'not_checked'; reason: 'no_runner' | 'runner_too_old' | 'timed_out' | 'nothing_to_load' };
+  | {
+      status: 'not_checked';
+      reason: 'no_runner' | 'runner_too_old' | 'runner_could_not_answer' | 'timed_out' | 'nothing_to_load';
+    };
 
 // Three states, and the third is named for what happened rather than for what
 // we know. "Not checked" is a fact about the attempt; "unknown" would be a fact
@@ -186,16 +189,16 @@ async function pytestBootCheck(projectRoot: string, deps: BootCheckDeps): Promis
 // pytest's own exit vocabulary, used rather than "zero or not". The distinction
 // that matters is between "your code did not load" and "pytest itself could not
 // be asked", and only the first is an answer about the project.
-function pytestVerdict(code: number | null): 'ok' | 'broken' | 'nothing_to_load' | 'not_checked' {
+function pytestVerdict(code: number | null): Verdict {
   // `classify` turns a timeout into `timed_out` before asking, so this is
   // unreachable — but "no exit code" can only ever mean "we learned nothing".
-  if (code === null) return 'not_checked';
+  if (code === null) return 'runner_could_not_answer';
   // 5 — collected nothing. A project that came to Unitbob *for* tests is the
   // typical customer, not a defect.
   if (code === 5) return 'nothing_to_load';
   // 3 — internal error, 4 — bad usage. Both are about the invocation, not the
   // project, so neither may read as "your suite cannot start".
-  if (code === 3 || code === 4) return 'not_checked';
+  if (code === 3 || code === 4) return 'runner_could_not_answer';
   return code === 0 ? 'ok' : 'broken';
 }
 
@@ -274,11 +277,19 @@ async function attempt(
   }
 }
 
+// What one attempt is allowed to conclude. `runner_could_not_answer` is not
+// `no_runner`: the runner is installed and was reached, it simply refused the
+// question — a bad invocation, an internal error of its own. Saying "no runner
+// available" to someone whose pytest is right there sends them to fix something
+// that is not broken, which is the same mistake `runner_too_old` was added to
+// stop making about vitest.
+type Verdict = 'ok' | 'broken' | 'nothing_to_load' | 'runner_could_not_answer';
+
 function classify(
   projectRoot: string,
   runner: string,
   result: ProcResult | null,
-  verdict: (proc: ProcResult) => 'ok' | 'broken' | 'nothing_to_load' | 'not_checked',
+  verdict: (proc: ProcResult) => Verdict,
 ): BootCheck {
   if (result === null) return { status: 'not_checked', reason: 'no_runner' };
   // runProcess reports a timeout as a null exit code. Waiting too long tells us
@@ -288,10 +299,9 @@ function classify(
   const outcome = verdict(result);
   if (outcome === 'ok') return { status: 'ok' };
   if (outcome === 'nothing_to_load') return { status: 'not_checked', reason: 'nothing_to_load' };
-  // The runner could not be asked the question at all — nothing was learned
-  // about the project, and saying otherwise would be the lie this check exists
-  // to remove.
-  if (outcome === 'not_checked') return { status: 'not_checked', reason: 'no_runner' };
+  // Nothing was learned about the project, and saying otherwise would be the
+  // lie this check exists to remove.
+  if (outcome === 'runner_could_not_answer') return { status: 'not_checked', reason: 'runner_could_not_answer' };
 
   const output = `${result.stdout}\n${result.stderr}`.trim();
   return {
@@ -372,8 +382,11 @@ function hasProjectFrame(output: string, projectRoot: string, runner: string): b
 }
 
 // Where a dependency lives once installed — never the project's own code, in
-// any of the three languages.
-const INSTALLED_DEPENDENCY = /site-packages|dist-packages|node_modules|[/.]venv[/\\]|\/gems\//;
+// any of the three languages. The last two are the languages' own installed
+// libraries: `…/lib/ruby/3.3.0/psych.rb` is a frame the `lib/` rule below would
+// otherwise read as this project's business code.
+const INSTALLED_DEPENDENCY =
+  /site-packages|dist-packages|node_modules|[/.]venv[/\\]|\/gems\/|[/\\]lib[/\\]ruby[/\\]|[/\\]lib[/\\]python\d/;
 
 // A `path/to/file.ext:LINE` frame, as every one of these runners prints them.
 const SOURCE_FRAME = /([\w.\-/\\]+\.(?:py|rb|ts|tsx|js|jsx|mjs|cjs)):\d+/g;
