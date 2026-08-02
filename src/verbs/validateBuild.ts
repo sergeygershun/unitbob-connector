@@ -107,7 +107,17 @@ function checkAssignment(
   add: (message: string) => void,
 ): void {
   const assigned = assignedCases(branch.assignment);
-  if (assigned.length === 0) return; // nothing was assigned; nothing to account for
+  if (assigned.length === 0) {
+    // An assignment with no cases in it is normal — a map with nothing to guard
+    // yet. An assignment that has content this walker could not read is not: the
+    // check would pass everything from then on and never say why. Fail open, but
+    // never fail open quietly.
+    if (hasContent(branch.assignment)) {
+      add('this branch\'s assignment could not be read, so its coverage was not checked here. ' +
+        'The server still checks it; if this persists the connector is older than the assignment format.');
+    }
+    return;
+  }
 
   const metadata = output.test_metadata as Record<string, unknown> | undefined;
   const entries = Array.isArray(metadata?.capabilities) ? metadata.capabilities : null;
@@ -117,7 +127,7 @@ function checkAssignment(
   }
 
   const byId = new Map(assigned.map((entry) => [entry.id, entry]));
-  const idKey = idKeyOf(entries, byId);
+  const idKey = idKeyOf(branch.assignment, assigned);
   const seen = new Map<string, number>();
   const suiteText = suiteBytes(output);
 
@@ -181,17 +191,44 @@ function checkOneCase(
   }
 }
 
-// Which field of an answer entry names the id. Learned from the data rather
-// than hard-coded, so neither branch's id key is written down here: it is
-// whichever field carries a value the assignment issued.
-function idKeyOf(entries: unknown[], byId: Map<string, AssignedCase>): string | null {
-  for (const entry of entries) {
-    const row = (entry ?? {}) as Record<string, unknown>;
-    for (const [key, value] of Object.entries(row)) {
-      if (typeof value === 'string' && byId.has(value)) return key;
+// Which field names the id. Read off the *assignment*, where the answer is
+// exact: the id is already known (it is `contract_key` minus its prefix), so the
+// field holding it can be identified rather than guessed.
+//
+// An earlier version searched the host's answer for any string field whose value
+// happened to be an assigned id. That usually landed on the right key and could
+// just as well have landed on a `headline` that echoed the id. Neither branch's
+// key name is written down here either way — `interface_id` and `capability_id`
+// stay the server's business.
+function idKeyOf(assignment: unknown, cases: AssignedCase[]): string | null {
+  const ids = new Set(cases.map((entry) => entry.id));
+  let found: string | null = null;
+
+  const walk = (value: unknown): void => {
+    if (found) return;
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    if (!value || typeof value !== 'object') return;
+
+    const row = value as Record<string, unknown>;
+    if (typeof row.contract_key === 'string') {
+      const id = row.contract_key.slice(CONTRACT_PREFIX.length);
+      for (const [key, candidate] of Object.entries(row)) {
+        if (key !== 'contract_key' && candidate === id && ids.has(id)) { found = key; return; }
+      }
     }
-  }
-  return null;
+    Object.values(row).forEach(walk);
+  };
+
+  walk(assignment);
+  return found;
+}
+
+// Does the assignment carry anything at all? Distinguishes "nothing to guard"
+// from "we could not read what was there".
+function hasContent(assignment: unknown): boolean {
+  if (Array.isArray(assignment)) return assignment.length > 0;
+  if (!assignment || typeof assignment !== 'object') return false;
+  return Object.values(assignment as Record<string, unknown>).some(hasContent);
 }
 
 // The assignment is an opaque body the server composed, so it is walked rather

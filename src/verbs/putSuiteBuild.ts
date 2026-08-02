@@ -196,7 +196,11 @@ export function classifyPublication(results: SuiteBuildResult[]): PublicationSpl
 // above "no suite was published".
 function printResult(result: SuiteBuildResult): string {
   if (!PUBLISHED.has(result.status)) {
-    return `${result.suite_kind}: not published — ${unpublishedReason(result)}.`;
+    // The reason often ends in a sentence of its own — a server message, or a
+    // list of this branch's problems — so the closing stop is added only when
+    // there is not one already.
+    const reason = unpublishedReason(result);
+    return `${result.suite_kind}: not published — ${reason}${/[.!?]$/.test(reason.trim()) ? '' : '.'}`;
   }
   const tallies = result.counts
     ? Object.entries(result.counts)

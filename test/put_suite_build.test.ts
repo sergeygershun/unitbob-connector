@@ -434,11 +434,15 @@ test('every branch failing the local check uploads nothing and still reports bot
   mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
 
   const task = branches();
-  const assignment = (id: string) => ({
-    capabilities: [{ capability_id: id, contract_key: `contract:${id}`, case_marker: 'ubc_0123456789ab' }],
-  });
-  task[0].assignment = assignment('billing_charge');
-  task[1].assignment = assignment('checkout');
+  task[0].assignment = {
+    blocks: [{
+      block_id: 'billing',
+      interfaces: [{ interface_id: 'billing_charge', contract_key: 'contract:billing_charge', case_marker: 'ubc_0123456789ab' }],
+    }],
+  };
+  task[1].assignment = {
+    capabilities: [{ capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ubc_ba9876543210' }],
+  };
   writeSuiteBuildRequest(projectRoot, task);
 
   const structural = structuralBranch();

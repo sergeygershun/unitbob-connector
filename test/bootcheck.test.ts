@@ -148,7 +148,22 @@ test('pytest: collection succeeds, so the suite can start', async () => {
   const result = await bootCheck(tmpProject(), 'pytest', deps);
 
   assert.deepEqual(result, { status: 'ok' });
-  assert.match(deps.calls[0], /-m pytest --collect-only -q/);
+  // `-c` with an empty-addopts config, exactly as the real pytest runner does.
+  // Without it the project's own `addopts` decide the answer, and a project
+  // asking for a plugin it has not installed was refused as `broken`.
+  assert.match(deps.calls[0], /-m pytest -c \.unitbob\/pytest\.ini --collect-only -q/);
+});
+
+// pytest's own exit vocabulary. Only "your code did not load" is an answer about
+// the project; a bad invocation or an internal error says nothing about it and
+// must never read as "your suite cannot start".
+test('pytest: a usage or internal error is not checked, not broken', async () => {
+  for (const code of [3, 4]) {
+    assert.deepEqual(await bootCheck(tmpProject(), 'pytest', fakeRunner([{ code, stdout: 'ERROR: usage' }])), {
+      status: 'not_checked',
+      reason: 'no_runner',
+    }, `exit ${code}`);
+  }
 });
 
 test('pytest: an import error in collected code is broken', async () => {
@@ -188,7 +203,10 @@ test('vitest older than the list subcommand is not checked, and never run', asyn
   const deps = vitestRunner('1.6.0');
   const result = await bootCheck(vitestProject(), 'vitest', deps);
 
-  assert.deepEqual(result, { status: 'not_checked', reason: 'no_runner' });
+  // `runner_too_old`, not `no_runner`: vitest is installed and works. Telling
+  // someone no runner is available while it sits in their node_modules sends
+  // them to fix a thing that is not broken.
+  assert.deepEqual(result, { status: 'not_checked', reason: 'runner_too_old' });
   // Only the version was asked. `list` is never attempted, so it can neither
   // answer about the wrong thing nor hang for two minutes.
   assert.equal(deps.calls.length, 1);
@@ -200,7 +218,7 @@ test('a vitest whose version cannot be read is not checked, not broken', async (
 
   assert.deepEqual(await bootCheck(vitestProject(), 'vitest', deps), {
     status: 'not_checked',
-    reason: 'no_runner',
+    reason: 'runner_too_old',
   });
 });
 

@@ -11,6 +11,11 @@ import { join } from 'node:path';
 export interface PrecheckResult {
   ok: boolean;
   message?: string;
+  // Which structural runner the markers selected, when they selected one. The
+  // gate has to work this out to answer at all, so it hands it back rather than
+  // making the caller ask again — on Python that second ask shells out to
+  // `python -m pytest --version` a second time.
+  runner?: string;
 }
 
 // The one seam that shells out (pytest availability). Injected so tests stay
@@ -59,7 +64,8 @@ export function detectBddRunner(projectRoot: string, deps: PrecheckDeps = defaul
 
 // The generation-time gate: at least one supported stack must be present.
 export function anyStackPrecheck(projectRoot: string, deps: PrecheckDeps = defaultDeps): PrecheckResult {
-  if (detectStructuralRunner(projectRoot, deps) !== null) return { ok: true };
+  const runner = detectStructuralRunner(projectRoot, deps);
+  if (runner !== null) return { ok: true, runner };
 
   return {
     ok: false,

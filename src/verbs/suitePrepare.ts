@@ -15,7 +15,7 @@ import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
 interface SuitePrepareDeps {
   getRecipe: (name: string) => Promise<Recipe>;
   getSuitePacketsBatch: () => Promise<SuitePacket[]>;
-  precheck: (projectRoot: string) => { ok: boolean; message?: string };
+  precheck: (projectRoot: string) => { ok: boolean; message?: string; runner?: string };
   bootCheck: (projectRoot: string, runner: string | null) => Promise<BootCheck>;
   ensureRunner: (projectRoot: string, runner: string) => Promise<ProvisionResult>;
   runnerEnvelope: (packet: SuitePacket, runner: string | undefined, projectRoot: string) => RunnerEnvelope | null;
@@ -102,7 +102,9 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   // tried to load the thing the suite starts with, it did not load, therefore
   // not one test would reach its first assertion. Debugging generation against a
   // knowingly dead project is our problem, not the vibecoder's.
-  const structuralRunner = detectStructuralRunner(config.projectRoot);
+  // The stack the precheck just identified, rather than a second detection of
+  // the same thing: on Python that would shell out to pytest all over again.
+  const structuralRunner = check.runner ?? null;
   const boot = await actual.bootCheck(config.projectRoot, structuralRunner);
   if (boot.status === 'broken') throw new Error(bootFinding(boot, structuralRunner));
   actual.stdout.write(bootFinding(boot, structuralRunner));
@@ -253,8 +255,14 @@ function bootFinding(boot: BootCheck, runner: string | null): string {
   );
 }
 
-const NOT_CHECKED_REASON: Record<'no_runner' | 'timed_out' | 'nothing_to_load', string> = {
+const NOT_CHECKED_REASON: Record<'no_runner' | 'runner_too_old' | 'timed_out' | 'nothing_to_load', string> = {
   no_runner: 'Did not check whether the suite can start: no runner available to load it with.',
+  // Distinct from `no_runner` on purpose. The runner is installed and working;
+  // it is only too old to be asked this particular question, and "no runner
+  // available" would send someone to fix a thing that is not broken.
+  runner_too_old:
+    'Did not check whether the suite can start: the installed runner is too old to be asked. ' +
+    'Nothing is wrong with it — this check simply has no way to pose the question to that version.',
   timed_out: 'Did not check whether the suite can start: loading it took too long and was stopped.',
   nothing_to_load: 'Did not check whether the suite can start: there was nothing to load yet.',
 };

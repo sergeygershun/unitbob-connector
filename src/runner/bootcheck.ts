@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { runProcess, type ProcResult } from '../proc.ts';
 import { GUARDRAILS_DIR, HELPER_FILE } from '../files/guardrails.ts';
+import { PYTEST_INI, PYTEST_INI_FILE } from './pytest.ts';
 import { PROVISION_TIMEOUT_MS } from './provision.ts';
 
 // Spec 32-6. `precheck.ts` looks at marker files and starts nothing; this module
@@ -28,7 +29,7 @@ export type BootCheck =
       message: string;
       detail: string;
     }
-  | { status: 'not_checked'; reason: 'no_runner' | 'timed_out' | 'nothing_to_load' };
+  | { status: 'not_checked'; reason: 'no_runner' | 'runner_too_old' | 'timed_out' | 'nothing_to_load' };
 
 // Three states, and the third is named for what happened rather than for what
 // we know. "Not checked" is a fact about the attempt; "unknown" would be a fact
@@ -69,12 +70,14 @@ export const SIGNAL_STRENGTH: Record<string, string> = {
     'Full signal on this stack: the check loads the very file the suite starts from, ' +
     'so whatever stops one stops the other.',
   pytest:
-    'Partial signal on this stack: collection only imports what the tests import, ' +
-    'so code no test reaches was not checked.',
+    'Partial signal on this stack: collection only imports what the tests import, so code no ' +
+    'test reaches was not checked — and it imports the whole test tree, so a failure may belong ' +
+    "to one of the project's own tests rather than to the suite that was about to be written.",
   vitest:
-    'Weak signal on this stack: only test files are parsed and imported. Type errors are ' +
-    'not checked at all (vite and esbuild strip types without checking them), and a project ' +
-    'with no tests yields no signal.',
+    'Weak signal on this stack: only test files are parsed and imported, and all of them — so a ' +
+    "failure may belong to one of the project's own tests. Type errors are not checked at all " +
+    '(vite and esbuild strip types without checking them), and a project with no tests yields ' +
+    'no signal.',
 };
 
 // Does the suite for this stack get off the ground? One attempt, one answer.
@@ -155,23 +158,45 @@ async function loadRubyHelper(
 // Python: `pytest --collect-only` imports every test module, which is what the
 // run would do first. It sees import errors in code the tests reach, and only
 // there — recorded as a limitation rather than dressed up as completeness.
+//
+// `-c` with an empty-addopts config, exactly as `runPytestSuite` does and for
+// exactly its reason: the project's own `addopts` (`--cov`, `-n auto`) must not
+// decide the answer. Without it a project whose `pytest.ini` asks for a plugin
+// that is not installed came back `broken` — a healthy application refused over
+// a `--cov` flag. The run path had already solved this; the check had not
+// inherited the solution, which also made it *stricter* than the thing it
+// predicts, the one rule this whole check is built on.
 async function pytestBootCheck(projectRoot: string, deps: BootCheckDeps): Promise<BootCheck> {
+  // Its own directory, rather than relying on `materializeHelper` having run
+  // first: this check must not fail because a different step was skipped.
+  mkdirSync(join(projectRoot, dirname(PYTEST_INI_FILE)), { recursive: true });
+  writeFileSync(join(projectRoot, PYTEST_INI_FILE), PYTEST_INI);
+
   for (const python of ['python3', 'python']) {
-    const result = await attempt(deps, python, ['-m', 'pytest', '--collect-only', '-q'], {
+    const result = await attempt(deps, python, ['-m', 'pytest', '-c', PYTEST_INI_FILE, '--collect-only', '-q'], {
       cwd: projectRoot,
     });
     if (result === null) continue; // this interpreter is not on the machine
 
-    return classify(projectRoot, 'pytest', result, (proc) => {
-      if (proc.code === 0) return 'ok';
-      // Exit 5 is pytest for "collected nothing". Nothing to load is not the
-      // same as broken, and a project that came to Unitbob *for* tests is the
-      // typical customer, not a defect.
-      if (proc.code === 5) return 'nothing_to_load';
-      return 'broken';
-    });
+    return classify(projectRoot, 'pytest', result, (proc) => pytestVerdict(proc.code));
   }
   return { status: 'not_checked', reason: 'no_runner' };
+}
+
+// pytest's own exit vocabulary, used rather than "zero or not". The distinction
+// that matters is between "your code did not load" and "pytest itself could not
+// be asked", and only the first is an answer about the project.
+function pytestVerdict(code: number | null): 'ok' | 'broken' | 'nothing_to_load' | 'not_checked' {
+  // `classify` turns a timeout into `timed_out` before asking, so this is
+  // unreachable — but "no exit code" can only ever mean "we learned nothing".
+  if (code === null) return 'not_checked';
+  // 5 — collected nothing. A project that came to Unitbob *for* tests is the
+  // typical customer, not a defect.
+  if (code === 5) return 'nothing_to_load';
+  // 3 — internal error, 4 — bad usage. Both are about the invocation, not the
+  // project, so neither may read as "your suite cannot start".
+  if (code === 3 || code === 4) return 'not_checked';
+  return code === 0 ? 'ok' : 'broken';
 }
 
 // JS/TS: `vitest list` parses and imports the test files, which is the closest
@@ -200,8 +225,11 @@ async function vitestBootCheck(projectRoot: string, deps: BootCheckDeps): Promis
   // that quietly answers about the wrong thing is worse than one that says it
   // did not run, so ask the version first and decline outright when the
   // subcommand does not exist.
+  // Not `no_runner`: vitest is installed and works, it simply cannot be asked
+  // this question. Telling someone "no runner available" while it sits in their
+  // node_modules sends them to fix the wrong thing.
   if (!(await supportsList(projectRoot, local, deps))) {
-    return { status: 'not_checked', reason: 'no_runner' };
+    return { status: 'not_checked', reason: 'runner_too_old' };
   }
 
   const result = await attempt(deps, local, ['list'], { cwd: projectRoot });
@@ -250,7 +278,7 @@ function classify(
   projectRoot: string,
   runner: string,
   result: ProcResult | null,
-  verdict: (proc: ProcResult) => 'ok' | 'broken' | 'nothing_to_load',
+  verdict: (proc: ProcResult) => 'ok' | 'broken' | 'nothing_to_load' | 'not_checked',
 ): BootCheck {
   if (result === null) return { status: 'not_checked', reason: 'no_runner' };
   // runProcess reports a timeout as a null exit code. Waiting too long tells us
@@ -260,6 +288,10 @@ function classify(
   const outcome = verdict(result);
   if (outcome === 'ok') return { status: 'ok' };
   if (outcome === 'nothing_to_load') return { status: 'not_checked', reason: 'nothing_to_load' };
+  // The runner could not be asked the question at all — nothing was learned
+  // about the project, and saying otherwise would be the lie this check exists
+  // to remove.
+  if (outcome === 'not_checked') return { status: 'not_checked', reason: 'no_runner' };
 
   const output = `${result.stdout}\n${result.stderr}`.trim();
   return {

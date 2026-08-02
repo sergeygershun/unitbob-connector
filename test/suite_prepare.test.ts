@@ -17,7 +17,10 @@ function config(projectRoot: string): Config {
   return { server: 'https://host', repoId: 3, projectRoot };
 }
 
-const okPrecheck = () => ({ ok: true });
+// Mirrors the real gate, which now hands back the stack it identified so
+// suite-prepare need not detect it a second time (on Python that meant shelling
+// out to pytest twice).
+const okPrecheck = () => ({ ok: true, runner: 'rspec' });
 const okRunner = async () => ({ status: 'provisioned' as const });
 
 // Spec 32-6: suite-prepare now loads the file the suite starts from before it
