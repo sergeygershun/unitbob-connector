@@ -21,6 +21,7 @@ import { mapPrepare } from './verbs/mapPrepare.ts';
 import { putMapBuild } from './verbs/putMapBuild.ts';
 import { suitePrepare } from './verbs/suitePrepare.ts';
 import { classifyPublication, putSuiteBuild } from './verbs/putSuiteBuild.ts';
+import { validateBuild } from './verbs/validateBuild.ts';
 import { fixPrepare } from './verbs/fixPrepare.ts';
 import { contractPrompt } from './verbs/contractPrompt.ts';
 import { suiteReviewPrepare } from './verbs/suiteReviewPrepare.ts';
@@ -42,6 +43,8 @@ Verbs:
   put-map-build        Internal: upload the host-built map and graph.
   suite-prepare        Internal: fetch the recipe and capability assignment, write the host suite-build request.
   suite-review-prepare Internal: bind an independent BDD quality review to the built behavioral candidate.
+  validate-build       Internal: check the host's suite answer against the request, locally, before
+                       uploading. Reports every problem at once; put-suite-build runs it too.
   put-suite-build      Internal: upload the host-built guardrail suite (whole spec file + test_metadata),
                        then run every branch it published and report the server's results.
   fix-prepare <id>     Internal: fetch the per-capability repair packet for one red guard (by interface_id).
@@ -102,6 +105,9 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
         return 0;
       case 'suite-review-prepare':
         await suiteReviewPrepare(await linked(), args);
+        return 0;
+      case 'validate-build':
+        await validateBuild(await linked(), args);
         return 0;
       case 'put-suite-build':
         return await publishAndRun(await linked(), args);

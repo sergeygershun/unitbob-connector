@@ -22,9 +22,12 @@ Do this:
    confirms a supported stack and materializes the Ruby boot helper
    `.unitbob/structural/unitbob_helper.rb` (RSpec only), fetches both peer
    assignments and each branch's recipe, and writes the task to
-   `.unitbob/suite-build/request.json`. If it reports an unsupported project,
-   tell the user and stop. If it reports there is no current map, build it first
-   by following `map.md` next to this file, then start this workflow again.
+   `.unitbob/suite-build/request.json`. **If it does not write that file, relay
+   its message to the user as it stands and stop.** That is the whole rule, and
+   it covers every reason there will ever be — an unsupported stack, no current
+   map, a suite that cannot start. The command already names the cause and the
+   one step that clears it; there is nothing to build without a request, so do
+   not work around it or start generating anyway.
 2. Read `.unitbob/suite-build/request.json`. It has `project_root`,
    `output_path`, and `branches` — one per contract system, each with its
    `suite_kind`, `source_digest`, `path_root`, `recipe`, `assignment`, and
@@ -35,14 +38,22 @@ Do this:
    Every branch in the request carries a complete one — a branch the connector
    could not describe is not in the request at all, and it says why. Never add a
    branch that is not there, and never edit a manifest that is.
-   Nothing has checked whether the app boots in its test environment:
-   `suite-prepare` confirms the stack and provisions the BDD runner, and it
-   never runs your app. If the app turns out not to boot, that is a real defect,
-   not a setup step to fix first — it will show up as a red lamp. Write the
-   scenarios and let the lamp be red; don't stop to repair the app before
-   generating.
 3. Build and run **both** branches locally, each following its own
-   `recipe.text`:
+   `recipe.text`. One rule decides what to do when a local run goes wrong. It
+   is the same for both branches and all three stacks, and it turns on
+   something you can observe — whether the runner started — not on a guess
+   about whether the code is healthy:
+   - **The runner never started**: the process died before the first test or
+     scenario, so nothing ran at all. Stop there. Tell the user the exact error
+     the runner printed, upload nothing, and do not write a suite on top of it —
+     every test you wrote would die on that same line before asserting anything.
+   - **The runner ran and some checks came out red**: write the suite and let
+     the lamp be red. Don't stop to repair the app before generating, and never
+     weaken a check to get green. This is not an exception to the rule above but
+     its other half: a broken file in an app that still runs is exactly the case
+     this product exists for, and the red lamp points straight at it.
+
+   Then, per branch:
    - **structural** — for every interface, a real unit test that exercises
      production code and asserts an observable business outcome; only
      collaborators and boundaries stubbed. Bake the supplied `case_marker` into
@@ -91,8 +102,16 @@ Do this:
    cannot build gets `{ "suite_kind": ..., "build_error": { "message": "..." } }`
    instead — it never blocks the peer branch. Never emit `spec_rb`, `rspec_id`,
    `example_id`, or `run_command`. No prose around the JSON.
-5. If no behavioral candidate was built (or it carries `build_error`), skip the
-   review step and continue to step 7 so the structural peer can still publish.
+5. Run `npx -y --loglevel=error unitbob@0.2.9 validate-build`. It checks your
+   answer against the request in seconds — the manifest you copied verbatim,
+   every assigned id answered exactly once, markers unchanged and actually
+   present in the files you wrote, paths safe and files on disk. It names
+   **all** the problems at once, so fix them together and run it again until it
+   is clean. These are the same mistakes the server rejects; finding them here
+   costs seconds instead of a whole generate-and-review cycle. The server still
+   has the last word, so a clean result here is not a promise it will publish.
+6. If no behavioral candidate was built (or it carries `build_error`), skip the
+   review step and continue to step 8 so the structural peer can still publish.
    Otherwise run `npx -y --loglevel=error unitbob@0.2.9 suite-review-prepare`. It reads the
    finished behavioral candidate, runs that exact candidate to capture machine
    evidence (and repeats it in a disposable worktree when a fixed revision was
@@ -101,7 +120,7 @@ Do this:
    to `.unitbob/suite-build/review-request.json`. The raw runner report rides in
    the request only when a known defect was supplied, because only then does the
    reviewer have to cite which Scenario it turned red.
-6. Give only that request plus the referenced suite bundle to an
+7. Give only that request plus the referenced suite bundle to an
    **independent reviewer** in a separate agent/subagent with fresh context. If
    one is unavailable, do not upload the behavioral branch. The reviewer performs
    the BDD quality review: cover every important surface, trace each Given
@@ -123,7 +142,7 @@ Do this:
    connector-owned `candidate_run`/`fixed_candidate_run` evidence and never call
    it `not_supplied`. This is a local process attestation, not authenticated
    reviewer identity; do not describe it as cryptographic proof of independence.
-7. Run `npx -y --loglevel=error unitbob@0.2.9 put-suite-build`. It uploads both
+8. Run `npx -y --loglevel=error unitbob@0.2.9 put-suite-build`. It uploads both
    branches in one batch, each validated and published independently, and then
    runs every branch it published and prints the server's result for each plus
    the map URL. This is the last command: it lights the lamps itself, so never

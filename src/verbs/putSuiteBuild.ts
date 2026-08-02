@@ -7,6 +7,7 @@ import {
   type SuiteBuildBranch,
   type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
+import { collectBuildProblems, formatProblems } from './validateBuild.ts';
 import { Wire, type SuiteBuildItem, type SuiteBuildResult } from '../wire.ts';
 
 interface PutSuiteBuildDeps {
@@ -40,6 +41,13 @@ export async function putSuiteBuild(
     stdout: process.stdout,
     ...deps,
   };
+
+  // Spec 32-6: the same check `unitbob validate-build` runs, run here too, so it
+  // cannot be skipped by going straight to the upload. It stops the whole
+  // command rather than dropping a branch: these are format mistakes in the
+  // answer, they are named in full, and they are fixed by answering again.
+  const problems = collectBuildProblems(request, outputs);
+  if (problems.length > 0) throw new Error(formatProblems(problems));
 
   const digestFor = new Map(request.branches.map((branch) => [branch.suite_kind, branch.source_digest]));
 

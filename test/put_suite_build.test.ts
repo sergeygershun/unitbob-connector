@@ -366,3 +366,35 @@ test('put-suite-build asks the server for nothing when every branch is blocked',
   assert.deepEqual(classifyPublication(results), { digests: [], unpublished: ['behavioral'] });
 });
 
+// Spec 32-6 Phase 3. The same check as `unitbob validate-build`, run here as
+// well, so going straight to the upload cannot skip it. It stops the command
+// rather than dropping one branch: these are format mistakes in the answer, and
+// they are fixed by answering again, not by publishing half of it.
+test('put-suite-build refuses an answer that does not match the request, and uploads nothing', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  // The request issues the envelope (spec 32-5), which is what makes a mismatch
+  // in the answer checkable at all.
+  writeSuiteBuildRequest(projectRoot, [{
+    ...branches()[0],
+    runner_manifest: { language: 'ruby', framework: 'rspec', result_format: 'rspec_json', runner: 'rspec' },
+  }]);
+  const structural = structuralBranch();
+  structural.runner_manifest = { language: 'ruby', framework: 'minitest', result_format: 'rspec_json', runner: 'rspec' };
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structural] }));
+
+  let uploaded = false;
+
+  await assert.rejects(
+    putSuiteBuild(config(projectRoot), [], {
+      putSuiteBuilds: async () => { uploaded = true; return []; },
+      stdout: { write: () => true },
+    }),
+    (err: Error) => {
+      assert.match(err.message, /runner_manifest does not match the one the request issued/);
+      return true;
+    },
+  );
+
+  assert.equal(uploaded, false, 'nothing reached the server');
+});

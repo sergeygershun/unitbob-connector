@@ -20,6 +20,13 @@ function config(projectRoot: string): Config {
 const okPrecheck = () => ({ ok: true });
 const okRunner = async () => ({ status: 'provisioned' as const });
 
+// Spec 32-6: suite-prepare now loads the file the suite starts from before it
+// fetches or writes anything. These tests are about everything that happens
+// afterwards, so they stub the answer. `bootcheck.test.ts` owns the check
+// itself, and the tests at the end of this file own what suite-prepare does
+// with a `broken` one.
+const okBoot = async () => ({ status: 'ok' as const });
+
 // A branch with no complete runner envelope is not built at all, so tests about
 // recipes, defect context, and next-step wording stub one in. The selection
 // itself is exercised further down, against real packets and a real project.
@@ -58,6 +65,7 @@ test('suite-prepare fetches both peer assignments and each branch recipe, then w
 
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
+    bootCheck: okBoot,
     ensureRunner: okRunner,
     runnerEnvelope: okEnvelope,
     getRecipe: async (name) => { calls.push(`recipe:${name}`); return { name, version: `${name}-v1`, text: `${name} recipe` }; },
@@ -87,6 +95,7 @@ test('suite-prepare records a user-supplied known defect outside host-authored m
     '--fixed-revision=fix-report-method-name',
   ], {
     precheck: okPrecheck,
+    bootCheck: okBoot,
     ensureRunner: okRunner,
     runnerEnvelope: okEnvelope,
     getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
@@ -108,7 +117,8 @@ test('suite-prepare refuses to silently assume that no known defect was supplied
   await assert.rejects(
     () => suitePrepare(config(projectRoot), [], {
       precheck: okPrecheck,
-        ensureRunner: okRunner,
+      bootCheck: okBoot,
+      ensureRunner: okRunner,
       getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
       getSuitePacketsBatch: async () => { fetched = true; return packets(); },
       stdout: { write: () => true },
@@ -124,6 +134,7 @@ test('suite-prepare prints a next-step naming both kinds, the output_path, and s
 
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
+    bootCheck: okBoot,
     ensureRunner: okRunner,
     runnerEnvelope: okEnvelope,
     getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
@@ -146,6 +157,7 @@ test('suite-prepare materializes the boot helper right after the precheck', asyn
 
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
+    bootCheck: okBoot,
     ensureRunner: okRunner,
     runnerEnvelope: okEnvelope,
     getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
@@ -184,7 +196,8 @@ test('suite-prepare surfaces a no-current-map error and writes nothing', async (
     () =>
       suitePrepare(config(projectRoot), ['--no-known-defect'], {
         precheck: okPrecheck,
-            getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+        bootCheck: okBoot,
+        getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
         getSuitePacketsBatch: async () => {
           throw new Error('GET /repos/3/suite_packets failed: 409 — rebuild the Unitbob map first.');
         },
@@ -205,6 +218,7 @@ test('a fixable behavioral runner blocker does not abort the build or block the 
   // suite down with it.
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
+    bootCheck: okBoot,
     ensureRunner: async () => ({
       status: 'fixable',
       message: 'Bundler missing',
@@ -238,6 +252,7 @@ test('suite-prepare invokes the runner provision for the behavioral branch', asy
   // fails the build if that import is ever left unwired again.)
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
+    bootCheck: okBoot,
     ensureRunner: async (_root, runner) => { provisioned.push(runner); return { status: 'provisioned' }; },
     runnerEnvelope: okEnvelope,
     getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
@@ -253,6 +268,7 @@ test('a provisioned behavioral runner keeps both peer suites in the request', as
 
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
+    bootCheck: okBoot,
     ensureRunner: async () => ({ status: 'provisioned' }),
     runnerEnvelope: okEnvelope,
     getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
@@ -308,6 +324,7 @@ async function prepareWith(
 ): Promise<void> {
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
+    bootCheck: okBoot,
     ensureRunner: okRunner,
     getRecipe: async (name) => ({ name, version: `${name}-v1`, text: 't' }),
     getSuitePacketsBatch: async () => packetList,
@@ -399,6 +416,7 @@ test('the behavioral runner follows the structural stack, not a package.json nex
 
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
+    bootCheck: okBoot,
     ensureRunner: async (_root, runner) => { provisioned.push(runner); return { status: 'provisioned' }; },
     getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
     getSuitePacketsBatch: async () => packetsWithManifests(),
@@ -411,3 +429,110 @@ test('the behavioral runner follows the structural stack, not a package.json nex
   assert.equal((behavioral.runner_manifest as Record<string, unknown>).runner, 'cucumber');
 });
 
+// --- Spec 32-6 Phase 1: the boot check gates the request -----------------
+
+// The decisive property. A request on disk is a job the host picks up, so a
+// suite that cannot start must leave nothing behind — otherwise the run
+// continues and every test written dies before its first assertion.
+test('a suite that cannot start writes no request at all', async () => {
+  const projectRoot = railsProject();
+  let output = '';
+
+  await assert.rejects(
+    suitePrepare(config(projectRoot), ['--no-known-defect'], {
+      precheck: okPrecheck,
+      bootCheck: async () => ({
+        status: 'broken',
+        cause: 'defect_in_code',
+        message: "undefined method `before_validation' for main:Object",
+        detail: 'app/models/report.rb:1',
+      }),
+      ensureRunner: okRunner,
+      runnerEnvelope: okEnvelope,
+      getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+      getSuitePacketsBatch: async () => packets(),
+      stdout: { write: (chunk) => { output += chunk; return true; } },
+    }),
+    (err: Error) => {
+      // The runner's own words, and framed as something found rather than
+      // something refused.
+      assert.match(err.message, /Found a defect that stops your test suite from starting/);
+      assert.match(err.message, /undefined method `before_validation'/);
+      assert.match(err.message, /No suite was written and nothing was uploaded/);
+      return true;
+    },
+  );
+
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'request.json')), false);
+  assert.equal(output, '', 'nothing was reported as progress before the stop');
+});
+
+// Same stop, different words: an un-run `bundle install` is not the user's bug,
+// and we say which install to run rather than installing it ourselves.
+test('an environment that is not ready stops with the install named, not performed', async () => {
+  await assert.rejects(
+    suitePrepare(config(railsProject()), ['--no-known-defect'], {
+      precheck: okPrecheck,
+      bootCheck: async () => ({
+        status: 'broken',
+        cause: 'environment_not_ready',
+        message: 'Bundler::GemNotFound: Could not find rake-13.0.6',
+        detail: 'bundler: failed to load command: rspec',
+      }),
+      ensureRunner: okRunner,
+      runnerEnvelope: okEnvelope,
+      getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+      getSuitePacketsBatch: async () => packets(),
+      stdout: { write: () => true },
+    }),
+    (err: Error) => {
+      assert.match(err.message, /environment is not ready/);
+      assert.match(err.message, /does not install your project's own dependencies/);
+      assert.match(err.message, /bundle install/);
+      return true;
+    },
+  );
+});
+
+// Not checked is not broken. Conflating them would turn away projects that are
+// entirely fine — a Python project whose tests do not exist yet, a stack with
+// no runner installed, a load that ran long.
+test('a check that could not be made does not block generation', async () => {
+  const projectRoot = railsProject();
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: async () => ({ status: 'not_checked', reason: 'nothing_to_load' }),
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  assert.equal(readSuiteBuildRequest(projectRoot).branches.length, 2);
+  assert.match(output, /Did not check whether the suite can start/);
+  assert.match(output, /Generation continues/);
+});
+
+// A check nobody hears about is a check nobody trusts, so the quiet answer is
+// reported too — together with what this stack's answer is actually worth.
+// Promising all three stacks the same guarantee is the claim 32-5 had to delete.
+test('the finding is printed even when the suite starts, with the stack caveat', async () => {
+  const projectRoot = railsProject();
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  assert.match(output, /Checked that the suite can start: it does\./);
+  assert.match(output, /Full signal on this stack/);
+});

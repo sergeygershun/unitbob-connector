@@ -2,6 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProcess, type ProcResult } from '../proc.ts';
 
+// How long a local setup step may take before we stop waiting. Provisioning a
+// runner and loading a cold Rails test environment sit in the same ballpark —
+// tens of seconds on a large app — so `runner/bootcheck.ts` waits on this same
+// number rather than inventing a second one to keep in sync.
+export const PROVISION_TIMEOUT_MS = 120_000;
+
 export interface ProvisionResult {
   status: 'provisioned' | 'fixable';
   message?: string;
@@ -14,7 +20,7 @@ export interface ProvisionDeps {
 
 const defaultDeps: ProvisionDeps = {
   runCmd: (command, args, options) =>
-    runProcess(command, args, { cwd: options.cwd, timeoutMs: 120_000, env: { ...process.env, ...options.env } }),
+    runProcess(command, args, { cwd: options.cwd, timeoutMs: PROVISION_TIMEOUT_MS, env: { ...process.env, ...options.env } }),
 };
 
 export async function ensureRunner(

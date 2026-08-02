@@ -42,6 +42,20 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   [join('verbs', 'run.ts')]: [/manifest/i],
   [join('verbs', 'putSuiteBuild.ts')]: [/manifest/i],
   [join('verbs', 'suitePrepare.ts')]: [/manifest/i],
+
+  // Spec 32-6 Phase 3. `validate-build` compares the host's answer against the
+  // request the server issued, locally, before uploading — so it necessarily
+  // names the two answers a capability may carry.
+  //
+  // The line is the one 32-5 drew for `runner_manifest`, read the same way: the
+  // connector authors nothing here. It does not decide what ought to be
+  // guarded, does not mint a marker, and never looks at a result. The
+  // assignment came down from the server and the host answered it; this
+  // compares two documents already sitting on disk and reports where they
+  // disagree. The server keeps the last word — the module says so in its own
+  // error text, and the spec deliberately refuses any rule that would make a
+  // local pass binding on it.
+  [join('verbs', 'validateBuild.ts')]: [/manifest/i, /\bcovered\b/i, /\bunguarded\b/i, /\bcoverage\b/i],
 };
 
 // `lamp` is the single domain noun the connector may name — but only in wire.ts,

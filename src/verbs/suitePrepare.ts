@@ -6,6 +6,7 @@ import {
   type KnownDefectContext,
   type SuiteBuildBranch,
 } from '../files/suiteBuild.ts';
+import { bootCheck, SIGNAL_STRENGTH, type BootCheck } from '../runner/bootcheck.ts';
 import { anyStackPrecheck, detectBddRunner, detectStructuralRunner } from '../runner/precheck.ts';
 import { selectRunnerEnvelope, withInstalledRunnerVersion, type RunnerEnvelope } from '../runner/manifest.ts';
 import { ensureRunner, type ProvisionResult } from '../runner/provision.ts';
@@ -15,6 +16,7 @@ interface SuitePrepareDeps {
   getRecipe: (name: string) => Promise<Recipe>;
   getSuitePacketsBatch: () => Promise<SuitePacket[]>;
   precheck: (projectRoot: string) => { ok: boolean; message?: string };
+  bootCheck: (projectRoot: string, runner: string | null) => Promise<BootCheck>;
   ensureRunner: (projectRoot: string, runner: string) => Promise<ProvisionResult>;
   runnerEnvelope: (packet: SuitePacket, runner: string | undefined, projectRoot: string) => RunnerEnvelope | null;
   stdout: { write: (chunk: string) => unknown };
@@ -78,6 +80,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     getRecipe: (name) => wire.getRecipe(name),
     getSuitePacketsBatch: () => wire.getSuitePacketsBatch(),
     precheck: anyStackPrecheck,
+    bootCheck: (projectRoot, runner) => bootCheck(projectRoot, runner),
     ensureRunner: deps?.ensureRunner ?? ensureRunner,
     runnerEnvelope: runnerEnvelopeFor,
     stdout: process.stdout,
@@ -88,6 +91,21 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   if (!check.ok) throw new Error(check.message ?? 'Unsupported runtime.');
 
   materializeHelper(config.projectRoot);
+
+  // Spec 32-6. Before anything is fetched or written, find out whether the suite
+  // would get off the ground at all. It runs here, after the boot helper exists
+  // and before the network, so a project whose suite cannot start costs one
+  // command instead of a full generation.
+  //
+  // There is no `--on-broken-boot` flag and no mode. The decision is not a
+  // policy we could reasonably let a user set — it follows from the fact: we
+  // tried to load the thing the suite starts with, it did not load, therefore
+  // not one test would reach its first assertion. Debugging generation against a
+  // knowingly dead project is our problem, not the vibecoder's.
+  const structuralRunner = detectStructuralRunner(config.projectRoot);
+  const boot = await actual.bootCheck(config.projectRoot, structuralRunner);
+  if (boot.status === 'broken') throw new Error(bootFinding(boot, structuralRunner));
+  actual.stdout.write(bootFinding(boot, structuralRunner));
 
   const packets = await actual.getSuitePacketsBatch();
 
@@ -188,6 +206,58 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     );
   }
 }
+
+// What the boot check found, in the vibecoder's terms. Printed on every run,
+// including the quiet ones: "we looked and it starts" and "we could not look"
+// are both worth a line, and a check nobody hears about is a check nobody
+// trusts.
+//
+// A stop here is a finding, not a refusal, and the wording has to carry that.
+// "We found the defect that stops your suite from starting" and "we could not
+// build your suite" describe the same event and leave the reader in completely
+// different places.
+function bootFinding(boot: BootCheck, runner: string | null): string {
+  const caveat = runner ? `\n${SIGNAL_STRENGTH[runner] ?? ''}` : '';
+
+  if (boot.status === 'ok') {
+    return `Checked that the suite can start: it does.${caveat}\n`;
+  }
+
+  if (boot.status === 'not_checked') {
+    // Not checked is not broken, and nothing downstream may treat it as such.
+    // Conflating the two would block honest projects — the whole reason this
+    // state is named for what happened rather than for what we know.
+    return `${NOT_CHECKED_REASON[boot.reason]} Generation continues.${caveat}\n`;
+  }
+
+  const headline =
+    boot.cause === 'defect_in_code'
+      ? 'Found a defect that stops your test suite from starting.'
+      : 'Your test suite cannot start yet — its environment is not ready.';
+
+  // The runner's own words. Everything else on screen is ours; this line is
+  // the one the vibecoder can paste into a search.
+  const next =
+    boot.cause === 'defect_in_code'
+      ? 'Fix that, then run `unitbob suite-prepare` again.'
+      : "Unitbob does not install your project's own dependencies — that would rewrite your Gemfile.lock " +
+        'or package-lock.json. Run the install your project needs (`bundle install`, `npm install`, ' +
+        '`pip install -r requirements.txt`), then run `unitbob suite-prepare` again.';
+
+  return (
+    `${headline}\n\n` +
+    `  ${boot.message}\n\n` +
+    `${boot.detail}\n\n` +
+    'No suite was written and nothing was uploaded — every test would have died on that line ' +
+    `before reaching its first assertion. ${next}\n`
+  );
+}
+
+const NOT_CHECKED_REASON: Record<'no_runner' | 'timed_out' | 'nothing_to_load', string> = {
+  no_runner: 'Did not check whether the suite can start: no runner available to load it with.',
+  timed_out: 'Did not check whether the suite can start: loading it took too long and was stopped.',
+  nothing_to_load: 'Did not check whether the suite can start: there was nothing to load yet.',
+};
 
 function knownDefectContext(args: string[]): KnownDefectContext {
   const defect = option(args, '--known-defect=');
