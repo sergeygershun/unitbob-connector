@@ -2,13 +2,27 @@
 // captures stdout/stderr/exit code and hands them back untouched — shaping or
 // interpreting that output is the caller's (and ultimately Rails') job.
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface ProcResult {
   stdout: string;
   stderr: string;
   code: number | null;
+}
+
+// Can this path actually be spawned? A binstub that exists but has lost its
+// executable bit is a real state — checkouts over a filesystem with no
+// permission bits, an archive unpacked without them — and `spawn` answers it
+// with an EACCES `error` event, which arrives as a thrown exception rather than
+// an exit code. Callers that pick "the project's own binstub, else the global
+// tool" have to ask this before choosing, or the fallback never gets its turn.
+export function executable(path: string): boolean {
+  try {
+    return existsSync(path) && (statSync(path).mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 export const GRAPHIFY_TIMEOUT_MS = 10 * 60 * 1000;

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { runProcess, type ProcResult } from '../proc.ts';
+import { executable, runProcess, type ProcResult } from '../proc.ts';
 import { GUARDRAILS_DIR, HELPER_FILE } from '../files/guardrails.ts';
 import { PYTEST_INI, PYTEST_INI_FILE } from './pytest.ts';
 import { PROVISION_TIMEOUT_MS } from './provision.ts';
@@ -142,8 +142,15 @@ async function loadRubyHelper(
   helper: string,
   deps: BootCheckDeps,
 ): Promise<BootCheck> {
+  // `executable`, not `existsSync` — the same test `runRspecSuite` makes of
+  // `bin/rspec`, and for the same reason. A binstub that is present but not
+  // executable makes `spawn` throw, `attempt` return null, and the answer come
+  // back `no_runner`: "no runner available to load your suite with", said to
+  // someone whose bundler is installed and working. That is the mistake
+  // `runner_too_old` and `runner_could_not_answer` were added to stop making,
+  // and the global `bundle` was standing right there the whole time.
   const localBundle = join(projectRoot, 'bin', 'bundle');
-  const command = existsSync(localBundle) ? localBundle : 'bundle';
+  const command = executable(localBundle) ? localBundle : 'bundle';
 
   return classify(
     projectRoot,
@@ -216,7 +223,13 @@ async function vitestBootCheck(projectRoot: string, deps: BootCheckDeps): Promis
   // Only a vitest already installed in the project is used. Reaching for `npx`
   // would install a package to answer a question, and installing into the
   // user's project is not this check's business.
-  if (!existsSync(local)) return { status: 'not_checked', reason: 'no_runner' };
+  //
+  // `executable`, not `existsSync`, and there is no fallback to go to: an
+  // unrunnable binary sends `spawn` into EACCES, `supportsList` reads that as
+  // "cannot be asked", and the answer came back `runner_too_old` — a positive
+  // falsehood about a version nobody looked at. `no_runner` is the honest one
+  // here: there is no vitest this check can invoke.
+  if (!executable(local)) return { status: 'not_checked', reason: 'no_runner' };
 
   // `list` is a subcommand only from Vitest 2.1. Older versions read it as a
   // *filename filter* and go on to run whatever it matches, which was measured
@@ -420,8 +433,9 @@ async function prepareTestDatabase(projectRoot: string, deps: BootCheckDeps): Pr
   if (!testDatabaseIsSeparate(projectRoot)) return false;
 
   const rails = join(projectRoot, 'bin', 'rails');
-  const command = existsSync(rails) ? rails : 'bundle';
-  const args = existsSync(rails) ? ['db:test:prepare'] : ['exec', 'rails', 'db:test:prepare'];
+  const useBinstub = executable(rails);
+  const command = useBinstub ? rails : 'bundle';
+  const args = useBinstub ? ['db:test:prepare'] : ['exec', 'rails', 'db:test:prepare'];
 
   const result = await attempt(deps, command, args, {
     cwd: projectRoot,

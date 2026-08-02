@@ -1,6 +1,5 @@
-import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { runProcess, type ProcResult } from '../proc.ts';
+import { executable, runProcess, type ProcResult } from '../proc.ts';
 import { GUARDRAILS_DIR, OPTIONS_FILE } from '../files/guardrails.ts';
 import { readReport, type RunnerResult } from './types.ts';
 
@@ -64,12 +63,4 @@ async function invokeRspec(
   });
 
   return { result, command, args };
-}
-
-function executable(path: string): boolean {
-  try {
-    return existsSync(path) && (statSync(path).mode & 0o111) !== 0;
-  } catch {
-    return false;
-  }
 }

@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runProcess, type ProcResult } from '../proc.ts';
+import { executable, runProcess, type ProcResult } from '../proc.ts';
 import { readReport, type RunnerResult } from './types.ts';
 import { PYTEST_BDD_PLUGIN } from './pytestBddPlugin.ts';
 
@@ -171,12 +171,4 @@ async function pickPython(projectRoot: string): Promise<string> {
     return sidecarVenvPytest;
   }
   throw missingRunner('pytest-bdd');
-}
-
-function executable(path: string): boolean {
-  try {
-    return existsSync(path) && (statSync(path).mode & 0o111) !== 0;
-  } catch {
-    return false;
-  }
 }

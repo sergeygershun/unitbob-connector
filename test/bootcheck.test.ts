@@ -23,10 +23,12 @@ function railsProject(): string {
   return projectRoot;
 }
 
-function vitestProject(): string {
+// An installed vitest, executable as npm leaves it — the check now asks for the
+// bit rather than for the file, so the fixture has to be honest about it.
+function vitestProject(mode = 0o755): string {
   const projectRoot = tmpProject();
   mkdirSync(join(projectRoot, 'node_modules', '.bin'), { recursive: true });
-  writeFileSync(join(projectRoot, 'node_modules', '.bin', 'vitest'), '');
+  writeFileSync(join(projectRoot, 'node_modules', '.bin', 'vitest'), '', { mode });
   return projectRoot;
 }
 
@@ -67,6 +69,39 @@ test('rspec: a failed load is broken, and quotes the runner word for word', asyn
   // paraphrase would be a string the vibecoder cannot search for.
   assert.equal(result.message, stderr);
   assert.match(result.detail, /report\.rb/);
+});
+
+// Which bundler gets to answer. `runRspecSuite` already picks "the project's
+// own binstub, else the global tool" and already tests the binstub for its
+// executable bit; this check has to make the same choice the same way, or it
+// stops predicting the run it exists to predict.
+test("rspec: the project's own bundler binstub is preferred", async () => {
+  const projectRoot = railsProject();
+  mkdirSync(join(projectRoot, 'bin'), { recursive: true });
+  writeFileSync(join(projectRoot, 'bin', 'bundle'), '#!/bin/sh\n', { mode: 0o755 });
+
+  const deps = fakeRunner([{ code: 0 }]);
+  await bootCheck(projectRoot, 'rspec', deps);
+
+  assert.match(deps.calls[0], /bin\/bundle exec ruby/);
+});
+
+// A binstub that is there but cannot be run — a checkout over a filesystem
+// without permission bits, an archive unpacked without them. `spawn` answers
+// EACCES by throwing, which came back as `no_runner`: "no runner available to
+// load your suite with", told to someone whose bundler works fine and is on
+// their PATH. The same mistake `runner_too_old` and `runner_could_not_answer`
+// were added to stop making, one directory over.
+test('rspec: a binstub that cannot be executed falls back to the global bundler', async () => {
+  const projectRoot = railsProject();
+  mkdirSync(join(projectRoot, 'bin'), { recursive: true });
+  writeFileSync(join(projectRoot, 'bin', 'bundle'), '#!/bin/sh\n', { mode: 0o644 });
+
+  const deps = fakeRunner([{ code: 0 }]);
+  const result = await bootCheck(projectRoot, 'rspec', deps);
+
+  assert.deepEqual(result, { status: 'ok' });
+  assert.match(deps.calls[0], /^bundle exec ruby/);
 });
 
 test('a project frame plus a real error reads as a defect in the code', async () => {
@@ -237,6 +272,22 @@ test('a vitest whose version cannot be read is not checked, not broken', async (
     status: 'not_checked',
     reason: 'runner_too_old',
   });
+});
+
+// A vitest that is installed but cannot be executed. Before, `spawn` failed
+// with EACCES on the version probe, `supportsList` read that as "cannot be
+// asked", and the answer was `runner_too_old` — a claim about a version nobody
+// managed to read. There is no global fallback for this stack by design, so the
+// honest answer is that there is no vitest to invoke.
+test('vitest: an installed but unrunnable binary is not called too old', async () => {
+  const deps = fakeRunner([{ code: 0, stdout: 'vitest/3.0.0' }]);
+
+  assert.deepEqual(await bootCheck(vitestProject(0o644), 'vitest', deps), {
+    status: 'not_checked',
+    reason: 'no_runner',
+  });
+  // And nothing was spawned to find that out.
+  assert.equal(deps.calls.length, 0);
 });
 
 test('vitest: a project with no test files is not checked, not broken', async () => {
