@@ -5,7 +5,8 @@
 // name when there is no working link. Only the project root's own file counts —
 // never a parent directory's (no walk-up).
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 export interface Config {
   server: string;
@@ -44,6 +45,28 @@ function readConfigField(cwd: string, field: string): unknown {
   }
 
   return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>)[field] : undefined;
+}
+
+// The nearest directory at or above `cwd` that already carries a working link,
+// or null when there is none.
+//
+// This does not weaken the no-walk-up rule above — it is what makes it usable.
+// The rule exists so a parent's repo_id can never stand in for the directory
+// the verb is running in; a sub-package would silently report as its monorepo.
+// Relocating to the directory whose own file names the link keeps that intact:
+// the config still belongs to the root it sits in, and the verb runs there.
+// Without this, every command had to be run from exactly the right folder, and
+// the request packet's own `project_root` could not be used as a working
+// directory even though it names the answer.
+//
+// $HOME is the ceiling: a stray `.unitbob.json` in the home directory must not
+// adopt every project underneath it.
+export function locateLinkedRoot(cwd: string): string | null {
+  const home = homedir();
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    if (readLocalRepoId(dir) !== null) return dir;
+    if (dir === home || dirname(dir) === dir) return null;
+  }
 }
 
 export function writeConfigFile(cwd: string, config: { server: string; repo_id: number }): void {

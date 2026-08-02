@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BEHAVIORAL_DIR, materializeBehavioral } from '../src/files/behavioral.ts';
+import { BEHAVIORAL_DIR, filesLostOnMaterialize, materializeBehavioral } from '../src/files/behavioral.ts';
 import type { SuiteArtifact } from '../src/wire.ts';
 
 function tmpProject(): string {
@@ -103,4 +103,47 @@ test('keeps only the Python runner environment when refreshing a pytest-bdd suit
 
   assert.equal(readFileSync(sidecarPytest, 'utf8'), 'runner\n');
   assert.equal(existsSync(staleNodeModules), false);
+});
+
+// The connector's own BDD run writes its report — and, for pytest-bdd, the
+// harness it drives the run with — into the behavioral root. Materialization is
+// right to clear them, because the next run rewrites them. Warning about them is
+// not: it named the connector's files as the user's loss, on every single
+// review, which is how a genuinely forgotten step file learns to look like noise.
+test('the lost-file warning ignores the connector run artifacts it writes itself', () => {
+  const root = tmpProject();
+  const artifact: SuiteArtifact = {
+    path: '.unitbob/behavioral/features/surface_contracts.feature',
+    content: 'Feature: billing\n',
+  };
+  materializeBehavioral(root, artifact, 'cucumber');
+  for (const name of [
+    'cucumber_messages.ndjson',
+    'pytest_bdd_report.json',
+    'unitbob_pytest_bdd_plugin.py',
+    'pytest.ini',
+  ]) {
+    writeFileSync(join(root, '.unitbob', 'behavioral', name), 'run output');
+  }
+
+  assert.deepEqual(filesLostOnMaterialize(root, artifact, 'cucumber'), []);
+});
+
+// The whole point of the warning still has to fire: a step file the answer
+// forgot is about to be deleted, and its steps come back undefined.
+test('the lost-file warning still names a step file the answer forgot', () => {
+  const root = tmpProject();
+  const artifact: SuiteArtifact = {
+    path: '.unitbob/behavioral/features/surface_contracts.feature',
+    content: 'Feature: billing\n',
+  };
+  materializeBehavioral(root, artifact, 'cucumber');
+  writeFileSync(join(root, '.unitbob', 'behavioral', 'cucumber_messages.ndjson'), 'run output');
+  mkdirSync(join(root, '.unitbob', 'behavioral', 'step_definitions'), { recursive: true });
+  writeFileSync(join(root, '.unitbob', 'behavioral', 'step_definitions', 'billing_steps.rb'), '# steps');
+
+  assert.deepEqual(
+    filesLostOnMaterialize(root, artifact, 'cucumber'),
+    ['.unitbob/behavioral/step_definitions/billing_steps.rb'],
+  );
 });

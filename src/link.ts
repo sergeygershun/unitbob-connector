@@ -5,7 +5,14 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { CONFIG_FILE, readLocalRepoId, readLocalServer, writeConfigFile, type Config } from './config.ts';
+import {
+  CONFIG_FILE,
+  locateLinkedRoot,
+  readLocalRepoId,
+  readLocalServer,
+  writeConfigFile,
+  type Config,
+} from './config.ts';
 import { registerRepo, WireError } from './wire.ts';
 
 // Public Unitbob brain used by default. A `server` in `.unitbob.json` (or an
@@ -36,18 +43,22 @@ export async function ensureLinked(
   server?: string,
   out: Out = process.stdout,
 ): Promise<Config> {
-  const resolvedServer = server ?? readLocalServer(cwd) ?? DEFAULT_SERVER;
-  const fileId = readLocalRepoId(cwd); // only cwd's own file — no walk-up
-  const name = projectName(cwd);
+  // An already-linked project answers from its own root, wherever the command
+  // was typed. Nothing is linked yet? Then `cwd` is the candidate root and every
+  // guard below applies to it unchanged.
+  const root = locateLinkedRoot(cwd) ?? cwd;
+  const resolvedServer = server ?? readLocalServer(root) ?? DEFAULT_SERVER;
+  const fileId = readLocalRepoId(root); // only the root's own file — no walk-up
+  const name = projectName(root);
 
   // Refuse before touching the server, so a stray run can't mint a junk repo.
-  if (fileId === null) assertProjectRoot(cwd);
+  if (fileId === null) assertProjectRoot(root);
 
   const authId = await registerRepo(resolvedServer, name);
 
   if (fileId === null) {
-    writeConfigFile(cwd, { server: resolvedServer, repo_id: authId });
-    ensureGitignored(cwd, out);
+    writeConfigFile(root, { server: resolvedServer, repo_id: authId });
+    ensureGitignored(root, out);
     out.write(`Linked this project to Unitbob as ${name}.\n`);
   } else if (fileId !== authId) {
     throw new WireError(
@@ -56,7 +67,7 @@ export async function ensureLinked(
     );
   }
 
-  return { server: resolvedServer, repoId: authId, projectRoot: cwd };
+  return { server: resolvedServer, repoId: authId, projectRoot: root };
 }
 
 // The linking name is the *project's* name, not the checkout's (spec 29). A

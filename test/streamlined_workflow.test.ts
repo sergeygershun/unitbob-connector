@@ -69,8 +69,19 @@ test('the skill ships a ready read-only permissions block and points at the skil
 
 test('the suite workflow keeps the boot hint as a one-liner, not a pre-flight scan', () => {
   // A non-booting app is a defect that becomes a red lamp — not something to
-  // repair before generating. (The 32-1 build preflight already smoke-runs boot.)
+  // repair before generating.
   assert.match(suiteWorkflow, /boots/i);
   assert.match(suiteWorkflow, /red lamp/i);
-  assert.match(suiteWorkflow, /preflight/i);
+});
+
+// This sentence used to say the opposite: that `suite-prepare` smoke-runs the
+// app and the host should trust it. `runner/precheck.ts` says in its own words
+// that it boots nothing, and a run against an app whose core model could not
+// load spent hours writing a suite that had no way to be anything but red.
+// The workflow may not promise a check that does not exist — and this test is
+// the reason it cannot quietly grow back.
+test('the suite workflow does not claim a preflight runs the app', () => {
+  assert.doesNotMatch(suiteWorkflow, /smoke-\s*runs/i);
+  assert.doesNotMatch(suiteWorkflow, /preflight[^.]*(?:trust|already)/i);
+  assert.match(suiteWorkflow, /never runs your app/i);
 });

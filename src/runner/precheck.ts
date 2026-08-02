@@ -25,10 +25,41 @@ const defaultDeps: PrecheckDeps = {
 
 const STACKS = 'Ruby on Rails + RSpec, JavaScript/TypeScript + Vitest, or Python + pytest';
 
+// Tried in this order, so a project carrying markers for more than one stack
+// resolves to the same runner on every run.
+const STRUCTURAL_RUNNERS = ['rspec', 'vitest', 'pytest'];
+
+// Which structural runner this project's markers select, or null when none do.
+// The gate below walks the same list: "is any stack present" and "which one is
+// it" must never be able to disagree.
+export function detectStructuralRunner(projectRoot: string, deps: PrecheckDeps = defaultDeps): string | null {
+  return STRUCTURAL_RUNNERS.find((runner) => validateStack(projectRoot, runner, deps).ok) ?? null;
+}
+
+// The BDD runner for a structural stack. One project, one language: the
+// behavioral peer follows the stack already detected instead of probing the
+// filesystem a second time.
+//
+// A second probe used to answer first on `package.json` alone, so a Rails app
+// with any front-end build — the common case — got an rspec structural branch
+// and a cucumber-js behavioral one. Step definitions in JavaScript cannot boot
+// Rails, use its test helpers, or reach its test database, so that branch was
+// dead before it was written, and the generation recipe allows exactly one stack
+// per project anyway.
+const BDD_RUNNER_FOR_STACK: Record<string, string> = {
+  rspec: 'cucumber',
+  vitest: 'cucumber-js',
+  pytest: 'pytest-bdd',
+};
+
+export function detectBddRunner(projectRoot: string, deps: PrecheckDeps = defaultDeps): string | null {
+  const structural = detectStructuralRunner(projectRoot, deps);
+  return structural ? BDD_RUNNER_FOR_STACK[structural] ?? null : null;
+}
+
 // The generation-time gate: at least one supported stack must be present.
 export function anyStackPrecheck(projectRoot: string, deps: PrecheckDeps = defaultDeps): PrecheckResult {
-  const supported = ['rspec', 'vitest', 'pytest'].some((runner) => validateStack(projectRoot, runner, deps).ok);
-  if (supported) return { ok: true };
+  if (detectStructuralRunner(projectRoot, deps) !== null) return { ok: true };
 
   return {
     ok: false,

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { createHash } from 'node:crypto';
 import { dirname, join, sep } from 'node:path';
 import type { Recipe, SuitePacket } from '../wire.ts';
+import type { RunnerEnvelope } from '../runner/manifest.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
 
 // The task the host reads (spec 32): the two peer assignments to build, one per
@@ -15,6 +16,10 @@ export interface SuiteBuildBranch {
   path_root: string;
   recipe: Recipe;
   assignment: unknown;
+  // The envelope the host copies into its answer, selected from the ones the
+  // server offered. Absent only when this machine's stack matched none of them —
+  // the host then composes it from the recipe, as it always used to.
+  runner_manifest?: RunnerEnvelope;
 }
 
 export interface SuiteBuildRequest {

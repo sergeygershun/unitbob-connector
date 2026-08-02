@@ -3,7 +3,9 @@ import {
   readBehavioralReview,
   readHostSuiteOutputs,
   readSuiteBuildRequest,
+  type HostBranchOutput,
   type SuiteBuildBranch,
+  type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
 import { Wire, type SuiteBuildItem, type SuiteBuildResult } from '../wire.ts';
 
@@ -17,7 +19,12 @@ interface PutSuiteBuildDeps {
 // (spec 32). `source_digest` comes from the task — never the host's answer — so
 // the host cannot claim a different map than each branch was given. A branch the
 // host could not build is uploaded as a `build_error`, which never rolls back the
-// peer branch. If a branch's answer is unparseable, nothing is uploaded.
+// peer branch. A branch whose local review will not bind is reported unpublished
+// and its peer still goes up — one branch's problem is never the other's.
+//
+// The line between "skip this branch" and "upload nothing" is whose problem it
+// is: a malformed answer file is the whole answer and stops everything, while a
+// missing or stale review belongs to the behavioral branch alone.
 //
 // Returns the server's per-branch results so the caller can compose the first run
 // on top of them (spec 32-4) without parsing the lines printed here.
@@ -36,35 +43,25 @@ export async function putSuiteBuild(
 
   const digestFor = new Map(request.branches.map((branch) => [branch.suite_kind, branch.source_digest]));
 
-  const items: SuiteBuildItem[] = outputs.map((output) => {
+  const items: SuiteBuildItem[] = [];
+  const blocked: SuiteBuildResult[] = [];
+
+  for (const output of outputs) {
     const sourceDigest = digestFor.get(output.suite_kind) ?? '';
     if (output.build_error) {
-      return { suite_kind: output.suite_kind, source_digest: sourceDigest, build_error: output.build_error };
+      items.push({ suite_kind: output.suite_kind, source_digest: sourceDigest, build_error: output.build_error });
+      continue;
     }
     let testMetadata = output.test_metadata;
     if (output.suite_kind === 'behavioral') {
-      const review = readBehavioralReview(config.projectRoot, output);
-      const probe = review.known_defect_probe as Record<string, unknown> | null;
-      const qualityReview = review.bdd_quality_review as Record<string, unknown> | null;
-      if (!qualityReview || typeof qualityReview !== 'object') {
-        throw new Error('The separate behavioral review must contain a bdd_quality_review object.');
+      try {
+        testMetadata = withReview(config, request, output);
+      } catch (err) {
+        blocked.push({ suite_kind: output.suite_kind, status: BLOCKED_STATUS, error: (err as Error).message });
+        continue;
       }
-      if (request.known_defect_context.status === 'supplied' && probe?.status === 'not_supplied') {
-        throw new Error('A known defect was supplied to suite-prepare, but the behavioral review marked it not_supplied.');
-      }
-      testMetadata = {
-        ...(output.test_metadata as Record<string, unknown>),
-        bdd_quality_review: {
-          ...qualityReview,
-          candidate_digest: review.candidate_digest,
-        },
-        known_defect_probe: review.known_defect_probe,
-        known_defect_context: request.known_defect_context,
-        candidate_run: review.candidate_run,
-        ...(review.fixed_candidate_run ? { fixed_candidate_run: review.fixed_candidate_run } : {}),
-      };
     }
-    return {
+    items.push({
       suite_kind: output.suite_kind,
       source_digest: sourceDigest,
       artifacts: {
@@ -72,14 +69,56 @@ export async function putSuiteBuild(
         runner_manifest: output.runner_manifest,
         test_metadata: testMetadata,
       },
-    };
-  });
+    });
+  }
 
-  const results = await d.putSuiteBuilds(items);
-  for (const result of results) {
+  // Every branch is blocked, so there is nothing to upload. Asking the server to
+  // publish an empty batch would turn a local, already-explained problem into a
+  // wire error with a worse message.
+  const results = items.length > 0 ? await d.putSuiteBuilds(items) : [];
+  const all = [...results, ...blocked];
+  for (const result of all) {
     d.stdout.write(`${printResult(result)}\n`);
   }
-  return results;
+  return all;
+}
+
+// A branch that cannot be assembled locally: its review is missing, stale, or
+// malformed. Not a server status — it never reaches the server — but it travels
+// as one so a single rule decides what counts as published (see `PUBLISHED`).
+const BLOCKED_STATUS = 'not_ready';
+
+// The behavioral branch's uploaded metadata, with the independent review and the
+// connector's own run evidence folded in.
+//
+// Throws for anything that leaves this branch unpublishable — a missing review,
+// one bound to a different candidate, a defect the review called not_supplied.
+// The caller turns that into one unpublished branch rather than a failed
+// command: a blocked review is a fact about the behavioral suite, and the
+// structural peer next to it is finished and correct. Sinking the whole upload
+// with it forced the one workaround this contract exists to prevent — hand-editing
+// the answer down to a single branch, which loses the peer candidate for real.
+function withReview(config: Config, request: SuiteBuildRequest, output: HostBranchOutput): unknown {
+  const review = readBehavioralReview(config.projectRoot, output);
+  const probe = review.known_defect_probe as Record<string, unknown> | null;
+  const qualityReview = review.bdd_quality_review as Record<string, unknown> | null;
+  if (!qualityReview || typeof qualityReview !== 'object') {
+    throw new Error('The separate behavioral review must contain a bdd_quality_review object.');
+  }
+  if (request.known_defect_context.status === 'supplied' && probe?.status === 'not_supplied') {
+    throw new Error('A known defect was supplied to suite-prepare, but the behavioral review marked it not_supplied.');
+  }
+  return {
+    ...(output.test_metadata as Record<string, unknown>),
+    bdd_quality_review: {
+      ...qualityReview,
+      candidate_digest: review.candidate_digest,
+    },
+    known_defect_probe: review.known_defect_probe,
+    known_defect_context: request.known_defect_context,
+    candidate_run: review.candidate_run,
+    ...(review.fixed_candidate_run ? { fixed_candidate_run: review.fixed_candidate_run } : {}),
+  };
 }
 
 // The three outcomes that leave a branch published and current: a new version, an

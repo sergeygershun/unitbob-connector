@@ -48,6 +48,11 @@ export interface SuitePacket {
   source_digest: string;
   path_root: string;
   assignment: unknown;
+  // The runner envelopes this contract system accepts, straight from the models
+  // that validate them. The connector selects the one naming the strategy it
+  // detected and will run; it never authors an entry. Absent from a server older
+  // than this field, and then the host composes the envelope as it used to.
+  runner_manifests?: unknown[];
 }
 
 // One peer build outcome uploaded in the batch PUT /suite_builds. Exactly one of

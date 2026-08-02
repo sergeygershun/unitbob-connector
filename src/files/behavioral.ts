@@ -1,6 +1,7 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { assertUnitbobPath } from './artifactPath.ts';
+import { BDD_RUN_ARTIFACTS } from '../runner/bdd.ts';
 import type { SuiteArtifact } from '../wire.ts';
 
 // The behavioral suite lives under its own root: the main `.feature` plus its
@@ -61,7 +62,7 @@ export function filesLostOnMaterialize(projectRoot: string, artifact: SuiteArtif
   const runnerEntries = RUNNER_ENVIRONMENT_ENTRIES[runner] ?? EMPTY_ENTRIES;
 
   return readdirSync(behavioralRoot)
-    .filter((entry) => !runnerEntries.has(entry))
+    .filter((entry) => !runnerEntries.has(entry) && !CONNECTOR_RUN_ARTIFACTS.has(entry))
     .flatMap((entry) => filesUnder(projectRoot, `${BEHAVIORAL_DIR}/${entry}`))
     .filter((path) => !listed.has(path))
     .sort();
@@ -93,6 +94,14 @@ export function copyBehavioralRunnerEnvironment(
     cpSync(source, target, { recursive: true });
   }
 }
+
+// Written into the behavioral root by the connector's own BDD run: the machine
+// report and the pytest-bdd harness it drives the run with. They are regenerated
+// by the next run, so materialization is right to clear them — but warning about
+// them names the connector's own files as the user's loss. It made the warning
+// fire on every single review, which is how a real forgotten step file learns to
+// look like noise. Taken from the runner that writes them, never re-typed here.
+const CONNECTOR_RUN_ARTIFACTS: ReadonlySet<string> = new Set(BDD_RUN_ARTIFACTS);
 
 const EMPTY_ENTRIES = new Set<string>();
 const RUNNER_ENVIRONMENT_ENTRIES: Record<string, ReadonlySet<string>> = {

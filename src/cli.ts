@@ -8,6 +8,8 @@
 // into a single user operation, so `publishAndRun` at the bottom of this file
 // holds that sequence and the exit code it implies (spec 32-4). Every other verb
 // keeps its whole flow in its own module under `verbs/`.
+import { existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { ensureLinked } from './link.ts';
 import type { Config } from './config.ts';
 import type { SuiteBuildResult } from './wire.ts';
@@ -25,7 +27,12 @@ import { suiteReviewPrepare } from './verbs/suiteReviewPrepare.ts';
 
 const USAGE = `unitbob — thin local hands for the Unitbob server.
 
-Usage: unitbob <verb> [args]
+Usage: unitbob [--project-root <dir>] <verb> [args]
+
+Options:
+  --project-root <dir> Run against this project instead of the current folder.
+                       Without it, an already-linked project is found by walking
+                       up from where you are, so a subfolder works too.
 
 Verbs:
   init                 Link this project to Unitbob (also happens automatically).
@@ -55,16 +62,23 @@ Config: .unitbob.json at your project root, created automatically: the first
 run registers the project on the server by its folder name (spec 28).`;
 
 interface CliDeps {
-  ensureLinked: () => Promise<Config>;
+  ensureLinked: (cwd?: string) => Promise<Config>;
 }
 
 export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Promise<number> {
-  const [verb, ...args] = argv;
+  const parsed = parseGlobalFlags(argv);
+  if (parsed.error) {
+    process.stderr.write(`${parsed.error}\n`);
+    return 1;
+  }
+  const [verb, ...args] = parsed.rest;
 
   if (!verb || verb === '--help' || verb === '-h' || verb === 'help') {
     process.stdout.write(`${USAGE}\n`);
     return verb ? 0 : 1;
   }
+
+  const linked = () => deps.ensureLinked(parsed.root);
 
   try {
     switch (verb) {
@@ -72,34 +86,34 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
         await init(args);
         return 0;
       case 'recipe':
-        await recipe(await deps.ensureLinked(), args);
+        await recipe(await linked(), args);
         return 0;
       case 'show':
-        await show(await deps.ensureLinked());
+        await show(await linked());
         return 0;
       case 'map-prepare':
-        await mapPrepare(await deps.ensureLinked(), args);
+        await mapPrepare(await linked(), args);
         return 0;
       case 'put-map-build':
-        await putMapBuild(await deps.ensureLinked(), args);
+        await putMapBuild(await linked(), args);
         return 0;
       case 'suite-prepare':
-        await suitePrepare(await deps.ensureLinked(), args);
+        await suitePrepare(await linked(), args);
         return 0;
       case 'suite-review-prepare':
-        await suiteReviewPrepare(await deps.ensureLinked(), args);
+        await suiteReviewPrepare(await linked(), args);
         return 0;
       case 'put-suite-build':
-        return await publishAndRun(await deps.ensureLinked(), args);
+        return await publishAndRun(await linked(), args);
       case 'fix-prepare':
-        await fixPrepare(await deps.ensureLinked(), args);
+        await fixPrepare(await linked(), args);
         return 0;
       case 'contract-prompt':
-        await contractPrompt(await deps.ensureLinked(), args);
+        await contractPrompt(await linked(), args);
         return 0;
       case 'run':
       case 'check':
-        await run(await deps.ensureLinked(), args);
+        await run(await linked(), args);
         return 0;
       default:
         process.stderr.write(`Unknown verb "${verb}".\n\n${USAGE}\n`);
@@ -110,6 +124,49 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
     return 1;
   }
 }
+
+interface GlobalFlags {
+  root?: string;
+  rest: string[];
+  error?: string;
+}
+
+// `--project-root` names the folder the verb runs in, for callers that cannot
+// change directory — an agent driving the CLI from a scratch directory, a hook,
+// a monorepo script. It is the explicit form of what `ensureLinked` already does
+// by walking up, and it accepts the `project_root` a request packet prints, so
+// the packet's own answer can be handed straight back.
+//
+// Parsed here rather than per verb: every verb resolves the same project, and a
+// flag that means one thing for `check` and another for `suite-prepare` is worse
+// than no flag.
+function parseGlobalFlags(argv: string[]): GlobalFlags {
+  const rest: string[] = [];
+  let root: string | undefined;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === PROJECT_ROOT_FLAG) {
+      root = argv[index + 1];
+      index += 1;
+    } else if (arg.startsWith(`${PROJECT_ROOT_FLAG}=`)) {
+      root = arg.slice(PROJECT_ROOT_FLAG.length + 1);
+    } else {
+      rest.push(arg);
+    }
+    if (root !== undefined && !root) return { rest, error: `${PROJECT_ROOT_FLAG} requires a path.` };
+  }
+
+  if (root === undefined) return { rest };
+
+  const resolved = resolve(root);
+  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+    return { rest, error: `${PROJECT_ROOT_FLAG} ${root} is not a directory.` };
+  }
+  return { root: resolved, rest };
+}
+
+const PROJECT_ROOT_FLAG = '--project-root';
 
 interface PublishAndRunDeps {
   putSuiteBuild: (config: Config, args: string[]) => Promise<SuiteBuildResult[]>;

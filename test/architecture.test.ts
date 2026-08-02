@@ -26,12 +26,22 @@ const FORBIDDEN = [
 // strategy. Carrying and relaying it is transport, not interpretation — the
 // connector still never reads test results or maps pass/fail to contracts.
 // Only the files that store, relay, or dispatch on that envelope may name it.
+//
+// `runner/manifest.ts` and `verbs/suitePrepare.ts` join them for the same
+// reason. The envelope's valid combinations live on Rails, in the models that
+// validate them, and ride down inside the assignment packet. The connector
+// selects one by the `runner` strategy name it owns and will execute, and adds
+// the version it just installed into the sidecar — storing and relaying, with
+// the authoring still on the server side. It may not author an entry, which is
+// why no table of languages or result formats appears in either file.
 const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   'wire.ts': [/manifest/i],
   [join('files', 'guardrails.ts')]: [/manifest/i],
   [join('files', 'suiteBuild.ts')]: [/manifest/i],
+  [join('runner', 'manifest.ts')]: [/manifest/i],
   [join('verbs', 'run.ts')]: [/manifest/i],
   [join('verbs', 'putSuiteBuild.ts')]: [/manifest/i],
+  [join('verbs', 'suitePrepare.ts')]: [/manifest/i],
 };
 
 // `lamp` is the single domain noun the connector may name — but only in wire.ts,

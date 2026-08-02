@@ -9,10 +9,28 @@ export const BDD_TIMEOUT_MS = 10 * 60 * 1000;
 // The behavioral suite lives under one root; the report is written inside it so
 // the app under test cannot pollute it and it travels with the suite.
 const BEHAVIORAL_ROOT = '.unitbob/behavioral';
-const CUCUMBER_REPORT = join(BEHAVIORAL_ROOT, 'cucumber_messages.ndjson');
-const PYTEST_BDD_REPORT = join(BEHAVIORAL_ROOT, 'pytest_bdd_report.json');
-const PYTEST_BDD_PLUGIN_FILE = join(BEHAVIORAL_ROOT, 'unitbob_pytest_bdd_plugin.py');
-const PYTEST_INI_FILE = join(BEHAVIORAL_ROOT, 'pytest.ini');
+
+const CUCUMBER_REPORT_NAME = 'cucumber_messages.ndjson';
+const PYTEST_BDD_REPORT_NAME = 'pytest_bdd_report.json';
+const PYTEST_BDD_PLUGIN_NAME = 'unitbob_pytest_bdd_plugin.py';
+const PYTEST_INI_NAME = 'pytest.ini';
+
+// Everything a run writes into that root, listed once here — where it is
+// written. The review's "these files will be lost" warning reads this list to
+// stay quiet about them (see `files/behavioral.ts`). A second hand-kept copy
+// drifts the moment a strategy gains a file, and the warning goes back to
+// shouting about the connector's own output.
+export const BDD_RUN_ARTIFACTS: readonly string[] = [
+  CUCUMBER_REPORT_NAME,
+  PYTEST_BDD_REPORT_NAME,
+  PYTEST_BDD_PLUGIN_NAME,
+  PYTEST_INI_NAME,
+];
+
+const CUCUMBER_REPORT = join(BEHAVIORAL_ROOT, CUCUMBER_REPORT_NAME);
+const PYTEST_BDD_REPORT = join(BEHAVIORAL_ROOT, PYTEST_BDD_REPORT_NAME);
+const PYTEST_BDD_PLUGIN_FILE = join(BEHAVIORAL_ROOT, PYTEST_BDD_PLUGIN_NAME);
+const PYTEST_INI_FILE = join(BEHAVIORAL_ROOT, PYTEST_INI_NAME);
 const PYTEST_INI = '[pytest]\naddopts =\n';
 
 // The connector-owned BDD strategy table (spec 32): the `runner` enum names one

@@ -89,6 +89,33 @@ const okResults: SuiteBuildResult[] = [
   { suite_kind: 'behavioral', status: 'created', suite_digest: 'b', counts: { covered: 1 } },
 ];
 
+// Every "the behavioral review will not bind" case shares one contract, and it
+// is not "the command fails". A blocked review is a fact about the behavioral
+// branch; the structural peer beside it is finished, correct, and unrelated.
+// Sinking the whole upload with it forced the workaround this exists to prevent
+// — hand-editing the answer down to one branch, which really does lose the peer
+// candidate.
+//
+// So: the branch does not go up, its reason is still said in full, and the peer
+// publishes anyway.
+async function assertBehavioralBlocked(projectRoot: string, reason: RegExp): Promise<void> {
+  let uploaded: SuiteBuildItem[] = [];
+  const printed: string[] = [];
+
+  const results = await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async (items) => {
+      uploaded = items;
+      return okResults.filter((result) => items.some((item) => item.suite_kind === result.suite_kind));
+    },
+    stdout: { write: (chunk) => printed.push(String(chunk)) },
+  });
+
+  assert.deepEqual(uploaded.map((item) => item.suite_kind), ['structural']);
+  assert.match(results.find((result) => result.suite_kind === 'behavioral')?.error ?? '', reason);
+  assert.deepEqual(classifyPublication(results), { digests: ['s'], unpublished: ['behavioral'] });
+  assert.match(printed.join(''), /behavioral: not published/);
+}
+
 test('put-suite-build uploads both branches, echoing each source_digest from the task', async () => {
   const projectRoot = tmpProject();
   writeTask(projectRoot);
@@ -170,15 +197,7 @@ test('put-suite-build refuses a behavioral review embedded by the suite generato
   };
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
 
-  let uploaded = false;
-  await assert.rejects(
-    () => putSuiteBuild(config(projectRoot), [], {
-      putSuiteBuilds: async () => { uploaded = true; return okResults; },
-      stdout: { write: () => true },
-    }),
-    /separate review artifact|suite-review-prepare/i,
-  );
-  assert.equal(uploaded, false);
+  await assertBehavioralBlocked(projectRoot, /separate review artifact|suite-review-prepare/i);
 });
 
 // The server strips five keys before it recomputes the digest, so a generator
@@ -195,15 +214,7 @@ test('put-suite-build names the generator-owned run report the server would stri
   };
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
 
-  let uploaded = false;
-  await assert.rejects(
-    () => putSuiteBuild(config(projectRoot), [], {
-      putSuiteBuilds: async () => { uploaded = true; return okResults; },
-      stdout: { write: () => true },
-    }),
-    /found candidate_run in test_metadata/i,
-  );
-  assert.equal(uploaded, false);
+  await assertBehavioralBlocked(projectRoot, /found candidate_run in test_metadata/i);
 });
 
 // A candidate that moved after it was reviewed. The connector's run evidence
@@ -217,15 +228,7 @@ test('put-suite-build refuses a review created before the behavioral runner mani
   behavioral.runner_manifest = { ...(behavioral.runner_manifest as Record<string, unknown>), runner_version: '10.0.0' };
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
 
-  let uploaded = false;
-  await assert.rejects(
-    () => putSuiteBuild(config(projectRoot), [], {
-      putSuiteBuilds: async () => { uploaded = true; return okResults; },
-      stdout: { write: () => true },
-    }),
-    /it has changed since — re-run/i,
-  );
-  assert.equal(uploaded, false);
+  await assertBehavioralBlocked(projectRoot, /it has changed since — re-run/i);
 });
 
 // A review about some other candidate entirely: it agrees with neither the suite
@@ -243,13 +246,7 @@ test('put-suite-build refuses a review that belongs to another candidate', async
     known_defect_probe: { status: 'not_supplied' },
   }));
 
-  await assert.rejects(
-    () => putSuiteBuild(config(projectRoot), [], {
-      putSuiteBuilds: async () => { throw new Error('must not upload'); },
-      stdout: { write: () => true },
-    }),
-    /does not review the current behavioral suite candidate/i,
-  );
+  await assertBehavioralBlocked(projectRoot, /does not review the current behavioral suite candidate/i);
 });
 
 // The connector writes this file itself, always with the defect choice it was
@@ -265,13 +262,7 @@ test('put-suite-build refuses run evidence that records no defect choice', async
   delete evidence.known_defect_context;
   writeFileSync(candidateRunPath(projectRoot), JSON.stringify(evidence));
 
-  await assert.rejects(
-    () => putSuiteBuild(config(projectRoot), [], {
-      putSuiteBuilds: async () => { throw new Error('must not upload'); },
-      stdout: { write: () => true },
-    }),
-    /records no known_defect_context/i,
-  );
+  await assertBehavioralBlocked(projectRoot, /records no known_defect_context/i);
 });
 
 test('put-suite-build refuses not_supplied when suite-prepare recorded a known defect', async () => {
@@ -284,13 +275,7 @@ test('put-suite-build refuses not_supplied when suite-prepare recorded a known d
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
   writeReview(projectRoot, behavioral);
 
-  await assert.rejects(
-    () => putSuiteBuild(config(projectRoot), [], {
-      putSuiteBuilds: async () => { throw new Error('must not upload'); },
-      stdout: { write: () => true },
-    }),
-    /known defect.*not_supplied/i,
-  );
+  await assertBehavioralBlocked(projectRoot, /known defect.*not_supplied/i);
 });
 
 test('put-suite-build rejects a behavioral branch whose file escapes the behavioral root', async () => {
@@ -362,3 +347,22 @@ test('put-suite-build keeps the existing wording for a branch the host could not
 
   assert.match(printed, /structural: not published — no supported stack here\./);
 });
+
+// Nothing left to send. Handing the server an empty batch would turn a local
+// problem it has already been told about into a wire error with a worse message.
+test('put-suite-build asks the server for nothing when every branch is blocked', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const behavioral = behavioralBranch();
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [behavioral] }));
+
+  let called = false;
+  const results = await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async () => { called = true; return okResults; },
+    stdout: { write: () => true },
+  });
+
+  assert.equal(called, false);
+  assert.deepEqual(classifyPublication(results), { digests: [], unpublished: ['behavioral'] });
+});
+

@@ -1,5 +1,3 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import type { Config } from '../config.ts';
 import { materializeHelper } from '../files/guardrails.ts';
 import {
@@ -8,7 +6,8 @@ import {
   type KnownDefectContext,
   type SuiteBuildBranch,
 } from '../files/suiteBuild.ts';
-import { anyStackPrecheck } from '../runner/precheck.ts';
+import { anyStackPrecheck, detectBddRunner, detectStructuralRunner } from '../runner/precheck.ts';
+import { selectRunnerEnvelope, withInstalledRunnerVersion, type RunnerEnvelope } from '../runner/manifest.ts';
 import { ensureRunner, type ProvisionResult } from '../runner/provision.ts';
 import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
 
@@ -17,7 +16,51 @@ interface SuitePrepareDeps {
   getSuitePacketsBatch: () => Promise<SuitePacket[]>;
   precheck: (projectRoot: string) => { ok: boolean; message?: string };
   ensureRunner: (projectRoot: string, runner: string) => Promise<ProvisionResult>;
+  runnerEnvelope: (packet: SuitePacket, runner: string | undefined, projectRoot: string) => RunnerEnvelope | null;
   stdout: { write: (chunk: string) => unknown };
+}
+
+// The complete envelope for one branch, or null when this machine cannot
+// produce one: the server offered no combination this stack matches, or the
+// behavioral runner's installed version could not be read back.
+//
+// Null stops the branch rather than handing the host a shape to fill in. The
+// host's own composition is what this path replaced — a single wrong field is
+// rejected at upload, hours after the suite was written, run, and reviewed —
+// and a half-filled envelope fails the same way. Better to say so now, in one
+// line, than to be told by the server at the end.
+// Why a branch got no envelope, in the vibecoder's terms. The two causes sit on
+// opposite sides of the wire and have opposite fixes, so they are never merged
+// into one vague line.
+function envelopeBlockedReason(packet: SuitePacket, runner: string | undefined): string {
+  if (!Array.isArray(packet.runner_manifests) || packet.runner_manifests.length === 0) {
+    return 'the Unitbob server sent no runner combinations with this assignment — it is older than this connector. ' +
+      'Update the server (or the connector) so the two agree, then retry.';
+  }
+  if (!runner) {
+    return `this project matches none of the runners the server offered for the ${packet.suite_kind} suite.`;
+  }
+  return `the version of "${runner}" installed under .unitbob/behavioral/ could not be read, and the server requires it. ` +
+    'Re-run `unitbob suite-prepare` so the runner is provisioned again.';
+}
+
+function runnerEnvelopeFor(
+  packet: SuitePacket,
+  runner: string | undefined,
+  projectRoot: string,
+): RunnerEnvelope | null {
+  const selected = runner
+    ?? (packet.suite_kind === 'behavioral'
+      ? detectBddRunner(projectRoot) ?? undefined
+      : detectStructuralRunner(projectRoot) ?? undefined);
+  const envelope = selectRunnerEnvelope(packet.runner_manifests, selected);
+  if (!envelope || !selected) return envelope;
+
+  // Only the behavioral runner is provisioned into an isolated environment, so
+  // it is the only one with an installed version to record.
+  return packet.suite_kind === 'behavioral'
+    ? withInstalledRunnerVersion(envelope, selected, projectRoot)
+    : envelope;
 }
 
 // Confirm at least one supported stack is present, materialize the Ruby boot
@@ -36,6 +79,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     getSuitePacketsBatch: () => wire.getSuitePacketsBatch(),
     precheck: anyStackPrecheck,
     ensureRunner: deps?.ensureRunner ?? ensureRunner,
+    runnerEnvelope: runnerEnvelopeFor,
     stdout: process.stdout,
     ...deps,
   };
@@ -54,9 +98,10 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   // drop only the unprovisioned behavioral branch from this run, keep everything else buildable,
   // and print a fixable checklist after the request is written.
   const fixableNotices: string[] = [];
-  const buildable: SuitePacket[] = [];
+  const buildable: { packet: SuitePacket; runner?: string }[] = [];
   for (const packet of packets) {
-    const runner = (packet as { runner?: string }).runner ?? (packet.suite_kind === 'behavioral' ? inferBddRunner(config.projectRoot) : undefined);
+    const runner = (packet as { runner?: string }).runner
+      ?? (packet.suite_kind === 'behavioral' ? detectBddRunner(config.projectRoot) ?? undefined : undefined);
     if (runner && (packet.suite_kind === 'behavioral' || ['cucumber', 'cucumber-js', 'pytest-bdd'].includes(runner))) {
       const prov = await actual.ensureRunner(config.projectRoot, runner);
       if (prov.status === 'fixable') {
@@ -65,18 +110,47 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
         continue;
       }
     }
-    buildable.push(packet);
+    buildable.push({ packet, runner });
   }
 
-  const branches: SuiteBuildBranch[] = await Promise.all(
-    buildable.map(async (packet) => ({
-      suite_kind: packet.suite_kind,
-      source_digest: packet.source_digest,
-      path_root: packet.path_root,
-      recipe: await actual.getRecipe(recipeNameFor(packet)),
-      assignment: packet.assignment,
-    })),
+  const prepared = await Promise.all(
+    buildable.map(async ({ packet, runner }) => {
+      // Read after provisioning, never before: the behavioral envelope carries
+      // the version that is now installed in the sidecar.
+      const manifest = actual.runnerEnvelope(packet, runner, config.projectRoot);
+      if (!manifest) return { packet, runner, branch: null };
+
+      return {
+        packet,
+        runner,
+        branch: {
+          suite_kind: packet.suite_kind,
+          source_digest: packet.source_digest,
+          path_root: packet.path_root,
+          recipe: await actual.getRecipe(recipeNameFor(packet)),
+          assignment: packet.assignment,
+          runner_manifest: manifest,
+        },
+      };
+    }),
   );
+
+  // A branch without a complete envelope is not handed to the host at all. The
+  // host has nothing to compose it from — that composition is what this replaced
+  // — so writing the branch anyway only moves the same rejection to the end of
+  // the run, hours later.
+  const branches: SuiteBuildBranch[] = [];
+  const blockedNotices: string[] = [];
+  for (const { packet, runner, branch } of prepared) {
+    if (branch) branches.push(branch);
+    else blockedNotices.push(`  ${packet.suite_kind}: ${envelopeBlockedReason(packet, runner)}`);
+  }
+
+  if (branches.length === 0) {
+    throw new Error(
+      `No suite branch can be built this run:\n${blockedNotices.join('\n')}\nNothing was written and nothing was uploaded.`,
+    );
+  }
 
   const request = writeSuiteBuildRequest(config.projectRoot, branches, defectContext);
   const kinds = branches.map((branch) => branch.suite_kind).join(' and ');
@@ -99,6 +173,18 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
         'This is a fixable setup step, not a build failure, and it does not affect the structural suite:\n' +
         fixableNotices.join('\n') +
         '\nFix the above, then re-run `unitbob suite-prepare` to build the behavioral peer.\n',
+    );
+  }
+
+  // Same shape, different cause: this branch has an assignment but no runner
+  // envelope to upload it with, so it is not offered to the host at all. Its
+  // peer above is unaffected.
+  if (blockedNotices.length > 0) {
+    actual.stdout.write(
+      '\nOne suite branch was left out of this run — it has no runner manifest, and the server ' +
+        'accepts an upload only with one:\n' +
+        blockedNotices.join('\n') +
+        '\n',
     );
   }
 }
@@ -125,10 +211,4 @@ function option(args: string[], prefix: string): string | undefined {
   const value = match?.slice(prefix.length).trim();
   if (match && !value) throw new Error(`${prefix.slice(0, -1)} requires a value.`);
   return value || undefined;
-}
-
-function inferBddRunner(projectRoot: string): string {
-  if (existsSync(join(projectRoot, 'package.json'))) return 'cucumber-js';
-  if (['pyproject.toml', 'requirements.txt', 'Pipfile'].some((f) => existsSync(join(projectRoot, f)))) return 'pytest-bdd';
-  return 'cucumber';
 }

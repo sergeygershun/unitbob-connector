@@ -12,7 +12,7 @@ uploaded, never source:
 Neither replaces the other; they have independent versions, runs, and lamps.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.2.8 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.2.9 suite-prepare` with exactly one
    defect-context option. If the user or acceptance material named a known defect, append
    `--known-defect='<exact defect description>'`; when a fixed revision was
    supplied, also append `--fixed-revision='<exact revision>'`. Never omit the
@@ -27,12 +27,20 @@ Do this:
    by following `map.md` next to this file, then start this workflow again.
 2. Read `.unitbob/suite-build/request.json`. It has `project_root`,
    `output_path`, and `branches` — one per contract system, each with its
-   `suite_kind`, `source_digest`, `path_root`, `recipe`, and `assignment`.
-   Before writing a large batch of scenarios, make sure the app actually boots
-   in its test environment (the build preflight in `suite-prepare` already smoke-
-   runs it; trust that). If it does **not** boot, that is a real defect, not a
-   setup step to fix first — it will show up as a red lamp. Write the scenarios
-   and let the lamp be red; don't stop to repair the app before generating.
+   `suite_kind`, `source_digest`, `path_root`, `recipe`, `assignment`, and
+   `runner_manifest`. **Copy each branch's `runner_manifest` into your answer
+   verbatim.** The connector detected the stack and filled it in; the server
+   accepts only the exact combinations it names, so a manifest you compose
+   yourself is the field most likely to be rejected after all the work is done.
+   Every branch in the request carries a complete one — a branch the connector
+   could not describe is not in the request at all, and it says why. Never add a
+   branch that is not there, and never edit a manifest that is.
+   Nothing has checked whether the app boots in its test environment:
+   `suite-prepare` confirms the stack and provisions the BDD runner, and it
+   never runs your app. If the app turns out not to boot, that is a real defect,
+   not a setup step to fix first — it will show up as a red lamp. Write the
+   scenarios and let the lamp be red; don't stop to repair the app before
+   generating.
 3. Build and run **both** branches locally, each following its own
    `recipe.text`:
    - **structural** — for every interface, a real unit test that exercises
@@ -67,12 +75,12 @@ Do this:
    { "branches": [
      { "suite_kind": "structural",
        "suite_file": { "path": ".unitbob/structural/...", "content": "..." },
-       "runner_manifest": { "language": ..., "framework": ..., "result_format": ..., "runner": ... },
+       "runner_manifest": <copied verbatim from this branch in the request>,
        "test_metadata": { "capabilities": [...] } },
      { "suite_kind": "behavioral",
        "suite_file": { "path": ".unitbob/behavioral/features/surface_contracts.feature",
                        "support_files": [ { "path": ".unitbob/behavioral/step_definitions/client_management_steps.rb" } ] },
-       "runner_manifest": { "language": ..., "framework": ..., "result_format": ..., "runner": ..., "runner_version": "..." },
+       "runner_manifest": <copied verbatim from this branch in the request>,
        "test_metadata": { "capabilities": [...] } }
    ] }
    ```
@@ -85,7 +93,7 @@ Do this:
    `example_id`, or `run_command`. No prose around the JSON.
 5. If no behavioral candidate was built (or it carries `build_error`), skip the
    review step and continue to step 7 so the structural peer can still publish.
-   Otherwise run `npx -y --loglevel=error unitbob@0.2.8 suite-review-prepare`. It reads the
+   Otherwise run `npx -y --loglevel=error unitbob@0.2.9 suite-review-prepare`. It reads the
    finished behavioral candidate, runs that exact candidate to capture machine
    evidence (and repeats it in a disposable worktree when a fixed revision was
    supplied), keeps that evidence in its own
@@ -115,7 +123,7 @@ Do this:
    connector-owned `candidate_run`/`fixed_candidate_run` evidence and never call
    it `not_supplied`. This is a local process attestation, not authenticated
    reviewer identity; do not describe it as cryptographic proof of independence.
-7. Run `npx -y --loglevel=error unitbob@0.2.8 put-suite-build`. It uploads both
+7. Run `npx -y --loglevel=error unitbob@0.2.9 put-suite-build`. It uploads both
    branches in one batch, each validated and published independently, and then
    runs every branch it published and prints the server's result for each plus
    the map URL. This is the last command: it lights the lamps itself, so never
