@@ -10,7 +10,8 @@ Do this:
    graph and writes the build request.
 2. Read `.unitbob/map-build/request.json`. It gives you `project_root`,
    `graph_path`, `output_path`, `surfaces_path`, `surface_output_path`, and the
-   fetched recipes.
+   fetched recipes. It also carries `route_inventory_path` **when this project's
+   own router could be asked for its addresses** — see below.
 3. Read the graph at `graph_path`. **This is your input — both maps are built
    from it (plus, for the surface map, the project source).**
 4. Build **both** lenses locally (see below).
@@ -61,10 +62,12 @@ extracting, and third-party and generated paths drop out.
 
 ### My product (surface map → `surfaces_path`, then `surface_output_path`)
 
-- First follow `recipes.extract_surfaces.text`: read the source and the graph and
-  write the flat surface inventory to `surfaces_path`. Every `route`/`job` carries
-  a `handler_symbol` that is a **graph node id copied character for character** —
-  never a name you spell yourself.
+- Follow `recipes.extract_surfaces.text`: write the flat surface inventory to
+  `surfaces_path`. When the request carries `route_inventory_path`, this
+  project's own router was asked for its addresses and they are already in
+  `surfaces.json` — the recipe says what to do with them, and `put-map-build`
+  checks that they arrived unchanged. The rules live in the recipe, which is
+  fetched fresh; this file would only drift away from them.
 - Then follow `recipes.decompose_surfaces.text`: group those surfaces into
   capabilities and write the surface document to `surface_output_path`. Copy every
   surface id **verbatim** into the capability lists — the host checks coverage by

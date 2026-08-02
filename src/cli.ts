@@ -18,6 +18,7 @@ import { show } from './verbs/show.ts';
 import { run, runOnly } from './verbs/run.ts';
 import { init } from './verbs/init.ts';
 import { mapPrepare } from './verbs/mapPrepare.ts';
+import { extractSurfaces } from './verbs/extractSurfaces.ts';
 import { putMapBuild } from './verbs/putMapBuild.ts';
 import { suitePrepare } from './verbs/suitePrepare.ts';
 import { classifyPublication, putSuiteBuild } from './verbs/putSuiteBuild.ts';
@@ -40,6 +41,9 @@ Verbs:
   recipe <name>        Fetch and print a recipe from the server.
   show                 Print the link to this project's map.
   map-prepare          Internal: keylessly update the graph (no API key) and write the host map-build request.
+  extract-surfaces     Internal: write the addresses this project's own router declares, when the stack
+                       can be asked for them. Says nothing when it cannot, which is a normal answer;
+                       map-prepare runs it for you.
   put-map-build        Internal: upload the host-built map and graph.
   suite-prepare        Internal: fetch the recipe and capability assignment, write the host suite-build request.
   suite-review-prepare Internal: bind an independent BDD quality review to the built behavioral candidate.
@@ -96,6 +100,9 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
         return 0;
       case 'map-prepare':
         await mapPrepare(await linked(), args);
+        return 0;
+      case 'extract-surfaces':
+        await extractSurfaces(await linked(), args);
         return 0;
       case 'put-map-build':
         await putMapBuild(await linked(), args);

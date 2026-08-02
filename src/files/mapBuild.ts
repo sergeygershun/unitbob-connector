@@ -8,6 +8,12 @@ export interface MapBuildRequest {
   output_path: string;
   surfaces_path: string;
   surface_output_path: string;
+  // Spec 32-7: present only when this project's router could be asked for its
+  // addresses. Optional by design — every stack we cannot ask, and every
+  // application that will not load, leaves it out, and the extract_surfaces
+  // recipe reads the source as it always has. A required field would turn a
+  // normal silence into a malformed request.
+  route_inventory_path?: string;
   recipes: {
     decompose: Recipe;
     relate: Recipe;
@@ -53,13 +59,18 @@ export function readFreshGraph(projectRoot: string): string {
   return rawGraphJson;
 }
 
-export function writeMapBuildRequest(projectRoot: string, recipes: MapBuildRecipes): MapBuildRequest {
+export function writeMapBuildRequest(
+  projectRoot: string,
+  recipes: MapBuildRecipes,
+  routeInventoryPath?: string,
+): MapBuildRequest {
   const packet: MapBuildRequest = {
     project_root: projectRoot,
     graph_path: graphPath(projectRoot),
     output_path: outputPath(projectRoot),
     surfaces_path: surfacesPath(projectRoot),
     surface_output_path: surfaceOutputPath(projectRoot),
+    ...(routeInventoryPath ? { route_inventory_path: routeInventoryPath } : {}),
     recipes,
   };
 
