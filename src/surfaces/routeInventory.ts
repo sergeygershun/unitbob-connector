@@ -11,7 +11,7 @@ import { graphPath } from '../files/mapBuild.ts';
 // that project's `config/routes.rb`.
 //
 // So this module asks the router. It authors nothing: every field below is
-// either printed by `rails routes` or copied whole out of `graph.json`, with one
+// either declared by the router or copied whole out of `graph.json`, with one
 // stated exception — an address whose action has no graph node takes the file
 // path Rails' own convention gives it, and only when that file is really on
 // disk (see `toSurface`). The rule holds for `handler_label` too, which is the
@@ -46,9 +46,12 @@ export type RouteInventory =
 // the default environment gets a turn before we say anything of the sort.
 export type RouteEnvironment = 'test' | 'default';
 
+// `router_too_old` used to sit in this list, for a Rails that refused
+// `--expanded`. Asking the router object instead removed the flag and with it
+// the whole reason: there is no version of Rails that has a router and cannot be
+// asked for it. It is gone rather than kept as a reason nothing can produce.
 export type SilenceReason =
   | 'unsupported_stack'
-  | 'router_too_old'
   | 'app_did_not_load'
   | 'did_not_finish'
   | 'no_routes'
@@ -101,7 +104,7 @@ export async function extractRouteInventory(
   const asked = await askTheRouter(projectRoot, deps);
   if ('reason' in asked) return silent(projectRoot, asked.reason, asked.detail);
 
-  const rows = parseExpandedRoutes(asked.result.stdout);
+  const rows = parseRouterAnswer(asked.result.stdout);
   // Zero rows is far likelier to mean "this output is not what we know how to
   // read" than "this application has no addresses". Claiming the second would
   // hand the map a confident, empty answer, so we claim neither.
@@ -122,7 +125,7 @@ export async function extractRouteInventory(
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(
       path,
-      `${JSON.stringify({ declared_by: 'rails routes', environment: asked.environment, surfaces }, null, 2)}\n`,
+      `${JSON.stringify({ declared_by: 'rails router', environment: asked.environment, surfaces }, null, 2)}\n`,
     );
   } catch (err) {
     // A read-only checkout or a full disk is not a reason to take the whole map
@@ -148,20 +151,12 @@ type Asked =
 // first answer is decided there; only "this environment refused to load" is
 // worth asking again, because that is the one failure an environment can own.
 async function askTheRouter(projectRoot: string, deps: RouteInventoryDeps): Promise<Asked> {
-  const first = await runRailsRoutes(projectRoot, deps, 'test');
+  const first = await askRouterOnce(projectRoot, deps, 'test');
   if (first === null) {
     // The command is not on this machine. A second environment cannot conjure it.
     return { reason: 'app_did_not_load', detail: 'the command did not run on this machine' };
   }
   if (first.code === 0) return { result: first, environment: 'test' };
-
-  // Rails learned `--expanded` in 5.1. Older ones reject the flag before they
-  // load anything, and saying "your application did not load" there sends
-  // somebody to debug an application that is perfectly fine — the same reason
-  // the boot check grew `runner_too_old` rather than calling vitest missing.
-  // The flag is refused the same way in every environment, so there is nothing
-  // to retry.
-  if (rejectedTheFlag(first)) return { reason: 'router_too_old' };
 
   // No exit code at all means the process was stopped rather than finished —
   // our own timeout, or a signal from outside. An application too large to
@@ -170,11 +165,11 @@ async function askTheRouter(projectRoot: string, deps: RouteInventoryDeps): Prom
   // Retrying would spend the same budget twice for the same silence.
   if (first.code === null) return { reason: 'did_not_finish' };
 
-  const second = await runRailsRoutes(projectRoot, deps, 'default');
+  const second = await askRouterOnce(projectRoot, deps, 'default');
   if (second !== null && second.code === 0) return { result: second, environment: 'default' };
   if (second !== null && second.code === null) return { reason: 'did_not_finish' };
 
-  // `rails routes` loads the application, so running it *is* the check: an app
+  // Asking the router loads the application, so asking it *is* the check: an app
   // that will not boot cannot print its routes. We do not ask the boot check
   // from spec 32-6 first — that would boot the app twice to learn the same
   // thing — but we do answer in its currency, quoting the runner's own first
@@ -228,21 +223,18 @@ function becauseOf(result: Extract<RouteInventory, { status: 'silent' }>): strin
   switch (result.reason) {
     case 'unsupported_stack':
       return 'this project has no router Unitbob can ask yet (Rails is the only one so far)';
-    case 'router_too_old':
-      return '`rails routes --expanded` needs Rails 5.1 or newer, and this Rails refused the flag ' +
-        '(nothing is wrong with the application)';
     case 'app_did_not_load':
-      return `\`rails routes\` did not get through — ${result.detail}`;
+      return `the router could not be asked — ${result.detail}`;
     case 'did_not_finish':
       // No exit code means stopped, and we do not know by whom: our own
       // ${minutes}-minute limit, or something outside this process. Naming only
       // the timeout would put a duration on a run that may have been killed in
       // ten seconds — a claim we cannot make.
-      return `\`rails routes\` was stopped before it finished — either it ran past the ` +
+      return `the router was not done answering — either it ran past the ` +
         `${ROUTES_TIMEOUT_MS / 60_000}-minute limit or something else killed it (nothing here says the ` +
         'application is unhealthy)';
     case 'no_routes':
-      return '`rails routes` printed nothing this version knows how to read';
+      return 'the router answered in a shape this connector could not read';
     case 'could_not_write':
       return `the inventory could not be written — ${result.detail}`;
   }
@@ -256,21 +248,53 @@ function looksLikeRails(projectRoot: string): boolean {
   return existsSync(join(projectRoot, 'config', 'routes.rb'));
 }
 
-// `--expanded` rather than the default table: one field per line, so nothing
-// depends on guessing column widths, and a long URI pattern cannot run into its
-// neighbour. `test` is asked first because that is the environment the guardrail
-// suite boots in, so the routes read there are the routes the suite would see;
+// The question, asked of the router object rather than of the `rails routes`
+// command line. `--expanded` was the earlier reading, and it cost this project
+// its whole inventory on the a2time run: the flag arrived in Rails 5.1, that
+// application runs 5.0, and 194 addresses went back to being typed out by hand —
+// the exact work this module exists to remove. `routes` also prints for people,
+// so its field names move between versions (`URI` in Rails 7, `URI Pattern`
+// before it) and the reader had to know both.
+//
+// `Rails.application.routes.routes` has been the same object since Rails 3 and
+// answers in a shape we choose. Nothing here is version-specific except the one
+// thing that genuinely changed: `verb` was a Regexp before Rails 5 and is a
+// String after, so both are reduced to the same letters.
+//
+// The answer is printed behind a sentinel because an application is free to
+// write to stdout while it boots — an initializer with a banner, a deprecation
+// notice — and none of that is ours to parse.
+const ROUTES_SENTINEL = 'UNITBOB_ROUTES ';
+
+// One address per line rather than one array holding all of them: a project with
+// five hundred routes should not be a single line, and a line cut in half loses
+// one address instead of every address. That cannot lose addresses quietly —
+// output is only ever cut short when the process was killed, and a run that did
+// not exit cleanly is refused before anyone reads what it printed.
+const ROUTES_SCRIPT = `require 'json'
+Rails.application.routes.routes.each do |r|
+  next if r.respond_to?(:internal) && r.internal
+  STDOUT.print("${ROUTES_SENTINEL}" + JSON.generate(
+    'verb' => r.verb.is_a?(String) ? r.verb : r.verb.to_s.gsub(%r{[$^/]}, ''),
+    'path' => r.path.spec.to_s,
+    'controller' => r.defaults[:controller],
+    'action' => r.defaults[:action]
+  ) + "\\n")
+end`;
+
+// `test` is asked first because that is the environment the guardrail suite
+// boots in, so the routes read there are the routes the suite would see;
 // `default` means we leave RAILS_ENV alone and take whatever the project's own
 // setup chooses.
-async function runRailsRoutes(
+async function askRouterOnce(
   projectRoot: string,
   deps: RouteInventoryDeps,
   environment: RouteEnvironment,
 ): Promise<ProcResult | null> {
   const local = join(projectRoot, 'bin', 'rails');
   const [command, args] = existsSync(local)
-    ? [local, ['routes', '--expanded']]
-    : ['bundle', ['exec', 'rails', 'routes', '--expanded']];
+    ? [local, ['runner', ROUTES_SCRIPT]]
+    : ['bundle', ['exec', 'rails', 'runner', ROUTES_SCRIPT]];
 
   try {
     return await deps.runCmd(command, args, {
@@ -284,18 +308,6 @@ async function runRailsRoutes(
   }
 }
 
-// Ruby's own OptionParser wording, and Thor's — whichever layer of the `rails`
-// command line sees the flag first. Both name the flag they refused, and the
-// name has to be part of the match: "invalid option" is ordinary Ruby wording
-// that also turns up inside a failing initializer, and reading that as an old
-// Rails would tell somebody their application is fine while it is broken —
-// exactly the wrong-errand this reason exists to prevent, pointing the other way.
-function rejectedTheFlag(result: ProcResult): boolean {
-  return /(?:invalid option|unknown switches?|unrecognized option)[^\n]*expanded/i.test(
-    `${result.stdout}\n${result.stderr}`,
-  );
-}
-
 interface RouteRow {
   verb: string;
   path: string;
@@ -303,65 +315,52 @@ interface RouteRow {
   action?: string;
 }
 
-// The `--expanded` record:
-//
-//   --[ Route 1 ]------------------------------
-//   Prefix            | settings
-//   Verb              | GET
-//   URI               | /settings(.:format)
-//   Controller#Action | settings#index
-//
-// The path field is `URI` on Rails 7 and `URI Pattern` on older versions — both
-// are read, because which one we get is decided by the user's Gemfile. Fields we
-// do not use (Prefix, Source Location) are ignored rather than rejected, so a
-// newer Rails printing more of them still reads.
-export function parseExpandedRoutes(stdout: string): RouteRow[] {
+// The router's answer: the sentinel lines, in among whatever the application
+// printed while booting. Lines are picked out by their prefix rather than by
+// position, so a banner or a deprecation notice costs nothing.
+export function parseRouterAnswer(stdout: string): RouteRow[] {
   const rows: RouteRow[] = [];
   const seen = new Set<string>();
-  let record: Record<string, string> = {};
 
-  const flush = (): void => {
-    for (const row of rowsFrom(record)) {
+  for (const line of stdout.split('\n')) {
+    if (!line.startsWith(ROUTES_SENTINEL)) continue;
+
+    let declared: unknown;
+    try {
+      declared = JSON.parse(line.slice(ROUTES_SENTINEL.length));
+    } catch {
+      continue; // not the shape we know how to read
+    }
+
+    for (const row of rowsFrom((declared ?? {}) as Record<string, unknown>)) {
       const key = `${row.verb} ${row.path}`;
       // The same address can be drawn under several prefixes. It is one address.
       if (seen.has(key)) continue;
       seen.add(key);
       rows.push(row);
     }
-    record = {};
-  };
-
-  for (const line of stdout.split('\n')) {
-    if (/^--\[ Route /.test(line)) {
-      flush();
-      continue;
-    }
-    const separator = line.indexOf('|');
-    if (separator === -1) continue;
-    record[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
   }
-  flush();
-
   return rows;
 }
 
-function rowsFrom(record: Record<string, string>): RouteRow[] {
-  const pattern = record.URI ?? record['URI Pattern'];
-  const verb = record.Verb ?? '';
+function rowsFrom(record: Record<string, unknown>): RouteRow[] {
+  const pattern = typeof record.path === 'string' ? record.path : '';
+  const verb = typeof record.verb === 'string' ? record.verb : '';
   // No verb means a mounted Rack application (`mount Sidekiq::Web at: '/sidekiq'`),
   // not an address of this application. Its own routes live in its own router.
   if (!pattern || !verb) return [];
 
-  const handler = /^([A-Za-z0-9_/]+)#([A-Za-z0-9_]+)$/.exec(record['Controller#Action'] ?? '');
+  const controller = typeof record.controller === 'string' ? record.controller : undefined;
+  const action = typeof record.action === 'string' ? record.action : undefined;
   const path = pattern.replace(/\(\.:format\)$/, '');
 
-  // `match via: [:get, :post]` prints one record with both verbs. They are two
-  // addresses, and the map should say so.
+  // `match via: [:get, :post]` is one route object carrying both verbs. They are
+  // two addresses, and the map should say so.
   return verb.split('|').map((one) => ({
     verb: one.trim(),
     path,
-    controller: handler?.[1],
-    action: handler?.[2],
+    controller,
+    action,
   }));
 }
 

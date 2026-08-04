@@ -39,11 +39,19 @@ function withGraph(projectRoot: string, nodes: Array<Record<string, unknown>>): 
   return projectRoot;
 }
 
-function route(name: string, fields: Record<string, string>): string {
-  const body = Object.entries(fields)
-    .map(([key, value]) => `${key.padEnd(17)} | ${value}`)
-    .join('\n');
-  return `--[ Route ${name} ]${'-'.repeat(20)}\n${body}\n`;
+// One line of what the router prints. The fields are still named the way
+// `rails routes` named them — `Verb`, `URI`, `Controller#Action` — because that
+// is how these tests read; the helper turns them into the shape the router
+// itself answers in. No `Controller#Action` means a mounted Rack application,
+// which the router reports with no controller at all.
+function route(_name: string, fields: Record<string, string>): string {
+  const handler = /^([A-Za-z0-9_/]+)#([A-Za-z0-9_]+)$/.exec(fields['Controller#Action'] ?? '');
+  return `UNITBOB_ROUTES ${JSON.stringify({
+    verb: fields.Verb ?? '',
+    path: fields.URI ?? fields['URI Pattern'] ?? '',
+    controller: handler?.[1] ?? null,
+    action: handler?.[2] ?? null,
+  })}\n`;
 }
 
 type Canned = { code: number | null; stdout?: string; stderr?: string };
@@ -86,7 +94,7 @@ function written(
 
 function surfacesIn(projectRoot: string): RouteSurface[] {
   const written = JSON.parse(readFileSync(routeInventoryPath(projectRoot), 'utf8'));
-  assert.equal(written.declared_by, 'rails routes');
+  assert.equal(written.declared_by, 'rails router');
   return written.surfaces as RouteSurface[];
 }
 
@@ -116,7 +124,7 @@ test('the inventory is what the router printed, and the graph node id is copied 
     },
   ]);
   // The router is read in the environment the guardrail suite boots in.
-  assert.match(deps.calls[0], /routes --expanded/);
+  assert.match(deps.calls[0], /rails runner/);
   assert.deepEqual(deps.environments, ['test'], 'one question, in the environment the suite boots in');
 });
 
@@ -255,47 +263,46 @@ test('an address with no node behind it keeps its place, with no link', async ()
   ]);
 });
 
-// Captured from a real `bin/rails routes --expanded` (Rails 7.1). Rails 7 calls
-// the path field `URI`; older versions call it `URI Pattern`, and which one a
-// project prints is decided by its Gemfile, not by us.
-const REAL_RAILS_7_OUTPUT = `--[ Route 1 ]-------------------------------------------------------------------
-Prefix            | register_repos
-Verb              | POST
-URI               | /repos/register(.:format)
-Controller#Action | repos#register
---[ Route 2 ]-------------------------------------------------------------------
-Prefix            |
-Verb              | GET
-URI               | /rails/active_storage/blobs/:signed_id/*filename(.:format)
-Controller#Action | active_storage/blobs/redirect#show
-`;
+// Copied verbatim off a real Rails 7.1 application, script and all. The first
+// line is what a mounted Rack application looks like from the router: a path,
+// no verb, no controller. The last two are the boot noise this format exists to
+// survive — a banner above the answer and a deprecation notice below it.
+const REAL_ROUTER_OUTPUT = [
+  'UNITBOB_ROUTES {"verb":"","path":"/assets","controller":null,"action":null}',
+  'UNITBOB_ROUTES {"verb":"GET","path":"/up(.:format)","controller":"rails/health","action":"show"}',
+  'UNITBOB_ROUTES {"verb":"POST","path":"/repos/register(.:format)","controller":"repos","action":"register"}',
+  'UNITBOB_ROUTES {"verb":"GET","path":"/repos/:repo_id/map/:lens(.:format)","controller":"map_screens","action":"show"}',
+].join('\n');
 
-test('real Rails output reads, under either name for the path field', async () => {
-  const modern = withGraph(railsProject(), [
+test('a real router answer reads, boot noise and all', async () => {
+  const projectRoot = withGraph(railsProject(), [
     { id: 'controllers_repos_controller_reposcontroller_register', label: '.register()',
       source_file: 'app/controllers/repos_controller.rb' },
   ]);
+  write(join(projectRoot, 'app', 'controllers', 'repos_controller.rb'), 'class ReposController; end\n');
+  const stdout = `== Booting the application ==\n${REAL_ROUTER_OUTPUT}\nDEPRECATION WARNING: something\n`;
 
-  await extractRouteInventory(modern, router({ code: 0, stdout: REAL_RAILS_7_OUTPUT }));
+  await extractRouteInventory(projectRoot, router({ code: 0, stdout }));
 
-  assert.deepEqual(surfacesIn(modern), [
+  assert.deepEqual(surfacesIn(projectRoot), [
+    { kind: 'route', id: 'GET /up', handler_label: 'rails/health#show' },
     { kind: 'route', id: 'POST /repos/register', source_file: 'app/controllers/repos_controller.rb',
       handler_symbol: 'controllers_repos_controller_reposcontroller_register',
       handler_label: 'repos#register' },
-    { kind: 'route', id: 'GET /rails/active_storage/blobs/:signed_id/*filename',
-      handler_label: 'active_storage/blobs/redirect#show' },
+    { kind: 'route', id: 'GET /repos/:repo_id/map/:lens', handler_label: 'map_screens#show' },
   ]);
+});
 
-  const older = withGraph(railsProject(), []);
-  await extractRouteInventory(
-    older,
-    router({ code: 0, stdout: REAL_RAILS_7_OUTPUT.replace(/^URI {15}/gm, 'URI Pattern       ') }),
-  );
+// Rails 4 and earlier hand back a Regexp where Rails 5 and later hand back a
+// String. The script reduces both to the same letters, and this is the one
+// version difference the whole approach has.
+test('a verb the way older Rails spells it is read as the same address', async () => {
+  const projectRoot = withGraph(railsProject(), []);
+  const stdout = 'UNITBOB_ROUTES {"verb":"GET","path":"/settings(.:format)","controller":"settings","action":"index"}\n';
 
-  assert.deepEqual(surfacesIn(older).map((surface) => surface.id), [
-    'POST /repos/register',
-    'GET /rails/active_storage/blobs/:signed_id/*filename',
-  ]);
+  await extractRouteInventory(projectRoot, router({ code: 0, stdout }));
+
+  assert.deepEqual(surfacesIn(projectRoot).map((surface) => surface.id), ['GET /settings']);
 });
 
 test('a namespaced controller is found by its file and its method name', async () => {
@@ -462,22 +469,27 @@ test('an absolute path from the graph still counts as the file the router named'
   assert.equal(surfacesIn(projectRoot)[0].handler_symbol, 'admin_users_index_node');
 });
 
-test('a Rails too old for --expanded is not reported as an application that failed', async () => {
-  const projectRoot = railsProject();
+// The a2time run of 2026-08-04. `rails routes --expanded` needs Rails 5.1; that
+// application runs 5.0, so it refused the flag, the inventory was never written,
+// and 194 addresses were typed out of `config/routes.rb` by hand. There is no
+// flag to refuse now — the router object answers on Rails 3 and up — so what
+// used to be a silence is an ordinary answer.
+test('a Rails older than the routes flag still answers, because nothing asks for the flag', async () => {
+  const projectRoot = withGraph(railsProject(), []);
+  const deps = router({
+    code: 0,
+    stdout: route('1', { Verb: 'GET', URI: '/settings(.:format)', 'Controller#Action': 'settings#index' }),
+  });
 
-  const result = await extractRouteInventory(
-    projectRoot,
-    router({ code: 1, stderr: 'invalid option: --expanded' }),
-  );
+  const result = await extractRouteInventory(projectRoot, deps);
 
-  assert.deepEqual(result, { status: 'silent', reason: 'router_too_old' });
-  assert.equal(existsSync(routeInventoryPath(projectRoot)), false);
+  assert.equal(result.status, 'written');
+  assert.doesNotMatch(deps.calls[0], /--expanded/);
 });
 
-// Second review round. "invalid option" is ordinary Ruby wording and turns up
-// in failing application code too. Reading it as an old Rails would print
-// "nothing is wrong with the application" over a broken one — the same wrong
-// errand `router_too_old` exists to prevent, sending the other way.
+// Second review round, kept as it was. "invalid option" is ordinary Ruby wording
+// and turns up in failing application code, so an application that says it is an
+// application that failed.
 test('an application that fails with the words “invalid option” is not an old Rails', async () => {
   const projectRoot = railsProject();
 
@@ -568,18 +580,14 @@ test('the sentence a vibecoder reads names the count, or names the reason', () =
   );
   assert.match(
     describeRouteInventory({ status: 'silent', reason: 'app_did_not_load', detail: 'NoMethodError' }),
-    /did not get through — NoMethodError/,
+    /could not be asked — NoMethodError/,
   );
-  assert.match(describeRouteInventory({ status: 'silent', reason: 'no_routes' }), /nothing this version knows how to read/);
+  assert.match(describeRouteInventory({ status: 'silent', reason: 'no_routes' }), /a shape this connector could not read/);
   // The sentence names both ways a run can be stopped, because a missing exit
   // code does not tell us which one happened.
   assert.match(
     describeRouteInventory({ status: 'silent', reason: 'did_not_finish' }),
-    /stopped before it finished.*2-minute limit or something else killed it.*nothing here says the application is unhealthy/,
-  );
-  assert.match(
-    describeRouteInventory({ status: 'silent', reason: 'router_too_old' }),
-    /needs Rails 5\.1 or newer.*nothing is wrong with the application/,
+    /not done answering.*2-minute limit or something else killed it.*nothing here says the application is unhealthy/,
   );
   assert.match(
     describeRouteInventory({ status: 'silent', reason: 'could_not_write', detail: 'EACCES' }),
