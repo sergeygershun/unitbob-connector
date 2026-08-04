@@ -52,6 +52,7 @@ interface AssignedCase {
   id: string;
   contract_key: string;
   case_marker: string;
+  surfaces: string[];
 }
 
 export function collectBuildProblems(
@@ -188,7 +189,103 @@ function checkOneCase(
   // as a mismatch rather than as the green it claims.
   if (suiteText && !suiteText.includes(expected.case_marker)) {
     add(`${id} is answered "covered", but its marker ${expected.case_marker} appears nowhere in the suite files.`);
+    return;
   }
+
+  checkSurfaceCoverage(row, id, expected, suiteText, add);
+}
+
+// Which scenario reached which address. The a2time run of 2026-08-04 published
+// 97 coverage rows against 99 Scenarios: one Scenario had no row, another had a
+// row naming no address. Both mean the same thing — a Scenario that ran and
+// whose result reaches nothing on the map — and both were found by the
+// independent reviewer, hours later, doing a different job. This check was the
+// cheap place to find them and it was not looking.
+//
+// Only asked when the answer is already speaking this language: an answer with
+// no `surface_coverage` anywhere is an older map's shape, and refusing it here
+// would refuse what the server accepts. Within a branch that does declare it,
+// the rules below are the server's own, in the server's own order.
+function checkSurfaceCoverage(
+  row: Record<string, unknown>,
+  id: string,
+  expected: AssignedCase,
+  suiteText: string,
+  add: (message: string) => void,
+): void {
+  if (expected.surfaces.length === 0) return;
+  const coverage = row.surface_coverage;
+  if (coverage === undefined) return; // not this map's shape — the server decides
+
+  if (!Array.isArray(coverage)) {
+    add(`${id} is answered "covered", so its surface_coverage must be an array of {scenario, surfaces}.`);
+    return;
+  }
+
+  const named = new Set<string>();
+  const reached = new Set<string>();
+  for (const [index, item] of coverage.entries()) {
+    const entry = (item ?? {}) as Record<string, unknown>;
+    const scenario = String(entry.scenario ?? '').trim();
+    const surfaces = entry.surfaces;
+    if (!scenario || !Array.isArray(surfaces)) {
+      add(`${id} surface_coverage[${index}] must name a scenario and its surfaces.`);
+      continue;
+    }
+    if (surfaces.length === 0) {
+      add(`${id} surface_coverage names no surface for "${scenario}" — that scenario's result reaches nothing on the map.`);
+    }
+    if (suiteText && !suiteText.includes(scenario)) {
+      add(`${id} surface_coverage names "${scenario}", which appears nowhere in the suite files.`);
+    }
+    named.add(scenario);
+    surfaces.filter((s): s is string => typeof s === 'string').forEach((s) => reached.add(s));
+  }
+
+  const missed = expected.surfaces.filter((surface) => !reached.has(surface));
+  if (missed.length > 0) {
+    add(`${id} surface_coverage accounts for no scenario at ${missed.join(', ')}.`);
+  }
+  const foreign = [...reached].filter((surface) => !expected.surfaces.includes(surface));
+  if (foreign.length > 0) {
+    add(`${id} surface_coverage names ${foreign.join(', ')}, which this branch's assignment does not carry.`);
+  }
+
+  // The other direction, and the one that found nothing on a2time because
+  // nobody asked it: a Scenario that carries the marker but appears in no row.
+  //
+  // Read off the file rather than parsed: a tag line carrying this marker, then
+  // the next line that has a colon in it, whose name is whatever follows the
+  // first colon. That holds for any Gherkin dialect, because only the keyword is
+  // translated and the colon is not. When the shape is not recognised the answer
+  // is silence — the server does parse this properly, and a guess here that says
+  // "you forgot a Scenario" about a Scenario that does not exist would cost the
+  // branch its publication.
+  const unlisted = scenarioNamesTagged(suiteText, expected.case_marker).filter((name) => !named.has(name));
+  if (unlisted.length > 0) {
+    add(`${id} surface_coverage does not account for ${unlisted.map((n) => `"${n}"`).join(', ')}.`);
+  }
+}
+
+// Scenario names carrying one marker, by shape rather than by grammar. See the
+// caller for why this stays deliberately timid.
+function scenarioNamesTagged(suiteText: string, marker: string): string[] {
+  if (!suiteText) return [];
+
+  const lines = suiteText.split('\n');
+  const names: string[] = [];
+  for (const [index, line] of lines.entries()) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('@') || !trimmed.split(/\s+/).includes(`@${marker}`)) continue;
+
+    const next = lines.slice(index + 1).find((candidate) => candidate.trim().length > 0) ?? '';
+    const colon = next.indexOf(':');
+    if (colon === -1) continue;
+
+    const name = next.slice(colon + 1).trim();
+    if (name) names.push(name);
+  }
+  return names;
 }
 
 // Which field names the id. Read off the *assignment*, where the answer is
@@ -248,7 +345,14 @@ function assignedCases(assignment: unknown): AssignedCase[] {
     const key = row.contract_key;
     const marker = row.case_marker;
     if (typeof key === 'string' && key.startsWith(CONTRACT_PREFIX) && typeof marker === 'string') {
-      found.push({ id: key.slice(CONTRACT_PREFIX.length), contract_key: key, case_marker: marker });
+      found.push({
+        id: key.slice(CONTRACT_PREFIX.length),
+        contract_key: key,
+        case_marker: marker,
+        // Only the behavioral assignment carries addresses. Its absence is what
+        // tells the coverage check below there is nothing of that kind here.
+        surfaces: Array.isArray(row.surfaces) ? row.surfaces.filter((s): s is string => typeof s === 'string') : [],
+      });
     }
     Object.values(row).forEach(walk);
   };

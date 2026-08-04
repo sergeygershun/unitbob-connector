@@ -224,6 +224,131 @@ test('every problem is reported in one pass, not the first one', () => {
   assert.ok(found.some((message) => /no answer for 1 assigned id\(s\): refund/.test(message)));
 });
 
+// --- which scenario reached which address (the a2time gap of 2026-08-04) -----
+//
+// The behavioral branch, whose assignment carries addresses. That run published
+// 97 coverage rows against 99 Scenarios and this check said the answer looked
+// fine; the independent reviewer found it hours later, doing a different job.
+
+const BDD_MANIFEST = { language: 'ruby', framework: 'cucumber', result_format: 'cucumber_messages', runner: 'cucumber' };
+
+function bddRequest(): SuiteBuildBranch[] {
+  return [{
+    suite_kind: 'behavioral',
+    source_digest: 'map-d',
+    path_root: '.unitbob/behavioral/',
+    recipe: { name: 'generate', version: 'g1', text: 'g' },
+    assignment: {
+      capabilities: [{
+        capability_id: 'clients',
+        contract_key: 'contract:clients',
+        case_marker: 'ubc_cccccccccccc',
+        surfaces: ['GET /clients', 'POST /clients'],
+      }],
+    },
+    runner_manifest: BDD_MANIFEST,
+  }];
+}
+
+const FEATURE = [
+  'Feature: What the product does',
+  '',
+  '  @ubc_cccccccccccc',
+  '  Scenario: A partner opens the client list',
+  '    Given a partner',
+  '',
+  '  @ubc_cccccccccccc',
+  '  Scenario: A partner adds a client',
+  '    Given a partner',
+  '',
+].join('\n');
+
+const FULL_COVERAGE = [
+  { scenario: 'A partner opens the client list', surfaces: ['GET /clients'] },
+  { scenario: 'A partner adds a client', surfaces: ['POST /clients'] },
+];
+
+function bddAnswer(coverage: unknown): Record<string, unknown> {
+  return {
+    suite_kind: 'behavioral',
+    suite_file: { path: '.unitbob/behavioral/features/surface_contracts.feature', content: FEATURE },
+    runner_manifest: BDD_MANIFEST,
+    test_metadata: { capabilities: [{
+      capability_id: 'clients',
+      status: 'covered',
+      contract_key: 'contract:clients',
+      case_marker: 'ubc_cccccccccccc',
+      surface_coverage: coverage,
+    }] },
+  };
+}
+
+function bddProblems(coverage: unknown): string[] {
+  const built = writeSuiteBuildRequest(tmpProject(), bddRequest());
+  return collectBuildProblems(built, [bddAnswer(coverage) as never]).map((problem) => problem.message);
+}
+
+test('a complete coverage manifest is accepted', () => {
+  assert.deepEqual(bddProblems(FULL_COVERAGE), []);
+});
+
+test('a scenario carrying the marker but named in no coverage row is caught', () => {
+  const found = bddProblems([{ scenario: 'A partner opens the client list', surfaces: ['GET /clients', 'POST /clients'] }]);
+
+  assert.ok(found.some((message) => /does not account for "A partner adds a client"/.test(message)), found.join('\n'));
+});
+
+// The second half of the same gap: the row is there and names nothing. Its
+// siblings absorb every assigned address, so counting addresses finds nothing.
+test('a coverage row naming no surface is caught even when its siblings cover everything', () => {
+  const found = bddProblems([
+    { scenario: 'A partner opens the client list', surfaces: ['GET /clients', 'POST /clients'] },
+    { scenario: 'A partner adds a client', surfaces: [] },
+  ]);
+
+  assert.ok(found.some((message) => /names no surface for "A partner adds a client"/.test(message)), found.join('\n'));
+});
+
+test('an assigned address no scenario reaches is caught', () => {
+  const found = bddProblems([
+    { scenario: 'A partner opens the client list', surfaces: ['GET /clients'] },
+    { scenario: 'A partner adds a client', surfaces: ['GET /clients'] },
+  ]);
+
+  assert.ok(found.some((message) => /accounts for no scenario at POST \/clients/.test(message)), found.join('\n'));
+});
+
+test('a coverage row naming an address this branch was never assigned is caught', () => {
+  const found = bddProblems([
+    FULL_COVERAGE[0],
+    { scenario: 'A partner adds a client', surfaces: ['POST /clients', 'DELETE /clients/1'] },
+  ]);
+
+  assert.ok(found.some((message) => /names DELETE \/clients\/1/.test(message)), found.join('\n'));
+});
+
+test('a coverage row naming a scenario that is not in the suite is caught', () => {
+  const found = bddProblems([...FULL_COVERAGE, { scenario: 'A partner invents a screen', surfaces: ['GET /clients'] }]);
+
+  assert.ok(found.some((message) => /"A partner invents a screen", which appears nowhere/.test(message)), found.join('\n'));
+});
+
+// An older map's answer does not speak this language at all, and refusing it
+// here would refuse what the server accepts.
+test('an answer that declares no coverage at all is left to the server', () => {
+  const built = writeSuiteBuildRequest(tmpProject(), bddRequest());
+  const withoutCoverage = bddAnswer(undefined);
+  const capability = ((withoutCoverage.test_metadata as Record<string, unknown>).capabilities as Record<string, unknown>[])[0];
+  delete capability.surface_coverage;
+
+  assert.deepEqual(collectBuildProblems(built, [withoutCoverage as never]), []);
+});
+
+// The structural branch carries no addresses, so none of this applies to it.
+test('the structural branch is never asked about coverage', () => {
+  assert.deepEqual(problems(answer()), []);
+});
+
 // A branch the host says plainly it could not build is an answer, not a
 // malformed one. The server records it as such and the peer branch is untouched.
 test('a branch that reports a build_error is not held to any of this', () => {
