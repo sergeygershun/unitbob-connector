@@ -58,6 +58,27 @@ test('rspec: the helper loads cleanly, so the suite can start', async () => {
   assert.match(deps.calls[0], /exec ruby -e require .*unitbob_helper\.rb/);
 });
 
+// ADR 1: a check that predicts an operation may be looser than it, never
+// stricter. This one predicts the RSpec run and reaches the same file through a
+// different door — the run through the `rspec` binary, the check through a bare
+// interpreter — so whatever that binary would have loaded first, the file has to
+// load for itself. rspec-core is the whole of that difference, and on the a2time
+// run of 2026-08-04 it was enough to call a healthy project broken.
+test('rspec: the check needs nothing the run would have set up for it', async () => {
+  const deps = fakeRunner([{ code: 0 }]);
+  await bootCheck(railsProject(), 'rspec', deps);
+
+  // Loaded by a bare interpreter, not by the runner…
+  assert.match(deps.calls[0], /ruby -e/);
+  assert.ok(!/\brspec\b/.test(deps.calls[0]), 'the check does not go through the rspec binary');
+  // …so the file it loads carries what that binary would have brought with it.
+  assert.match(UNITBOB_HELPER_RB, /require 'rspec\/core'/);
+  assert.ok(
+    UNITBOB_HELPER_RB.indexOf("require 'rspec/core'") < UNITBOB_HELPER_RB.indexOf("require 'rails_helper'"),
+    'rspec-core must be required before the project setup that uses it',
+  );
+});
+
 test('rspec: a failed load is broken, and quotes the runner word for word', async () => {
   const stderr =
     "/app/models/report.rb:1:in `<main>': undefined method `before_validation' for main:Object (NoMethodError)";

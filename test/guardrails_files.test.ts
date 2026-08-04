@@ -110,6 +110,21 @@ test('the helper delegates to the project rails_helper or self-boots the test en
   assert.match(UNITBOB_HELPER_RB, /use_transactional_fixtures = true/);
 });
 
+// The boot check loads this file through a bare `ruby -e`, where nothing has
+// required rspec-core yet, while the run loads it through the `rspec` binary,
+// where something has. A Rails-generated `rails_helper` calls `RSpec.configure`
+// before requiring `rspec/rails`, so without this line the check fails on a
+// project whose suite runs perfectly — the check being stricter than the run it
+// predicts, which is the one thing spec 32-6 forbids. Order is the whole point,
+// so the test pins the order and not just the presence.
+test('the helper requires rspec-core before delegating, so a bare ruby -e can load it', () => {
+  assert.match(UNITBOB_HELPER_RB, /require 'rspec\/core'/);
+  assert.ok(
+    UNITBOB_HELPER_RB.indexOf("require 'rspec/core'") < UNITBOB_HELPER_RB.indexOf("require 'rails_helper'"),
+    'rspec-core must be required before rails_helper, which is what needs it',
+  );
+});
+
 // The helper is the sole boot path on every client machine; a syntax error in
 // the template must fail here, not on a vibecoder's first run.
 test('the helper template is valid Ruby', (t) => {

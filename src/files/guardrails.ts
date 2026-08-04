@@ -55,10 +55,22 @@ export function assertGuardrailPath(path: string): void {
 // own RSpec setup when one exists; boots the Rails test environment directly
 // when none does. Both branches refuse a non-test environment — before boot
 // via ENV (nothing touched yet), after boot via Rails.env (config overrides).
+//
+// `rspec/core` is required first because this file has two callers and only one
+// of them is the `rspec` binary. The run loads it through that binary, which has
+// already required rspec-core by the time it reads a spec file; the boot check
+// of spec 32-6 loads it through a bare `ruby -e`, which has not. A Rails-
+// generated `spec/rails_helper.rb` calls `RSpec.configure` (inside `spec_helper`)
+// before it requires `rspec/rails`, so under the bare interpreter it died on
+// `uninitialized constant RSpec` — a healthy application declared broken, and its
+// owner told to edit a tracked file the recipes forbid touching. That made the
+// check stricter than the run it predicts, which is the one rule 32-6 is built
+// on. Under the binary this line is a no-op. Found on the a2time run 2026-08-04.
 export const UNITBOB_HELPER_RB = `# frozen_string_literal: true
 # Written by the unitbob connector on every materialization — do not edit.
 ENV['RAILS_ENV'] ||= 'test'
 abort 'unitbob_helper: refusing to run against a non-test environment' unless ENV['RAILS_ENV'] == 'test'
+require 'rspec/core'
 root = File.expand_path('../..', __dir__)
 if File.exist?(File.join(root, 'spec', 'rails_helper.rb'))
   # The project has its own RSpec setup — respect it (factories, cleaners…).
