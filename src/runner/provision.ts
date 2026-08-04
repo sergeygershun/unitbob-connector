@@ -58,6 +58,26 @@ async function provisionRuby(
     writeFileSync(sidecarGemfile, sidecarContent);
   }
 
+  // Start the sidecar from the project's own resolution, so bundler adds
+  // cucumber and leaves everything else on the versions the project already
+  // runs. Without a starting lock it resolves the whole graph from scratch: on
+  // a2time that moved 285 gems, handed the sidecar carrierwave 2.2.0 where the
+  // project pins 2.2.6, and Rails then would not load at all (`cannot load such
+  // file -- mimemagic/overlay`). The behavioral branch could not start, and the
+  // boot check of 32-6 had said `ok` — truthfully, because it only ever asks the
+  // structural runner. Found on the a2time run 2026-08-04.
+  //
+  // Copied on every provision rather than only when missing. A lock seeded once
+  // goes stale the moment the project upgrades a gem — the sidecar Gemfile
+  // inherits the project's *Gemfile* through `eval_gemfile`, never its lock, so
+  // nothing would pull the new version through and the drift this exists to
+  // prevent comes back slowly instead of at once. `bundle install` already runs
+  // on every provision, so re-adding cucumber to a fresh copy costs nothing new.
+  const projectLock = join(projectRoot, 'Gemfile.lock');
+  if (existsSync(projectLock)) {
+    writeFileSync(join(behavioralDir, 'Gemfile.lock'), readFileSync(projectLock, 'utf8'));
+  }
+
   const gemfileRel = '.unitbob/behavioral/Gemfile';
   const env = { BUNDLE_GEMFILE: gemfileRel };
 
