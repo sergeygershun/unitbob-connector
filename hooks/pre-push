@@ -1,0 +1,9 @@
+#!/bin/sh
+# Runs `npm run check:release` before every push (spec 33 DoD ordering: the
+# connector reaches npm before the wire reaches main). Versioned in the repo and
+# activated by `npm run hooks:install`, which points core.hooksPath here — a
+# hook living in .git/hooks would exist on one machine and protect nobody else.
+#
+# It blocks exactly one thing: pushing a repository whose plugin pins name a
+# version npm cannot fetch. Everything else about the push is left alone.
+exec npm run --silent check:release
