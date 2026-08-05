@@ -156,7 +156,19 @@ Do this:
    and one `scenario_reviews` entry per Scenario. Each entry has exact
    `scenario`, `case_marker`, verified `public_surfaces`, concrete
    `given_then_evidence`, `outcome`, `outcome_kind` (`specific` or
-   `availability`), and `verdict: "pass"`. Add `known_defect_probe` exactly as
+   `availability`), and a verdict.
+
+   The verdict has three answers, not two, and the middle one exists because the
+   outer two are a trap: after one round of stopping the branch, signing
+   everything is the only move left, and the weakest contracts in the suite go up
+   marked `pass`. Use `verdict: "pass"` when the Scenario protects what it
+   promises; `verdict: "pass_with_reservation"` with a non-empty `reservation`
+   naming in one concrete sentence what it does not check; and, for a Scenario
+   that checks nothing, write no artifact at all and go back to the generator —
+   that is the veto, it stops the whole branch, and it stays the right answer
+   there. A reservation is not a soft veto: it is for a contract that holds a
+   real promise and less of it than its name suggests. The upload accepts it and
+   reports how many carry one. Add `known_defect_probe` exactly as
    the recipe and connector-owned `known_defect_context` require. A named defect
    must be `detected` red, or `verified` red then green when a fixed revision is
    supplied; copy the exact defect text, revisions, and Scenario from the
