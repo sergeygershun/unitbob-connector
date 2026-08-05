@@ -156,7 +156,10 @@ async function buildRunPayload(config: Config, d: Deps, item: SuiteListItem): Pr
   return { suite_digest: item.suite_digest, run_result: report };
 }
 
-function runStructuralByRunner(projectRoot: string, runner: string, suitePath: string): Promise<RunnerResult> {
+// Exported for `run-local`, which runs these same strategies against the files
+// the host just wrote rather than against a published suite. One dispatch table,
+// so the command the loop iterates on is the command that runs after publishing.
+export function runStructuralByRunner(projectRoot: string, runner: string, suitePath: string): Promise<RunnerResult> {
   switch (runner) {
     case 'rspec':
       return runRspecSuite(projectRoot, suitePath);

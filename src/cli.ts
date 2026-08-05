@@ -16,6 +16,7 @@ import type { SuiteBuildResult } from './wire.ts';
 import { recipe } from './verbs/recipe.ts';
 import { show } from './verbs/show.ts';
 import { run, runOnly } from './verbs/run.ts';
+import { runLocal } from './verbs/runLocal.ts';
 import { init } from './verbs/init.ts';
 import { mapPrepare } from './verbs/mapPrepare.ts';
 import { extractSurfaces } from './verbs/extractSurfaces.ts';
@@ -51,6 +52,8 @@ Verbs:
                        uploading. Reports every problem at once; put-suite-build runs it too.
   put-suite-build      Internal: upload the host-built guardrail suite (whole spec file + test_metadata),
                        then run every branch it published and report the server's results.
+  run-local [branch]   Internal: run the suite you just wrote, before publishing it, with the same runner
+                       that will run it afterwards. No argument runs every branch the build asked for.
   fix-prepare <id>     Internal: fetch the per-capability repair packet for one red guard (by interface_id).
   contract-prompt <digest> <test_id> [fix|accept]
                        Internal: fetch the fix/accept brief for one red check on either map.
@@ -123,6 +126,9 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
         return 0;
       case 'contract-prompt':
         await contractPrompt(await linked(), args);
+        return 0;
+      case 'run-local':
+        await runLocal(await linked(), args);
         return 0;
       case 'run':
       case 'check':

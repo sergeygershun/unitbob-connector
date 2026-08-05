@@ -12,7 +12,7 @@ uploaded, never source:
 Neither replaces the other; they have independent versions, runs, and lamps.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.3.2 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.3.3 suite-prepare` with exactly one
    defect-context option. If the user or acceptance material named a known defect, append
    `--known-defect='<exact defect description>'`; when a fixed revision was
    supplied, also append `--fixed-revision='<exact revision>'`. Never omit the
@@ -39,7 +39,16 @@ Do this:
    could not describe is not in the request at all, and it says why. Never add a
    branch that is not there, and never edit a manifest that is.
 3. Build and run **both** branches locally, each following its own
-   `recipe.text`. One rule decides what to do when a local run goes wrong. It
+   `recipe.text`. Run them with
+   `npx -y --loglevel=error unitbob@0.3.3 run-local` — it executes whatever you
+   have written so far with the *same* runner that will run the suite after
+   publication, and prints the exact command, the exit code and where the
+   machine-readable report landed. Never assemble that command yourself: a
+   hand-built one that differs even slightly moves the whole repair loop onto a
+   harness nobody will run again. Add a branch name (`run-local structural`) to
+   re-run one branch while repairing it.
+
+   One rule decides what to do when a local run goes wrong. It
    is the same for both branches and all three stacks, and it turns on
    something you can observe — whether the runner started — not on a guess
    about whether the code is healthy:
@@ -98,11 +107,21 @@ Do this:
    **A file you already wrote to disk needs only its `path`** — the connector
    reads the bytes from there, so do not paste a second copy into this JSON.
    Inline `content` only for a file that is not on disk. Copy each id's
-   `contract_key` and `case_marker` verbatim. A branch you truly
-   cannot build gets `{ "suite_kind": ..., "build_error": { "message": "..." } }`
-   instead — it never blocks the peer branch. Never emit `spec_rb`, `rspec_id`,
+   `contract_key` and `case_marker` verbatim. Never emit `spec_rb`, `rspec_id`,
    `example_id`, or `run_command`. No prose around the JSON.
-5. Run `npx -y --loglevel=error unitbob@0.3.2 validate-build`. It checks your
+
+   **Every branch in the request gets an entry — including the one you did not
+   build.** A branch you could not finish, for any reason at all, gets
+   `{ "suite_kind": ..., "build_error": { "message": "..." } }` instead of a
+   suite. It never blocks the peer branch, and running out of budget partway
+   through is a perfectly good message: *"wrote the feature file, stopped before
+   the step definitions — 223 surfaces was more than this run could finish."*
+
+   Leaving the branch out of the array is **not** the quiet version of the same
+   thing. Nothing anywhere then records that the branch was ever asked for, so
+   the work already spent on it vanishes and the next run starts from zero
+   without knowing why. Say it in one line instead; that line is the whole cost.
+5. Run `npx -y --loglevel=error unitbob@0.3.3 validate-build`. It checks your
    answer against the request in seconds — the manifest you copied verbatim,
    every assigned id answered exactly once, markers unchanged and actually
    present in the files you wrote, paths safe and files on disk. It names
@@ -110,9 +129,11 @@ Do this:
    is clean. These are the same mistakes the server rejects; finding them here
    costs seconds instead of a whole generate-and-review cycle. The server still
    has the last word, so a clean result here is not a promise it will publish.
-6. If no behavioral candidate was built (or it carries `build_error`), skip the
-   review step and continue to step 8 so the structural peer can still publish.
-   Otherwise run `npx -y --loglevel=error unitbob@0.3.2 suite-review-prepare`. It reads the
+6. If the behavioral branch carries a `build_error`, skip the review step and
+   continue to step 8 so the structural peer can still publish. (There is no
+   third case: a branch with neither a suite nor a `build_error` is an answer
+   step 5 refuses, not a shortcut past the review.)
+   Otherwise run `npx -y --loglevel=error unitbob@0.3.3 suite-review-prepare`. It reads the
    finished behavioral candidate, runs that exact candidate to capture machine
    evidence (and repeats it in a disposable worktree when a fixed revision was
    supplied), keeps that evidence in its own
@@ -142,7 +163,7 @@ Do this:
    connector-owned `candidate_run`/`fixed_candidate_run` evidence and never call
    it `not_supplied`. This is a local process attestation, not authenticated
    reviewer identity; do not describe it as cryptographic proof of independence.
-8. Run `npx -y --loglevel=error unitbob@0.3.2 put-suite-build`. It uploads both
+8. Run `npx -y --loglevel=error unitbob@0.3.3 put-suite-build`. It uploads both
    branches in one batch, each validated and published independently, and then
    runs every branch it published and prints the server's result for each plus
    the map URL. This is the last command: it lights the lamps itself, so never

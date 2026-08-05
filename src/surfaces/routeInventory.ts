@@ -541,7 +541,7 @@ export function inventoryProblems(inventory: unknown, surfaces: unknown): string
 // either printed by the router or copied out of the graph. A blank is not a gap
 // to be helpfully filled — an invented `source_file` is the same failure as an
 // invented address, one field over, and a `handler_symbol` swapped for another
-// node that happens to exist passes the host's check while sending spec 35's
+// node that happens to exist passes the host's check while sending spec 36's
 // trace into the wrong code.
 const LINK_FIELDS = ['source_file', 'handler_symbol'] as const;
 

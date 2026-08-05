@@ -55,6 +55,22 @@ they work only in a terminal session started after the plugin was installed — 
 a browser or desktop window they are not recognised at all. The phrasings above
 work everywhere, so they are the ones documented here.
 
+### If the assistant says it cannot find the Unitbob instructions
+
+A session that started *before* the plugin was installed does not pick up the
+skill, so the assistant has nothing to follow. Restarting the session is the
+clean fix. If that is inconvenient, the instructions are ordinary files on disk
+and the assistant can read them directly — tell it:
+
+```
+Read ~/.claude/plugins/cache/unitbob/unitbob/<version>/skills/unitbob/SKILL.md
+and follow the workflow it names for this job.
+```
+
+`<version>` is whatever `claude plugin list` reports (for example `0.3.2`). The
+workflow files sit next to it under `workflows/`, one per job, and each is
+self-contained — that is what they are designed for.
+
 ---
 
 ## How to read it

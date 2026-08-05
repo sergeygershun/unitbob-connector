@@ -181,7 +181,9 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   actual.stdout.write(`Suite build request written to ${request.project_root}/.unitbob/suite-build/request.json\n`);
   actual.stdout.write(
     `Next: build ${branches.length === 1 ? 'the' : 'both'} peer ${branches.length === 1 ? 'suite' : 'suites'} (${kinds}) following each branch's \`recipe\` and \`assignment\`, ` +
-      `write your answer to ${request.output_path} as a branches array, run each locally, repair broken harness steps while application failures remain red, ` +
+      `write your answer to ${request.output_path} as a branches array — one entry per branch named above, and a branch you cannot ` +
+      `finish says so in its own entry rather than being left out of the array. Run each locally with \`unitbob run-local\` (the same ` +
+      `runner that runs after publishing, so you never have to guess the command), repair broken harness steps while application failures remain red, ` +
       `then run ${nextCommand}.\n`,
   );
 
