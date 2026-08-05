@@ -67,12 +67,13 @@ export async function putSuiteBuild(
   // batch. That also bounds what a false positive in a local check can cost —
   // one branch, with the peer still going up and the server still the authority.
   const problemsFor = new Map<string, string[]>();
-  for (const problem of collectBuildProblems(request, outputs)) {
+  for (const problem of collectBuildProblems(request, outputs, unreadable)) {
     problemsFor.set(problem.branch, [...(problemsFor.get(problem.branch) ?? []), problem.message]);
   }
 
   for (const output of outputs) {
     const failed = problemsFor.get(output.suite_kind);
+    problemsFor.delete(output.suite_kind);
     if (failed) {
       blocked.push({ suite_kind: output.suite_kind, status: BLOCKED_STATUS, error: formatBranchProblems(failed) });
       continue;
@@ -101,6 +102,15 @@ export async function putSuiteBuild(
         test_metadata: testMetadata,
       },
     });
+  }
+
+  // What is left in `problemsFor` belongs to a branch the loop above never
+  // reached, because the answer has no entry for it at all. It has nothing to
+  // upload and nothing to roll back, so it costs its peer nothing — but it is
+  // exactly the branch that used to leave no trace anywhere, and the one line it
+  // prints here is the whole point of noticing it (spec 32-6, a2time 2026-08-04).
+  for (const [suiteKind, messages] of problemsFor) {
+    blocked.push({ suite_kind: suiteKind, status: BLOCKED_STATUS, error: formatBranchProblems(messages) });
   }
 
   // Every branch is blocked, so there is nothing to upload. Asking the server to

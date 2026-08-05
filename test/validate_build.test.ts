@@ -384,3 +384,128 @@ test('the verb fails with every problem at once, and defers to the server', asyn
     return true;
   });
 });
+
+// The branch that is not there at all. Every other check in this file reads an
+// entry and asks whether it is well-formed; none of them can see a branch the
+// answer never mentions. This one walks the request instead.
+//
+// The a2time run of 2026-08-04 is why: its behavioral branch was prepared,
+// half-built and abandoned for budget, the answer went up with the structural
+// branch alone, and this check called it well-formed. ADR 1's "narrower" half —
+// a pre-check that passes work the real thing would not.
+function twoBranchRequest(): SuiteBuildBranch[] {
+  return [
+    ...request(),
+    {
+      suite_kind: 'behavioral',
+      source_digest: 'surface-d',
+      path_root: '.unitbob/behavioral/',
+      recipe: { name: 'generate_behavioral', version: 'b1', text: 'b' },
+      assignment: {},
+    },
+  ];
+}
+
+function twoBranchProblems(
+  answered: Record<string, unknown>[],
+  unreadable: { suite_kind: string; message: string }[] = [],
+): { branch: string; message: string }[] {
+  const built = writeSuiteBuildRequest(tmpProject(), twoBranchRequest());
+  return collectBuildProblems(built, answered as never[], unreadable);
+}
+
+test('a branch the request issued and the answer omits is named, not passed', () => {
+  const found = twoBranchProblems([answer()]);
+
+  assert.equal(found.length, 1);
+  assert.equal(found[0].branch, 'behavioral');
+  assert.match(found[0].message, /no entry for it/);
+  // The message has to say what to do instead, or it just renames the dead end.
+  assert.match(found[0].message, /"suite_kind": "behavioral", "build_error"/);
+});
+
+// Declining a branch is a first-class answer and stays cheap: one line, no
+// suite. The check demands the sentence, never the work.
+test('a branch declined with build_error is answered, not missing', () => {
+  const found = twoBranchProblems([
+    answer(),
+    { suite_kind: 'behavioral', build_error: { message: 'ran out of budget after the feature file' } },
+  ]);
+
+  assert.deepEqual(found, []);
+});
+
+// One mistake, one complaint. A branch whose entry existed but would not parse
+// is already reported as unreadable by the caller; adding "and it is missing"
+// sends the reader looking for a second problem that is not there.
+test('an unreadable branch is not also reported as missing', () => {
+  const found = twoBranchProblems([answer()], [{ suite_kind: 'behavioral', message: 'malformed' }]);
+
+  assert.deepEqual(found, []);
+});
+
+test('the verb refuses a one-branch answer to a two-branch request', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  const built = writeSuiteBuildRequest(projectRoot, twoBranchRequest());
+  writeFileSync(built.output_path, JSON.stringify({ branches: [answer()] }));
+
+  await assert.rejects(validateBuild(config(projectRoot)), (err: Error) => {
+    assert.match(err.message, /behavioral: the request asked for this branch/);
+    return true;
+  });
+});
+
+// Spec 34, decision 15: an address only a third party can call is declared
+// rather than faked. Mirrored from the server so this check never refuses an
+// answer the upload would take — the one direction of drift that costs a branch.
+function bddProblemsWith(capability: Record<string, unknown>): string[] {
+  const built = writeSuiteBuildRequest(tmpProject(), bddRequest());
+  const answer = bddAnswer(FULL_COVERAGE) as Record<string, unknown>;
+  const metadata = answer.test_metadata as { capabilities: Record<string, unknown>[] };
+  Object.assign(metadata.capabilities[0], capability);
+  return collectBuildProblems(built, [answer as never]).map((problem) => problem.message);
+}
+
+test('a surface declared unreachable with a reason satisfies coverage', () => {
+  const found = bddProblemsWith({
+    surface_coverage: [{ scenario: 'A partner opens the client list', surfaces: ['GET /clients'] }],
+    unreachable_surfaces: [{
+      surface: 'POST /clients',
+      reason: 'The vendor posts here after approving the account; no test can cause that.',
+    }],
+  });
+
+  // The scenario that drives nothing is a separate, real complaint; what must
+  // not appear is the address being reported as unaccounted for.
+  assert.ok(!found.some((message) => /accounts for no scenario at POST \/clients/.test(message)), found.join('\n'));
+});
+
+// The per-address reason is the whole guard against this becoming the place
+// every inconvenient address goes.
+test('a surface declared unreachable without a reason is refused', () => {
+  const found = bddProblemsWith({
+    unreachable_surfaces: [{ surface: 'POST /clients' }],
+  });
+
+  assert.ok(found.some((message) => /POST \/clients unreachable but gives no business reason/.test(message)), found.join('\n'));
+});
+
+test('a surface both driven and declared unreachable is refused', () => {
+  const found = bddProblemsWith({
+    unreachable_surfaces: [{ surface: 'POST /clients', reason: 'A third party has to call this.' }],
+  });
+
+  assert.ok(found.some((message) => /both drives POST \/clients.*declares it unreachable/.test(message)), found.join('\n'));
+});
+
+test('an unreachable surface outside this assignment is refused', () => {
+  const found = bddProblemsWith({
+    unreachable_surfaces: [{ surface: 'GET /somebody_elses_callback', reason: 'A third party calls this.' }],
+  });
+
+  assert.ok(
+    found.some((message) => /GET \/somebody_elses_callback, which this branch's assignment does not carry/.test(message)),
+    found.join('\n'),
+  );
+});

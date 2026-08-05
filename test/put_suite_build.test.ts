@@ -43,6 +43,15 @@ function writeTask(projectRoot: string): void {
   writeSuiteBuildRequest(projectRoot, branches());
 }
 
+// A request that asked for the structural branch and nothing else, for the tests
+// that are about how one branch's own answer is handled. With the two-branch
+// task they would also be asserting that a branch nobody answered gets named,
+// which is a different rule with its own tests.
+function writeStructuralOnlyTask(projectRoot: string): void {
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  writeSuiteBuildRequest(projectRoot, branches().slice(0, 1));
+}
+
 function structuralBranch(): Record<string, unknown> {
   return {
     suite_kind: 'structural',
@@ -307,7 +316,7 @@ test('a behavioral file that escapes its root is blocked, and never uploaded', a
 
 test('put-suite-build rejects the legacy spec_rb shape', async () => {
   const projectRoot = tmpProject();
-  writeTask(projectRoot);
+  writeStructuralOnlyTask(projectRoot);
   writeFileSync(
     outputPath(projectRoot),
     JSON.stringify({ branches: [{ suite_kind: 'structural', spec_rb: "require 'rails_helper'\n" }] }),
@@ -331,7 +340,7 @@ test('put-suite-build rejects the legacy spec_rb shape', async () => {
 // trouble — immediately above "no suite was published, so nothing was run".
 test('put-suite-build reports an unrecognised status as not published, quoting the server', async () => {
   const projectRoot = tmpProject();
-  writeTask(projectRoot);
+  writeStructuralOnlyTask(projectRoot);
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch()] }));
 
   let printed = '';
@@ -364,6 +373,9 @@ test('put-suite-build keeps the existing wording for a branch the host could not
 
 // Nothing left to send. Handing the server an empty batch would turn a local
 // problem it has already been told about into a wire error with a worse message.
+// Both ways of having nothing appear here at once: the behavioral branch was
+// answered but cannot assemble without its review, and the structural branch was
+// never answered at all. Both are reported; neither reaches the wire.
 test('put-suite-build asks the server for nothing when every branch is blocked', async () => {
   const projectRoot = tmpProject();
   writeTask(projectRoot);
@@ -377,7 +389,7 @@ test('put-suite-build asks the server for nothing when every branch is blocked',
   });
 
   assert.equal(called, false);
-  assert.deepEqual(classifyPublication(results), { digests: [], unpublished: ['behavioral'] });
+  assert.deepEqual(classifyPublication(results), { digests: [], unpublished: ['behavioral', 'structural'] });
 });
 
 // Spec 32-6 Phase 3. The same check as `unitbob validate-build`, run here too
@@ -493,4 +505,31 @@ test('a branch reports all of its problems in one line, not the first one', asyn
   // The empty reason and the unanswered id, in one report.
   assert.match(behavioralResult?.error ?? '', /gives no business reason/);
   assert.match(behavioralResult?.error ?? '', /no answer for 1 assigned id\(s\): refunds/);
+});
+
+// The exact shape of the a2time run of 2026-08-04: the behavioral branch was
+// prepared, half-built and abandoned, and the answer went up carrying only the
+// structural branch. The upload published one branch and said nothing about the
+// other, so nothing anywhere recorded that a second branch had ever been asked
+// for. It publishes the finished peer either way — the point is that the
+// abandoned one now leaves a line behind.
+test('a branch the answer leaves out is reported, and its peer still publishes', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch()] }));
+
+  let uploaded: SuiteBuildItem[] = [];
+  const printed: string[] = [];
+  const results = await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async (items) => {
+      uploaded = items;
+      return okResults.filter((result) => items.some((item) => item.suite_kind === result.suite_kind));
+    },
+    stdout: { write: (chunk) => printed.push(String(chunk)) },
+  });
+
+  assert.deepEqual(uploaded.map((item) => item.suite_kind), ['structural']);
+  assert.match(results.find((result) => result.suite_kind === 'behavioral')?.error ?? '', /no entry for it/);
+  assert.deepEqual(classifyPublication(results), { digests: ['s'], unpublished: ['behavioral'] });
+  assert.match(printed.join(''), /behavioral: not published/);
 });

@@ -5,6 +5,7 @@ import {
   type HostBranchOutput,
   type SuiteBuildBranch,
   type SuiteBuildRequest,
+  type UnreadableBranch,
 } from '../files/suiteBuild.ts';
 
 // Spec 32-6 Phase 3. Everything checked here was already checked — by the
@@ -58,6 +59,7 @@ interface AssignedCase {
 export function collectBuildProblems(
   request: SuiteBuildRequest,
   outputs: HostBranchOutput[],
+  unreadable: UnreadableBranch[] = [],
 ): BuildProblem[] {
   const problems: BuildProblem[] = [];
   const branchFor = new Map(request.branches.map((branch) => [branch.suite_kind, branch]));
@@ -75,7 +77,57 @@ export function collectBuildProblems(
     checkAssignment(branch, output, add);
   }
 
+  problems.push(...unansweredBranches(request, outputs, unreadable));
   return problems;
+}
+
+// The branch that is not there at all. Every check above reads the answer and
+// asks whether it is well-formed; none of them can see a branch the answer never
+// mentions, because there is no entry to walk. So this one walks the request
+// instead — the only list that knows what was asked for.
+//
+// The a2time run of 2026-08-04 is the whole reason. Its behavioral branch was
+// prepared, half-built and abandoned for budget; the answer went up carrying the
+// structural branch alone; this check said "well-formed"; the upload published
+// one branch and said nothing about the other. Nothing anywhere recorded that a
+// second branch had ever been asked for, so the cost of the work already done on
+// it was not merely wasted, it was invisible.
+//
+// ADR 1 names this shape: a pre-check must not be *narrower* than the thing it
+// predicts. The server checks each branch it receives; what it cannot check is a
+// branch nobody sent it. That gap belongs here, where the request is still in
+// hand.
+//
+// `build_error` is the answer for a branch that could not be built, and it is
+// deliberately cheap to give — one line, no suite, never blocks the peer. This
+// does not demand the branch be built. It demands only that its absence be
+// stated rather than left as a silence that reads like success.
+//
+// A branch whose entry existed but could not be parsed is already reported as
+// unreadable by the caller; naming it "missing" too would be two complaints
+// about one mistake, and the second would send the reader looking for a second
+// problem that is not there.
+function unansweredBranches(
+  request: SuiteBuildRequest,
+  outputs: HostBranchOutput[],
+  unreadable: UnreadableBranch[],
+): BuildProblem[] {
+  const accounted = new Set<string>([
+    ...outputs.map((output) => output.suite_kind),
+    ...unreadable.map((entry) => entry.suite_kind),
+  ]);
+
+  return request.branches
+    .filter((branch) => !accounted.has(branch.suite_kind))
+    .map((branch) => ({
+      branch: branch.suite_kind,
+      message:
+        'the request asked for this branch and the answer has no entry for it — it is neither built nor ' +
+        'declared unbuildable. Every branch in the request gets one entry: the suite you built, or ' +
+        `{ "suite_kind": "${branch.suite_kind}", "build_error": { "message": "why not" } }. ` +
+        'Leaving it out is not the same as declining it: nothing records that this branch was ever asked ' +
+        'for, so the work already spent on it disappears without a trace.',
+    }));
 }
 
 // After spec 32-5 the envelope comes down from the server inside the request, so
@@ -242,11 +294,29 @@ function checkSurfaceCoverage(
     surfaces.filter((s): s is string => typeof s === 'string').forEach((s) => reached.add(s));
   }
 
-  const missed = expected.surfaces.filter((surface) => !reached.has(surface));
+  // Spec 34, decision 15: an address the suite genuinely cannot drive — a
+  // third-party OAuth callback, a vendor webhook — is declared rather than
+  // faked, and satisfies coverage without being claimed as reached. Mirrored
+  // here in the server's own shape; refusing it locally would refuse an answer
+  // the server takes, which is the one direction of drift that costs a branch.
+  const declaredUnreachable = collectUnreachable(row, id, reached, add);
+
+  const missed = expected.surfaces.filter(
+    (surface) => !reached.has(surface) && !declaredUnreachable.has(surface),
+  );
   if (missed.length > 0) {
-    add(`${id} surface_coverage accounts for no scenario at ${missed.join(', ')}.`);
+    add(
+      `${id} surface_coverage accounts for no scenario at ${missed.join(', ')}` +
+        ' — drive it, or declare it unreachable with a business reason.',
+    );
   }
-  const foreign = [...reached].filter((surface) => !expected.surfaces.includes(surface));
+  // No check here for "declares everything unreachable and drives nothing": the
+  // caller already returned when the capability's marker appears in no suite
+  // file, so a capability with no Scenario never reaches this function at all.
+  // The server refuses that state for the same reason, one rule earlier.
+  const foreign = [...reached, ...declaredUnreachable].filter(
+    (surface) => !expected.surfaces.includes(surface),
+  );
   if (foreign.length > 0) {
     add(`${id} surface_coverage names ${foreign.join(', ')}, which this branch's assignment does not carry.`);
   }
@@ -265,6 +335,48 @@ function checkSurfaceCoverage(
   if (unlisted.length > 0) {
     add(`${id} surface_coverage does not account for ${unlisted.map((n) => `"${n}"`).join(', ')}.`);
   }
+}
+
+// The addresses this capability says it cannot drive, each with its own reason.
+// A blanket reason covering a list is exactly the boilerplate the rule exists to
+// stop, so the reason is per address and its absence is the whole complaint.
+function collectUnreachable(
+  row: Record<string, unknown>,
+  id: string,
+  reached: Set<string>,
+  add: (message: string) => void,
+): Set<string> {
+  const declared = row.unreachable_surfaces;
+  if (declared === undefined) return new Set();
+
+  if (!Array.isArray(declared) || declared.length === 0) {
+    add(`${id} unreachable_surfaces must be a non-empty array of {surface, reason} when it is present.`);
+    return new Set();
+  }
+
+  const surfaces = new Set<string>();
+  for (const [index, item] of declared.entries()) {
+    const entry = (item ?? {}) as Record<string, unknown>;
+    const surface = String(entry.surface ?? '').trim();
+    if (!surface) {
+      add(`${id} unreachable_surfaces[${index}] names no surface.`);
+      continue;
+    }
+    if (!String(entry.reason ?? '').trim()) {
+      add(`${id} declares ${surface} unreachable but gives no business reason for it.`);
+      continue;
+    }
+    if (reached.has(surface)) {
+      add(`${id} both drives ${surface} in a scenario and declares it unreachable — it is one or the other.`);
+      continue;
+    }
+    if (surfaces.has(surface)) {
+      add(`${id} declares ${surface} unreachable more than once.`);
+      continue;
+    }
+    surfaces.add(surface);
+  }
+  return surfaces;
 }
 
 // Scenario names carrying one marker, by shape rather than by grammar. See the
@@ -398,7 +510,7 @@ export function validateBuildProblems(config: Config): BuildProblem[] {
 
   return [
     ...unreadable.map((entry) => ({ branch: entry.suite_kind, message: entry.message })),
-    ...collectBuildProblems(request, outputs),
+    ...collectBuildProblems(request, outputs, unreadable),
   ];
 }
 
