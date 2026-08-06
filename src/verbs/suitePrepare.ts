@@ -1,4 +1,5 @@
 import type { Config } from '../config.ts';
+import { clearSpending } from '../files/budget.ts';
 import { materializeHelper } from '../files/guardrails.ts';
 import {
   recipeNameFor,
@@ -173,6 +174,14 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   }
 
   const request = writeSuiteBuildRequest(config.projectRoot, branches, defectContext);
+
+  // A new request is a new build, and a new build starts on the whole budget
+  // (spec 34-2). Said out loud, because re-running this verb is a documented
+  // step of the loop — the fixable-runner path below ends by asking for it — so
+  // a reset that happened silently would be a ceiling that quietly is not one.
+  if (clearSpending(config.projectRoot)) {
+    actual.stdout.write('Starting a fresh build: the review and run counts from the previous one are cleared.\n');
+  }
   const kinds = branches.map((branch) => branch.suite_kind).join(' and ');
   const nextCommand = branches.some((branch) => branch.suite_kind === 'behavioral')
     ? '`unitbob suite-review-prepare` before upload'

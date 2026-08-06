@@ -6,6 +6,7 @@ import {
   type HostBranchOutput,
   type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
+import { spend } from '../files/budget.ts';
 import { validateStack } from '../runner/precheck.ts';
 import { runBddSuite } from '../runner/bdd.ts';
 import { runStructuralByRunner } from './run.ts';
@@ -72,8 +73,33 @@ export async function runLocal(
       continue;
     }
 
-    await runOneBranch(config, d, suiteKind, outputs.find((entry) => entry.suite_kind === suiteKind));
+    const ran = await runOneBranch(config, d, suiteKind, outputs.find((entry) => entry.suite_kind === suiteKind));
+
+    // Only a run that happened spends a repair round. A branch with no entry
+    // written yet, or one the stack cannot execute, produced nothing to repair
+    // against — charging it would exhaust the budget on rounds that never
+    // examined the suite.
+    if (!ran) continue;
+    const spent = spend(config.projectRoot, `run-local:${suiteKind}`);
+    if (request.budget && spent > request.budget.repair_rounds) {
+      d.stdout.write(polishedEnoughNotice(suiteKind, spent, request.budget.repair_rounds));
+    }
   }
+}
+
+// Not a refusal, and deliberately not about the budget either. After eight
+// rounds of repair the interesting fact is not that a number ran out — it is
+// what the remaining reds most likely are. Both real logs show 3-5 runs of a
+// branch as ordinary work, so a branch on its ninth has already been repaired
+// past the point where the harness is the usual explanation.
+function polishedEnoughNotice(suiteKind: string, spent: number, allowed: number): string {
+  return (
+    `\nThat was run ${spent} of the ${suiteKind} branch; this build budgeted ${allowed}. ` +
+    'Reds that survive this many rounds of repair are far more likely to be defects of your product ' +
+    'than of the harness around it.\n' +
+    'Publish the suite as it stands rather than keep polishing. A first suite that comes out red is ' +
+    'a finding, not a failure — finding those reds is what it was written to do.\n'
+  );
 }
 
 // Which branches to run. No argument runs every branch the request asked for —
@@ -94,12 +120,14 @@ function selectBranches(request: SuiteBuildRequest, args: string[]): string[] {
   return named;
 }
 
+// True when the runner actually executed the branch — which is what a repair
+// round is, and the only thing the caller charges the budget for.
 async function runOneBranch(
   config: Config,
   d: RunLocalDeps,
   suiteKind: string,
   output: HostBranchOutput | undefined,
-): Promise<void> {
+): Promise<boolean> {
   // Nothing written for this branch yet. That is the ordinary state halfway
   // through a build, not an error — say what is missing and move to the peer.
   if (!output) {
@@ -107,12 +135,12 @@ async function runOneBranch(
       `Nothing to run: your answer has no entry for this branch yet. Write its suite under ` +
         `${branchRoot(config, suiteKind)} and add its entry to the answer, then run this again.\n`,
     );
-    return;
+    return false;
   }
 
   if (output.build_error) {
     d.stdout.write(`Not built, by your own answer: ${output.build_error.message}\n`);
-    return;
+    return false;
   }
 
   let runner: string;
@@ -122,13 +150,13 @@ async function runOneBranch(
     suitePath = mainPathOf(output);
   } catch (err) {
     d.stdout.write(`Cannot run this branch: ${(err as Error).message}\n`);
-    return;
+    return false;
   }
 
   const check = d.validateStack(config.projectRoot, runner);
   if (!check.ok) {
     d.stdout.write(`Cannot run this branch: ${check.message ?? `this project does not match "${runner}".`}\n`);
-    return;
+    return false;
   }
 
   let result: RunnerResult;
@@ -139,10 +167,11 @@ async function runOneBranch(
         : await d.runStructural(config.projectRoot, runner, suitePath);
   } catch (err) {
     d.stdout.write(`The runner could not start: ${(err as Error).message}\n`);
-    return;
+    return false;
   }
 
   d.stdout.write(report(result));
+  return true;
 }
 
 // The command first, and always — including on a green run. It is the answer to

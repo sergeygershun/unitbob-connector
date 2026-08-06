@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { RUN_BUDGET } from '../src/files/budget.ts';
 
 // Spec 32-3: building maps + suites on a2time cost far too much back-and-forth —
 // an approval per command, walls of reasoning, and questions scattered one at a
@@ -118,4 +119,64 @@ test('the suite workflow stops generally when suite-prepare wrote no request', (
   // The old enumeration of particular causes is gone.
   assert.doesNotMatch(flat, /If it reports an unsupported project/i);
   assert.doesNotMatch(flat, /If it reports there is no current map/i);
+});
+
+// Spec 34-2, criterion 5. The ceiling has to be somewhere the host reads on its
+// first step. It is in `request.json` for that reason, and repeated here because
+// the workflow is what turns a number into an instruction.
+test('the suite workflow obeys the budget the request states', () => {
+  // Derived from the constant, never retyped. The numbers live in `budget.ts`
+  // and are quoted here as instructions; a literal in both places is the drift
+  // `plugin_pins.test.ts` already exists because of, on a value that is even
+  // easier to tune and forget.
+  const stated = Object.entries(RUN_BUDGET).map(([field, number]) => `"${field}": ${number}`).join(', ');
+  assert.ok(flat.includes(`{ ${stated} }`), `suite.md must state the budget as { ${stated} }`);
+  // The same wording `runner_manifest` already gets, and for the same reason.
+  assert.match(flat, /do not exceed it and do not invent it/i);
+  // Only two of the three have a counter behind them, and the host must not be
+  // told which: knowing where the meter is, is a reason to treat the rest as
+  // advice.
+  assert.match(flat, /Do not sort the fields into ones you think are checked/i);
+  // An older connector writes no budget, and that is not an error.
+  assert.match(flat, /no `budget` at all/i);
+});
+
+// Criterion 6. On autobrella the fan stood on review, where the work is
+// mechanical, and was missing from generation, where the work is reading code —
+// one agent took 63 capabilities and wrote the last third without reading the
+// sources.
+test('the suite workflow puts the fan-out where the reading is', () => {
+  assert.match(flat, /up to `budget.workers` workers/i);
+  assert.match(flat, /always exactly one reviewer/i);
+  // Triage continues the worker that wrote the scenarios rather than paying a
+  // cold agent to read everything again.
+  assert.match(flat, /continuation of its own context/i);
+  assert.match(flat, /never hand the failures to a fresh agent/i);
+});
+
+// Criterion 2, and the reason this whole spec exists. The deadlock was never the
+// publication gate — it was that the workflow offered a move after which the
+// gate fired legitimately. Take the move away and the gate stops firing.
+test('the suite workflow gives the reviewer three written verdicts and no veto', () => {
+  assert.match(flat, /does_not_pass/);
+  assert.match(flat, /reviewer_objection_text/);
+  assert.match(flat, /There is no answer that consists of writing nothing/i);
+  // The fields a recorded objection may leave out, so the reviewer does not
+  // invent an outcome for a Scenario it just said has none.
+  assert.match(flat, /owes only `scenario`, `case_marker`, `verdict`, and that text/i);
+});
+
+// This is the sentence that cost 381 sound Scenarios and 202 written reviews on
+// autobrella, 2026-08-06. It may not grow back.
+test('the suite workflow no longer tells the reviewer to write no artifact', () => {
+  assert.doesNotMatch(flat, /write no artifact at all/i);
+  assert.doesNotMatch(flat, /that is the veto/i);
+  assert.doesNotMatch(flat, /not a soft veto/i);
+  // Criterion 3: the client is told neither the count nor the text.
+  assert.doesNotMatch(flat, /reports how many carry one/i);
+});
+
+// A different case, and untouched: no reviewer at all still stops the branch.
+test('the suite workflow still refuses to upload behavioral with no independent reviewer', () => {
+  assert.match(flat, /If one is unavailable, do not upload the behavioral branch/i);
 });

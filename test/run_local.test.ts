@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { outputPath, writeSuiteBuildRequest, type SuiteBuildBranch } from '../src/files/suiteBuild.ts';
@@ -249,4 +249,134 @@ test('run-local separates an entry it cannot read from a branch not written yet'
   assert.deepEqual(ran, []);
   assert.match(out.join(''), /could not be read/);
   assert.match(out.join(''), /no entry for this branch yet/);
+});
+
+// Spec 34-2, criterion 5. Eight runs of a branch, against the 3-5 both real logs
+// show as ordinary work. The ceiling is not only about money: the recipe forbids
+// weakening a check to get green, and that rule breaks in the polishing loop —
+// on the fifth "why is it red again" the temptation to bend the expectation is
+// at its highest.
+async function runBranch(projectRoot: string, branch: string): Promise<string> {
+  const { out, stdout } = collect();
+  await runLocal(config(projectRoot), [branch], {
+    runStructural: async () => runnerResult(),
+    runBehavioral: async () => runnerResult(),
+    validateStack: () => okStack,
+    stdout,
+  });
+  return out.join('');
+}
+
+test('a branch run within the budget says nothing about the ceiling', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+
+  for (let run = 0; run < 8; run += 1) {
+    assert.doesNotMatch(await runBranch(projectRoot, 'structural'), /defects of your product/i);
+  }
+});
+
+// Not a refusal, and the message is about the finding rather than the budget:
+// after eight rounds of repair the reds that are left are far more likely to be
+// the product's than the harness's, and a red first lamp is a discovery.
+test('a branch run past the budget still runs, and says what the reds probably are', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  for (let run = 0; run < 8; run += 1) await runBranch(projectRoot, 'structural');
+
+  const ninth = await runBranch(projectRoot, 'structural');
+
+  assert.match(ninth, /defects of your product/i);
+  assert.match(ninth, /publish/i);
+  assert.match(ninth, /not a failure/i);
+  // It ran. The report is the proof — a refusal would print no command at all.
+  assert.match(ninth, /ran: bundle exec rspec/);
+});
+
+// Per branch, not per project: the structural peer being polished must not spend
+// the behavioral branch's budget, or a project with one hard branch reports the
+// ceiling on a branch that has run twice.
+test('the two branches spend their budgets independently', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  for (let run = 0; run < 9; run += 1) await runBranch(projectRoot, 'structural');
+
+  assert.doesNotMatch(await runBranch(projectRoot, 'behavioral'), /defects of your product/i);
+});
+
+// Every `run-local` is a separate `npx` process, so a count held in memory would
+// reset on each one and bound nothing at all.
+test('the branch run count survives the process that made it', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  await runBranch(projectRoot, 'structural');
+  await runBranch(projectRoot, 'structural');
+  await runBranch(projectRoot, 'behavioral');
+
+  const spent = JSON.parse(
+    readFileSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json'), 'utf8'),
+  );
+  assert.equal(spent['run-local:structural'], 2);
+  assert.equal(spent['run-local:behavioral'], 1);
+});
+
+test('a request with no budget block leaves the branch counter silent', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  const path = join(projectRoot, '.unitbob', 'suite-build', 'request.json');
+  const request = JSON.parse(readFileSync(path, 'utf8'));
+  delete request.budget;
+  writeFileSync(path, JSON.stringify(request));
+
+  for (let run = 0; run < 10; run += 1) {
+    assert.doesNotMatch(await runBranch(projectRoot, 'structural'), /defects of your product/i);
+  }
+});
+
+// The whole reason `runOneBranch` reports whether it ran. A branch with no entry
+// written yet is the ordinary state halfway through a build; charging it would
+// burn the budget on rounds that never looked at a suite, and the ceiling would
+// arrive while the branch was still being written.
+test('a branch that never ran is not charged a repair round', async () => {
+  const projectRoot = project([structuralAnswer()]);
+  const { stdout } = collect();
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await runLocal(config(projectRoot), ['behavioral'], {
+      runStructural: async () => runnerResult(),
+      runBehavioral: async () => runnerResult(),
+      validateStack: () => okStack,
+      stdout,
+    });
+  }
+
+  // Nothing was charged at all, so there is no counter file to hold a zero in.
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json')), false);
+});
+
+// A branch the stack cannot execute is the same case: nothing ran, so nothing
+// was repaired.
+test('a branch the stack cannot run is not charged either', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  const { stdout } = collect();
+
+  await runLocal(config(projectRoot), ['structural'], {
+    runStructural: async () => runnerResult(),
+    runBehavioral: async () => runnerResult(),
+    validateStack: () => ({ ok: false, message: 'no rspec here' }) as never,
+    stdout,
+  });
+
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json')), false);
+});
+
+// A counter file that was hand-edited, or truncated by a killed process, counts
+// as nothing spent. Refusing to run over damaged bookkeeping would turn the one
+// mechanism that deliberately never blocks into the one that does.
+test('a damaged counter file costs a run nothing but the count', async () => {
+  const projectRoot = project([structuralAnswer()]);
+  writeFileSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json'), '{"run-local:struc');
+
+  const out = await runBranch(projectRoot, 'structural');
+
+  assert.match(out, /ran: bundle exec rspec/);
+  const spent = JSON.parse(
+    readFileSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json'), 'utf8'),
+  );
+  assert.equal(spent['run-local:structural'], 1);
 });

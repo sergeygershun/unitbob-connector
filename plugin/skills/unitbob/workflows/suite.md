@@ -12,7 +12,7 @@ uploaded, never source:
 Neither replaces the other; they have independent versions, runs, and lamps.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.3.4 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.3.5 suite-prepare` with exactly one
    defect-context option. If the user or acceptance material named a known defect, append
    `--known-defect='<exact defect description>'`; when a fixed revision was
    supplied, also append `--fixed-revision='<exact revision>'`. Never omit the
@@ -38,15 +38,35 @@ Do this:
    Every branch in the request carries a complete one — a branch the connector
    could not describe is not in the request at all, and it says why. Never add a
    branch that is not there, and never edit a manifest that is.
+
+   The request also carries a `budget`:
+   `{ "workers": 4, "review_rounds": 2, "repair_rounds": 8 }`. **Treat it exactly
+   as you treat `runner_manifest`: do not exceed it and do not invent it.** These
+   are not suggestions to weigh against how large the project turns out to be —
+   a run that needs more than this needs a smaller scope, not a bigger budget.
+   Do not sort the fields into ones you think are checked and ones you think are
+   not; obey all three the same way. If the request carries no `budget` at all it
+   was written by an older connector: say so in one line and work without a
+   ceiling.
 3. Build and run **both** branches locally, each following its own
    `recipe.text`. Run them with
-   `npx -y --loglevel=error unitbob@0.3.4 run-local` — it executes whatever you
+   `npx -y --loglevel=error unitbob@0.3.5 run-local` — it executes whatever you
    have written so far with the *same* runner that will run the suite after
    publication, and prints the exact command, the exit code and where the
    machine-readable report landed. Never assemble that command yourself: a
    hand-built one that differs even slightly moves the whole repair loop onto a
    harness nobody will run again. Add a branch name (`run-local structural`) to
    re-run one branch while repairing it.
+
+   **Where the fan-out goes.** Split generation across up to `budget.workers`
+   workers, each taking a slice of the capabilities: this is the step where the
+   work is reading source, and it is the step that breaks when one agent takes
+   the whole map alone. Review is the opposite — it is a checklist against a
+   finished bundle — so there is **always exactly one reviewer**, whatever the
+   size of the suite. When a worker's scenarios come out red, that same worker
+   triages them as a continuation of its own context; never hand the failures to
+   a fresh agent, which pays again for all the reading the worker has already
+   done.
 
    One rule decides what to do when a local run goes wrong. It
    is the same for both branches and all three stacks, and it turns on
@@ -121,7 +141,7 @@ Do this:
    thing. Nothing anywhere then records that the branch was ever asked for, so
    the work already spent on it vanishes and the next run starts from zero
    without knowing why. Say it in one line instead; that line is the whole cost.
-5. Run `npx -y --loglevel=error unitbob@0.3.4 validate-build`. It checks your
+5. Run `npx -y --loglevel=error unitbob@0.3.5 validate-build`. It checks your
    answer against the request in seconds — the manifest you copied verbatim,
    every assigned id answered exactly once, markers unchanged and actually
    present in the files you wrote, paths safe and files on disk. It names
@@ -133,7 +153,7 @@ Do this:
    continue to step 8 so the structural peer can still publish. (There is no
    third case: a branch with neither a suite nor a `build_error` is an answer
    step 5 refuses, not a shortcut past the review.)
-   Otherwise run `npx -y --loglevel=error unitbob@0.3.4 suite-review-prepare`. It reads the
+   Otherwise run `npx -y --loglevel=error unitbob@0.3.5 suite-review-prepare`. It reads the
    finished behavioral candidate, runs that exact candidate to capture machine
    evidence (and repeats it in a disposable worktree when a fixed revision was
    supplied), keeps that evidence in its own
@@ -158,24 +178,35 @@ Do this:
    `given_then_evidence`, `outcome`, `outcome_kind` (`specific` or
    `availability`), and a verdict.
 
-   The verdict has three answers, not two, and the middle one exists because the
-   outer two are a trap: after one round of stopping the branch, signing
-   everything is the only move left, and the weakest contracts in the suite go up
-   marked `pass`. Use `verdict: "pass"` when the Scenario protects what it
-   promises; `verdict: "pass_with_reservation"` with a non-empty `reservation`
-   naming in one concrete sentence what it does not check; and, for a Scenario
-   that checks nothing, write no artifact at all and go back to the generator —
-   that is the veto, it stops the whole branch, and it stays the right answer
-   there. A reservation is not a soft veto: it is for a contract that holds a
-   real promise and less of it than its name suggests. The upload accepts it and
-   reports how many carry one. Add `known_defect_probe` exactly as
+   The verdict has three answers, and every one of them is written down:
+   `verdict: "pass"` when the Scenario protects what it promises;
+   `verdict: "pass_with_reservation"` with a non-empty `reservation` naming in
+   one concrete sentence what it does not check; and
+   `verdict: "does_not_pass"` with a non-empty `reviewer_objection_text` naming,
+   just as concretely, why the Scenario protects nothing at all. A
+   `does_not_pass` entry owes only `scenario`, `case_marker`, `verdict`, and that
+   text — leave `given_then_evidence`, `outcome`, `outcome_kind`, and
+   `public_surfaces` out of it rather than inventing an outcome for a Scenario
+   you just said has none.
+
+   **There is no answer that consists of writing nothing.** Every Scenario in the
+   request gets an entry, and a branch is never withheld over the quality of the
+   contracts in it: objections are recorded, the branch publishes, and an
+   operator reads them afterwards. A run that rejected a fifth of its Scenarios
+   and published none of the rest lost the four fifths that were sound along with
+   every write-up it had produced.
+
+   `does_not_pass` is the shortest entry to write, so hold the line yourself: it
+   is for a Scenario that protects nothing, not for one you have not finished
+   reading. `pass_with_reservation` is for a contract that holds a real promise
+   and less of it than its name suggests. Add `known_defect_probe` exactly as
    the recipe and connector-owned `known_defect_context` require. A named defect
    must be `detected` red, or `verified` red then green when a fixed revision is
    supplied; copy the exact defect text, revisions, and Scenario from the
    connector-owned `candidate_run`/`fixed_candidate_run` evidence and never call
    it `not_supplied`. This is a local process attestation, not authenticated
    reviewer identity; do not describe it as cryptographic proof of independence.
-8. Run `npx -y --loglevel=error unitbob@0.3.4 put-suite-build`. It uploads both
+8. Run `npx -y --loglevel=error unitbob@0.3.5 put-suite-build`. It uploads both
    branches in one batch, each validated and published independently, and then
    runs every branch it published and prints the server's result for each plus
    the map URL. This is the last command: it lights the lamps itself, so never

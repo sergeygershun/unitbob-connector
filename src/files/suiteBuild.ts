@@ -4,6 +4,7 @@ import { dirname, join, sep } from 'node:path';
 import type { Recipe, SuitePacket } from '../wire.ts';
 import type { RunnerEnvelope } from '../runner/manifest.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
+import { readBudget, RUN_BUDGET, type RunBudget } from './budget.ts';
 
 // The task the host reads (spec 32): the two peer assignments to build, one per
 // contract system, each with its recipe, its source digest, its path root, and
@@ -27,6 +28,10 @@ export interface SuiteBuildRequest {
   output_path: string;
   branches: SuiteBuildBranch[];
   known_defect_context: KnownDefectContext;
+  // What this run may spend (spec 34-2, criterion 5). Optional on read only:
+  // a request written by an older connector has none, and then nothing is
+  // capped. See `files/budget.ts` for where each number comes from.
+  budget?: RunBudget;
 }
 
 export type KnownDefectContext =
@@ -291,6 +296,7 @@ export function writeSuiteBuildRequest(
     output_path: outputPath(projectRoot),
     branches,
     known_defect_context: knownDefectContext,
+    budget: RUN_BUDGET,
   };
 
   const path = requestPath(projectRoot);
@@ -317,6 +323,7 @@ export function readSuiteBuildRequest(projectRoot: string): SuiteBuildRequest {
   return {
     ...(request as unknown as SuiteBuildRequest),
     known_defect_context: readKnownDefectContext(request.known_defect_context, path),
+    budget: readBudget(request.budget),
   };
 }
 

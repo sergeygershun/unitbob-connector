@@ -20,6 +20,7 @@ import {
   writeBehavioralReviewRequest,
 } from '../files/suiteBuild.ts';
 import type { HostBranchOutput } from '../files/suiteBuild.ts';
+import { spend } from '../files/budget.ts';
 
 interface SuiteReviewPrepareDeps {
   runCandidate: (
@@ -81,6 +82,31 @@ export async function suiteReviewPrepare(
   actual.stdout.write(`Behavioral review request written to ${reviewRequestPath(config.projectRoot)}\n`);
   actual.stdout.write(
     `Next: have an independent reviewer inspect this exact candidate and write bdd_quality_review and known_defect_probe to ${request.output_path}, then run \`unitbob put-suite-build\`.\n`,
+  );
+
+  // Counted after the request is written, never before it. Refusing the round
+  // would rebuild the autobrella deadlock on a different number: the branch
+  // could not publish, so the work would be lost again for the sake of the
+  // ceiling meant to protect it. What the ceiling buys is a sentence.
+  const round = spend(config.projectRoot, 'review_rounds');
+  const budget = buildRequest.budget;
+  if (budget && round > budget.review_rounds) {
+    actual.stdout.write(lastRoundNotice(round, budget.review_rounds));
+  }
+}
+
+// Says what to do, not that something is forbidden. This is only sayable because
+// spec 34-2 already made an imperfect suite publishable: before it, "publish what
+// you have" was not available to the reviewer at all, and the only way to record
+// a bad Scenario was to take the branch down.
+function lastRoundNotice(round: number, allowed: number): string {
+  return (
+    `\nThis is review round ${round}; the budget for this build was ${allowed}. Treat it as the last round ` +
+    'and publish what you have.\n' +
+    'A Scenario the reviewer still objects to does not hold the branch back: it is recorded with ' +
+    '`verdict: "does_not_pass"` and a `reviewer_objection_text` saying what is wrong, the branch publishes, ' +
+    'and the objection is read afterwards by the operator. Another round of rewriting buys less than ' +
+    'publishing the objection does.\n'
   );
 }
 

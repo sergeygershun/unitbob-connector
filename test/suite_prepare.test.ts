@@ -594,3 +594,75 @@ test('a clean start claims only the branch that was actually asked', async () =>
 
   assert.match(output, /says nothing about the product-behaviour branch/i);
 });
+
+// Spec 34-2, criterion 5. Neither the number of subagents nor the number of
+// rounds had a ceiling, and both were left to the recipe's discipline: on
+// autobrella the last third of a 35 793-character recipe is exactly what did not
+// hold. A number in the request is read on the first step, beside
+// `runner_manifest`, which is where the host already looks.
+test('suite-prepare states the run budget in the request', async () => {
+  const projectRoot = tmpProject();
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: () => true },
+  });
+
+  assert.deepEqual(readSuiteBuildRequest(projectRoot).budget, {
+    workers: 4,
+    review_rounds: 2,
+    repair_rounds: 8,
+  });
+});
+
+// A fresh build starts on a fresh budget. Without this, a project Unitbob ran
+// last month opens today already over its ceiling, and every command prints
+// "this is the last round" — advice that is both noise and wrong.
+test('suite-prepare clears the counters a previous build left behind, and says so', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  writeFileSync(
+    join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json'),
+    JSON.stringify({ review_rounds: 9, 'run-local:behavioral': 40 }),
+  );
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json')), false);
+  // Re-running this verb is a documented step of the loop, so a silent reset
+  // would be a ceiling that quietly is not one.
+  assert.match(output, /counts from the previous one are cleared/i);
+});
+
+// The first build of a project has nothing to clear, and must not announce a
+// reset that did not happen.
+test('a first build says nothing about clearing counters', async () => {
+  const projectRoot = tmpProject();
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  assert.doesNotMatch(output, /cleared/i);
+});
