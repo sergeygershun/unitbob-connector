@@ -13,20 +13,28 @@
 // half — asking the registry — sees the failure, which is why it cannot live in
 // the test suite: the suite must run without a network.
 //
-// Order enforced: publish, then push. That is the order spec 33's DoD already
+// The order to keep: publish, then push. That is the order spec 33's DoD already
 // asks for ("коннектор в npm → версия в плагине → мерж провода в main"),
 // because the brain deploys itself from main and the reverse order breaks a live
 // project.
+//
+// It used to be *enforced*, by a pre-push hook that ran this on any push to
+// main. The hook was removed at the owner's request on 2026-08-06, so nothing
+// blocks that order now and this is a command you choose to run:
+//
+//   npm run check:release
+//
+// The failure it was written for is unchanged; only the guard is gone.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // `--revision <sha>` reads the manifest out of that commit instead of off the
-// disk. The pre-push hook passes the sha it is about to send, because the
-// working tree is not what is being sent: an uncommitted bump would be checked
-// while the pushed commit went unexamined, and a bump that is committed but
-// reverted locally would sail through. Run by hand with no argument, the disk is
-// the right answer and stays the default.
+// disk, for asking about a commit rather than about the working tree: an
+// uncommitted bump would otherwise be checked while the pushed commit went
+// unexamined, and a bump that is committed but reverted locally would sail
+// through. Run by hand with no argument, the disk is the right answer and stays
+// the default.
 const flag = process.argv.indexOf('--revision');
 const revision = flag === -1 ? null : process.argv[flag + 1];
 

@@ -16,8 +16,7 @@
     "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/bin.js",
     "prepublishOnly": "npm run build",
     "test": "node --test test/*.test.ts",
-    "check:release": "node scripts/check-release.mjs",
-    "hooks:install": "git config core.hooksPath hooks"
+    "check:release": "node scripts/check-release.mjs"
   },
   "publishConfig": {
     "access": "public"
