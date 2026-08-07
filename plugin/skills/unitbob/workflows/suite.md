@@ -63,7 +63,33 @@ Do this:
    work is reading source, and it is the step that breaks when one agent takes
    the whole map alone. Review is the opposite — it is a checklist against a
    finished bundle — so there is **always exactly one reviewer**, whatever the
-   size of the suite. When a worker's scenarios come out red, that same worker
+   size of the suite.
+
+   That ceiling is **per branch**: `workers: 4` means four on the structural
+   branch and four on the behavioral one, not four across the build. Use all of
+   them even where fewer would do. An agent re-reads its whole context every
+   turn, so what it costs grows faster than the slice it was given: on one
+   measured run two workers on the behavioral branch reached contexts of 760,000
+   and 705,000 tokens and accounted for 62 % of the entire run between them.
+   Cutting a slice in half never costs more than leaving it whole, and
+   `budget.workers` is already the floor on how far this can go.
+
+   **Start a branch's workers together, in one go** — all of them in a single
+   message, not one after another. Sequential slices save nothing and finish
+   later. More workers does not loosen the rule that they never run the suite
+   themselves: the test database is shared and you own every run of it.
+
+   A worker writes blind — it may not run anything — so the factory's required
+   fields, an enum's literal values and the shape of a response have to be right
+   the first time. Give it somewhere to get them: **the `unitbob:fact-finder`
+   agent, named explicitly.** Name it, because the general-purpose default has no
+   ceiling on model, turn count, or answer length — on that same run, lookups
+   nobody had specified went to the costliest model, one of them for 109 turns,
+   and one reply came back 78,000 characters long, all of it landing in the
+   context of the most expensive agent in the run. Closed questions with the
+   files to look in, and no more than **eight** lookups per worker.
+
+   When a worker's scenarios come out red, that same worker
    triages them as a continuation of its own context; never hand the failures to
    a fresh agent, which pays again for all the reading the worker has already
    done.

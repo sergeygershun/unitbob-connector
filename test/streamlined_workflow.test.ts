@@ -154,6 +154,51 @@ test('the suite workflow puts the fan-out where the reading is', () => {
   assert.match(flat, /never hand the failures to a fresh agent/i);
 });
 
+// Spec 34-3, criterion 3. `budget.workers: 4` never said what it counted, and
+// autobrella read it as four across the build: two workers on structural and two
+// on behavioral. Those two reached contexts of 760,000 and 705,000 tokens and
+// were 62 % of the whole run between them. An agent re-reads its context every
+// turn, so only the variable half of its cost divides when you split it — which
+// means splitting never loses, and the smallest sufficient number of workers is
+// the most expensive choice available.
+test('the suite workflow counts budget.workers per branch and spends all of it', () => {
+  assert.match(flat, /ceiling is \*\*per branch\*\*/i);
+  assert.match(flat, /four on the structural branch and four on the behavioral one/i);
+  assert.match(flat, /not four across the build/i);
+  assert.match(flat, /Use all of them even where fewer would do/i);
+});
+
+// Same criterion, and nothing in the plugin used to say it: `parallel`,
+// `concurrently` and `simultaneously` appeared nowhere in it. A fan launched one
+// worker at a time costs the same and finishes later.
+test("the suite workflow starts a branch's workers in one go", () => {
+  assert.match(flat, /Start a branch's workers together, in one go/i);
+  assert.match(flat, /Sequential slices save nothing and finish later/i);
+  // Twice the workers is not permission to run the shared test database twice.
+  assert.match(flat, /never run the suite themselves/i);
+});
+
+// Criterion 1. The workers' own lookups are what turned a budget of four into 36
+// live agents. The need is real — a worker may not run anything, so it either
+// looks the factory's arguments up or invents them — so the fix is a named agent
+// with ceilings (`plugin/agents/fact-finder.md`) rather than a prohibition.
+// Naming it is the entire mechanism: the host's default agent has no ceilings at
+// all, which is how one lookup ran 109 turns on the costliest model.
+test('the suite workflow sends workers to the named fact-finder, capped at eight', () => {
+  assert.match(flat, /`unitbob:fact-finder`/);
+  assert.match(flat, /no more than \*\*eight\*\* lookups per worker/i);
+  assert.match(flat, /no ceiling on model, turn count, or answer length/i);
+  assert.match(flat, /Closed questions with the files to look in/i);
+});
+
+// Criterion 2. The recipe says what the suite must be; the workflow says how the
+// work is organised. Workers, slices and lookup agents are the second kind, and
+// the recipes are fetched from the server and read by hosts that have no
+// subagents at all — so this paragraph is the only place they are described.
+test('the suite workflow keeps the shape of the work out of the recipes', () => {
+  assert.match(flat, /Do not copy recipe text into this project/i);
+});
+
 // Criterion 2, and the reason this whole spec exists. The deadlock was never the
 // publication gate — it was that the workflow offered a move after which the
 // gate fired legitimately. Take the move away and the gate stops firing.
