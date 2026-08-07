@@ -178,6 +178,19 @@ test("the suite workflow starts a branch's workers in one go", () => {
   assert.match(flat, /never run the suite themselves/i);
 });
 
+// The fact-finder's ceilings are frontmatter, so they hold whatever the session
+// is. Workers have no definition file — the coordinator launches them — so an
+// unnamed model is the session's, and the 72 % of a run they account for would
+// silently follow whichever model the operator opened their terminal on. Only
+// the cheap 11 % was pinned; this pins the expensive part too.
+test('the suite workflow names the workers model instead of inheriting it', () => {
+  assert.match(flat, /Launch every worker on Sonnet/i);
+  assert.match(flat, /do not let it inherit yours/i);
+  // Reproducing the measured baseline, which is not the same decision as
+  // stepping below it — that one is deferred with its own counter-risk.
+  assert.match(flat, /pins the baseline rather than lowering it/i);
+});
+
 // Criterion 1. The workers' own lookups are what turned a budget of four into 36
 // live agents. The need is real — a worker may not run anything, so it either
 // looks the factory's arguments up or invents them — so the fix is a named agent

@@ -80,6 +80,15 @@ Do this:
    later. More workers does not loosen the rule that they never run the suite
    themselves: the test database is shared and you own every run of it.
 
+   **Launch every worker on Sonnet** — say the model when you start it, do not
+   let it inherit yours. Workers are 72 % of what a run costs, and a subagent
+   nobody assigned a model to takes the session's, so the same suite costs three
+   times as much because of how the operator happened to open their terminal.
+   The measured run had its workers on Sonnet; naming it is what makes that
+   number mean anything the next time. This pins the baseline rather than
+   lowering it — a step down from Sonnet is a separate decision, and it belongs
+   with the measurement in spec 39.
+
    A worker writes blind — it may not run anything — so the factory's required
    fields, an enum's literal values and the shape of a response have to be right
    the first time. Give it somewhere to get them: **the `unitbob:fact-finder`
