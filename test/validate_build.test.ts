@@ -509,3 +509,112 @@ test('an unreachable surface outside this assignment is refused', () => {
     found.join('\n'),
   );
 });
+
+// Spec 34-3, criterion 6. A capability may hold more surfaces than one run is
+// worth spending on — autobrella had one standing over 67 admin addresses — so
+// the assignment carries a ceiling and the addresses left out come back as
+// `deferred_surfaces`.
+//
+// Mirrored here for a sharper version of the reason above. Refusing this answer
+// locally would not merely disagree with the server: the refusal message names
+// `unreachable_surfaces`, which pushes the host into filing a deferred payment
+// route as one nothing can reach — the single lie the third list exists to stop.
+const CROWDED = ['GET /clients', 'POST /clients', 'DELETE /clients/:id'];
+
+// `null` rather than `undefined` for "the server sent no ceiling": passing
+// `undefined` to a parameter with a default gets the default, which would make
+// the older-server test silently assert the opposite of what it says.
+function budgetedProblems(
+  capability: Record<string, unknown>,
+  surfaceBudget: number | null = 2,
+): string[] {
+  const assignment: Record<string, unknown> = {
+    capabilities: [{
+      capability_id: 'clients',
+      contract_key: 'contract:clients',
+      case_marker: 'ubc_cccccccccccc',
+      surfaces: CROWDED,
+    }],
+  };
+  if (surfaceBudget !== null) assignment.surface_budget = surfaceBudget;
+
+  const built = writeSuiteBuildRequest(tmpProject(), [{ ...bddRequest()[0], assignment }]);
+  const built_answer = bddAnswer(FULL_COVERAGE) as Record<string, unknown>;
+  const metadata = built_answer.test_metadata as { capabilities: Record<string, unknown>[] };
+  Object.assign(metadata.capabilities[0], capability);
+  return collectBuildProblems(built, [built_answer as never]).map((problem) => problem.message);
+}
+
+test('a surface deferred under the budget satisfies coverage', () => {
+  assert.deepEqual(budgetedProblems({ deferred_surfaces: ['DELETE /clients/:id'] }), []);
+});
+
+// Without the third list, respecting the ceiling and dropping the remainder on
+// the floor are indistinguishable answers.
+test('a surface neither driven, unreachable, nor deferred is still refused', () => {
+  const found = budgetedProblems({});
+
+  assert.ok(
+    found.some((message) => /accounts for no scenario at DELETE \/clients\/:id/.test(message)),
+    found.join('\n'),
+  );
+  // And the message offers the third answer rather than sending it to the second.
+  assert.ok(found.some((message) => /or defer it under the surface budget/.test(message)), found.join('\n'));
+});
+
+// Why this is worth checking locally at all: over the ceiling is one of the
+// answers the server rejects, and finding it after the suite has been written,
+// run and reviewed costs the whole cycle.
+test('guarding more surfaces than the budget allows is caught before the upload', () => {
+  const found = budgetedProblems({
+    surface_coverage: [
+      { scenario: 'A partner opens the client list', surfaces: ['GET /clients', 'DELETE /clients/:id'] },
+      { scenario: 'A partner adds a client', surfaces: ['POST /clients'] },
+    ],
+  });
+
+  assert.ok(found.some((message) => /guards 3 surfaces, over the surface_budget of 2/.test(message)), found.join('\n'));
+});
+
+// A server older than the field sends no ceiling, and had none to keep.
+test('an assignment carrying no surface budget is not held to one', () => {
+  const found = budgetedProblems({
+    surface_coverage: [
+      { scenario: 'A partner opens the client list', surfaces: ['GET /clients', 'DELETE /clients/:id'] },
+      { scenario: 'A partner adds a client', surfaces: ['POST /clients'] },
+    ],
+  }, null);
+
+  assert.deepEqual(found, []);
+});
+
+test('a surface both driven and deferred is refused', () => {
+  const found = budgetedProblems({ deferred_surfaces: ['GET /clients', 'DELETE /clients/:id'] });
+
+  assert.ok(
+    found.some((message) => /both drives GET \/clients in a scenario and defers it/.test(message)),
+    found.join('\n'),
+  );
+});
+
+// Two lists exist to hold two different answers, so an address claiming both is
+// refused rather than quietly counted once.
+test('a surface both declared unreachable and deferred is refused', () => {
+  const found = budgetedProblems({
+    unreachable_surfaces: [{ surface: 'DELETE /clients/:id', reason: 'A third party has to call this.' }],
+    deferred_surfaces: ['DELETE /clients/:id'],
+  });
+
+  assert.ok(found.some((message) => /both unreachable and deferred/.test(message)), found.join('\n'));
+});
+
+test('a deferred surface outside this assignment is refused', () => {
+  const found = budgetedProblems({
+    deferred_surfaces: ['DELETE /clients/:id', 'GET /somebody_elses_admin'],
+  });
+
+  assert.ok(
+    found.some((message) => /GET \/somebody_elses_admin, which this branch's assignment does not carry/.test(message)),
+    found.join('\n'),
+  );
+});

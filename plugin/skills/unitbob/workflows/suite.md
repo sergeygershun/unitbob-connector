@@ -71,8 +71,9 @@ Do this:
    turn, so what it costs grows faster than the slice it was given: on one
    measured run two workers on the behavioral branch reached contexts of 760,000
    and 705,000 tokens and accounted for 62 % of the entire run between them.
-   Cutting a slice in half never costs more than leaving it whole, and
-   `budget.workers` is already the floor on how far this can go.
+   Cutting a slice in half never costs more than leaving it whole, so there is no
+   such thing as a slice too small to be worth splitting — and no need for a rule
+   saying so, because `budget.workers` runs out long before that could matter.
 
    **Start a branch's workers together, in one go** — all of them in a single
    message, not one after another. Sequential slices save nothing and finish
@@ -87,22 +88,24 @@ Do this:
    nobody had specified went to the costliest model, one of them for 109 turns,
    and one reply came back 78,000 characters long, all of it landing in the
    context of the most expensive agent in the run. Closed questions with the
-   files to look in, and no more than **eight** lookups per worker.
+   files to look in, and no more than **eight** lookups per worker. One that
+   stops at its turn limit without answering has said all it is going to say:
+   take the partial answer and ask the user, rather than spending a second
+   lookup on the same question.
 
    When a worker's scenarios come out red, that same worker
    triages them as a continuation of its own context; never hand the failures to
    a fresh agent, which pays again for all the reading the worker has already
-   done. **Group the failures by the verbatim text of the error before handing
-   any of them back**, and where one error reaches the scenarios of more than one
-   worker, look at that one yourself first. That is how you notice a break in the
-   harness they all share — it is not permission to repair the application. The
-   recipe decides that, and it decides it from the stack: a first frame in the
-   application's own code is bucket one, and nothing gets repaired. What is yours
-   is the shared step file, fixed once and centrally and never handed back; a
-   break inside one capability's own step file goes to the worker that wrote it.
-   On autobrella 55 of 81 failures in one round were a single missing mixin in
-   the shared file — the worker diagnosed it correctly, could not reach it, tried
-   to work around it in its own file, and the whole round bought nothing.
+   done. One exception, and it is about reach rather than about cost:
+   **group the failures by the verbatim text of the error before handing any of
+   them back**, and look yourself at any error that turns up under more than one
+   worker. Whether it may be repaired at all is the recipe's rule, not yours —
+   it decides that from the stack — but where the repair lands is: the shared
+   step file is yours, fixed once and never handed back, while a break inside one
+   capability's own step file goes to the worker that wrote it. On autobrella 55
+   of 81 failures in one round were a single missing mixin in the shared file.
+   The worker diagnosed it correctly, could not edit a file it did not own, tried
+   to work around it in its own, and the whole round bought nothing.
 
    One rule decides what to do when a local run goes wrong. It
    is the same for both branches and all three stacks, and it turns on

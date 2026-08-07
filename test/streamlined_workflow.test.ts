@@ -191,12 +191,24 @@ test('the suite workflow sends workers to the named fact-finder, capped at eight
   assert.match(flat, /Closed questions with the files to look in/i);
 });
 
-// Criterion 2. The recipe says what the suite must be; the workflow says how the
-// work is organised. Workers, slices and lookup agents are the second kind, and
-// the recipes are fetched from the server and read by hosts that have no
-// subagents at all — so this paragraph is the only place they are described.
-test('the suite workflow keeps the shape of the work out of the recipes', () => {
-  assert.match(flat, /Do not copy recipe text into this project/i);
+// Criterion 4. 34-2 said a worker triages its own red scenarios, which quietly
+// assumed the cause sits where its author can reach. On autobrella it did not:
+// 55 of 81 failures in one round were a missing mixin in the shared step file,
+// worker 3 diagnosed it correctly, could not edit a file it did not own, and
+// worked around it instead. The round bought nothing.
+//
+// The workflow says only who repairs what. Whether a failure may be repaired at
+// all is the recipe's call — it reads the stack — and the workflow deliberately
+// does not restate that verdict: it is a rule about the content of a run, it
+// lives in a document fetched from the server, and a second copy across a repo
+// boundary is one nothing here can reconcile.
+test('the suite workflow groups failures and keeps the shared file for the coordinator', () => {
+  assert.match(flat, /group the failures by the verbatim text of the error/i);
+  assert.match(flat, /look yourself at any error that turns up under more than one worker/i);
+  assert.match(flat, /the shared step file is yours, fixed once and never handed back/i);
+  // The verdict itself is the recipe's, and is not repeated here.
+  assert.doesNotMatch(flat, /bucket one/i);
+  assert.doesNotMatch(flat, /first frame/i);
 });
 
 // Criterion 2, and the reason this whole spec exists. The deadlock was never the

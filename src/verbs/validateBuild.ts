@@ -54,6 +54,12 @@ interface AssignedCase {
   contract_key: string;
   case_marker: string;
   surfaces: string[];
+  // Spec 34-3, criterion 6: the most surfaces one capability may be guarded
+  // through in this run. It sits at the branch level of the assignment and is
+  // stamped onto every case, so the coverage check needs nothing but the case in
+  // front of it. Undefined from a server older than the field — which had no
+  // ceiling to keep, so there is nothing to check.
+  surfaceBudget?: number;
 }
 
 export function collectBuildProblems(
@@ -300,21 +306,33 @@ function checkSurfaceCoverage(
   // here in the server's own shape; refusing it locally would refuse an answer
   // the server takes, which is the one direction of drift that costs a branch.
   const declaredUnreachable = collectUnreachable(row, id, reached, add);
+  const deferred = collectDeferred(row, id, reached, declaredUnreachable, add);
+
+  // Spec 34-3, criterion 6. Cheap here and expensive later: over the ceiling is
+  // one of the answers the server rejects, and finding it after the suite has
+  // been written, run and reviewed costs the whole cycle.
+  const budget = expected.surfaceBudget;
+  if (budget !== undefined && reached.size > budget) {
+    add(
+      `${id} guards ${reached.size} surfaces, over the surface_budget of ${budget}` +
+        ' — guard the most important ones up to that number and list the rest in deferred_surfaces.',
+    );
+  }
 
   const missed = expected.surfaces.filter(
-    (surface) => !reached.has(surface) && !declaredUnreachable.has(surface),
+    (surface) => !reached.has(surface) && !declaredUnreachable.has(surface) && !deferred.has(surface),
   );
   if (missed.length > 0) {
     add(
       `${id} surface_coverage accounts for no scenario at ${missed.join(', ')}` +
-        ' — drive it, or declare it unreachable with a business reason.',
+        ' — drive it, declare it unreachable with a business reason, or defer it under the surface budget.',
     );
   }
   // No check here for "declares everything unreachable and drives nothing": the
   // caller already returned when the capability's marker appears in no suite
   // file, so a capability with no Scenario never reaches this function at all.
   // The server refuses that state for the same reason, one rule earlier.
-  const foreign = [...reached, ...declaredUnreachable].filter(
+  const foreign = [...reached, ...declaredUnreachable, ...deferred].filter(
     (surface) => !expected.surfaces.includes(surface),
   );
   if (foreign.length > 0) {
@@ -372,6 +390,57 @@ function collectUnreachable(
     }
     if (surfaces.has(surface)) {
       add(`${id} declares ${surface} unreachable more than once.`);
+      continue;
+    }
+    surfaces.add(surface);
+  }
+  return surfaces;
+}
+
+// Spec 34-3, criterion 6. The addresses this run did not take, because the
+// capability carried more than `surface_budget` of them. Mirrored here for the
+// same reason the unreachable list is, and more urgently: refusing this answer
+// locally does not merely disagree with the server, it hands the host an error
+// message pointing at `unreachable_surfaces` — the one place these must never
+// go, because "nothing can cause this request" and "there were better ones" are
+// different sentences and only one of them is true.
+//
+// Plain surface ids, with no reason each. That asymmetry with the unreachable
+// list is deliberate: there the sentence is the guard, because an address you
+// cannot write a sentence about is not really unreachable. Here the reason is
+// the same for every entry and already known — the ceiling.
+function collectDeferred(
+  row: Record<string, unknown>,
+  id: string,
+  reached: Set<string>,
+  unreachable: Set<string>,
+  add: (message: string) => void,
+): Set<string> {
+  const declared = row.deferred_surfaces;
+  if (declared === undefined) return new Set();
+
+  if (!Array.isArray(declared) || declared.length === 0) {
+    add(`${id} deferred_surfaces must be a non-empty array of surface ids when it is present.`);
+    return new Set();
+  }
+
+  const surfaces = new Set<string>();
+  for (const [index, item] of declared.entries()) {
+    const surface = typeof item === 'string' ? item.trim() : '';
+    if (!surface) {
+      add(`${id} deferred_surfaces[${index}] names no surface.`);
+      continue;
+    }
+    if (reached.has(surface)) {
+      add(`${id} both drives ${surface} in a scenario and defers it — it is one or the other.`);
+      continue;
+    }
+    if (unreachable.has(surface)) {
+      add(`${id} declares ${surface} both unreachable and deferred — cannot be reached and was not taken this time are different answers.`);
+      continue;
+    }
+    if (surfaces.has(surface)) {
+      add(`${id} defers ${surface} more than once.`);
       continue;
     }
     surfaces.add(surface);
@@ -445,6 +514,7 @@ function hasContent(assignment: unknown): boolean {
 // case, wherever the shape happens to nest it.
 function assignedCases(assignment: unknown): AssignedCase[] {
   const found: AssignedCase[] = [];
+  let surfaceBudget: number | undefined;
 
   const walk = (value: unknown): void => {
     if (Array.isArray(value)) {
@@ -454,6 +524,11 @@ function assignedCases(assignment: unknown): AssignedCase[] {
     if (!value || typeof value !== 'object') return;
 
     const row = value as Record<string, unknown>;
+    // Found by the same walk rather than by knowing where the server put it, for
+    // the same reason the cases are: the assignment body is opaque here.
+    if (typeof row.surface_budget === 'number' && Number.isFinite(row.surface_budget)) {
+      surfaceBudget = row.surface_budget;
+    }
     const key = row.contract_key;
     const marker = row.case_marker;
     if (typeof key === 'string' && key.startsWith(CONTRACT_PREFIX) && typeof marker === 'string') {
@@ -470,7 +545,9 @@ function assignedCases(assignment: unknown): AssignedCase[] {
   };
 
   walk(assignment);
-  return found;
+  // Stamped after the walk, never during it: nothing promises the ceiling is
+  // visited before the cases that answer to it.
+  return found.map((entry) => ({ ...entry, surfaceBudget }));
 }
 
 // Every byte of the branch's suite, main file and support files together, for
