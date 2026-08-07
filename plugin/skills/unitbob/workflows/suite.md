@@ -92,7 +92,17 @@ Do this:
    When a worker's scenarios come out red, that same worker
    triages them as a continuation of its own context; never hand the failures to
    a fresh agent, which pays again for all the reading the worker has already
-   done.
+   done. **Group the failures by the verbatim text of the error before handing
+   any of them back**, and where one error reaches the scenarios of more than one
+   worker, look at that one yourself first. That is how you notice a break in the
+   harness they all share — it is not permission to repair the application. The
+   recipe decides that, and it decides it from the stack: a first frame in the
+   application's own code is bucket one, and nothing gets repaired. What is yours
+   is the shared step file, fixed once and centrally and never handed back; a
+   break inside one capability's own step file goes to the worker that wrote it.
+   On autobrella 55 of 81 failures in one round were a single missing mixin in
+   the shared file — the worker diagnosed it correctly, could not reach it, tried
+   to work around it in its own file, and the whole round bought nothing.
 
    One rule decides what to do when a local run goes wrong. It
    is the same for both branches and all three stacks, and it turns on
