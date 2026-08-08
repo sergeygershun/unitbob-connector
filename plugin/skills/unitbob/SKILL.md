@@ -13,7 +13,7 @@ structure depended on just broke.
 There is a `unitbob` command-line tool, run via
 `npx -y --loglevel=error unitbob@0.4.0 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
-(Claude Code) do the map-building, suite-writing, and fixing locally, guided by
+(the coding agent) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.
 
 ## Workflow
@@ -81,7 +81,8 @@ message with two clear questions beats six interruptions.
 The workflow leans on a handful of read-only commands: searching the code,
 checking dependencies, running the guardrail suite. Rather than have the user
 approve each one every time, offer them this block for their
-`.claude/settings.json` so they allow the whole set in a single paste:
+`.claude/settings.json` when the host is Claude Code, so they allow the whole set
+in a single paste. On Codex, use its native approval settings instead:
 
 ```json
 {

@@ -67,11 +67,22 @@ Never continue a coordinator or worker context after its bounded phase.
    again. If it remains non-zero, stop before fan-out. Do not replace this gate
    with a receipt, hook, or home-grown orchestrator.
 
-5. For every plan item launch the named agent `unitbob:suite-worker`, passing
-   only that plan item and the referenced request paths. Its frontmatter pins
-   Sonnet and `maxTurns: 60`; never launch a generic subagent and never continue
-   an exhausted context. Start a branch's workers together, in one go.
+5. Use the same named role on both Claude Code and Codex: `unitbob:suite-worker`
+   on Claude Code and `suite-worker` on Codex. For every plan item launch that
+   role with only the plan item and referenced request paths. The host-specific
+   definition owns the cheaper model and mechanical ceiling; never launch a
+   generic subagent and never continue an exhausted context. Start a branch's
+   workers together, in one go.
    Sequential slices save nothing and finish later.
+
+   On Codex, the Unitbob definitions must already be discoverable in
+   `~/.codex/agents/`; if they are missing, stop and run
+   `npx -y --loglevel=error unitbob@0.4.0 codex-install`, then tell the user to
+   start a new Codex thread. Codex rollout budgets are experimental. If this
+   runtime's rollout budget is not enforced per named agent, ask whether to run
+   this invocation without a mechanical ceiling. Declining stops before fan-out;
+   approval applies only to this invocation. Do not emulate the ceiling with a
+   supervisor, timer, hook, token ledger, or App Server.
 
    The bounded flow applies to structural and behavioral alike. The behavioral
    World and later selection review remain behavioral-only. Workers write only
@@ -80,11 +91,18 @@ Never continue a coordinator or worker context after its bounded phase.
    checkpoint before source research and update it after every completed
    promise. Ask closed questions with the files to look in. They may ask no more
    than eight closed lookups of the named
-   `unitbob:fact-finder`, with no more than **eight** lookups per worker; a generic lookup agent has no ceiling on model, turn
+   fact-finder role (`unitbob:fact-finder` on Claude Code, `fact-finder` on
+   Codex), with no more than **eight** lookups per worker; a generic lookup agent has no ceiling on model, turn
    count, or answer length. Workers never run the suite themselves, never do
    branch-global validation, never edit another slice or connector-owned
    harness, and get one final read of their owned files—not a self-validation
-   script loop. Partial files and unresolved promises survive `maxTurns`.
+   script loop. Partial files and unresolved promises survive the host's
+   mechanical ceiling.
+
+   If Codex returns `budgetLimited` or `session_budget_exceeded`, keep the partial
+   files and checkpoint and ask the user before launching another bounded
+   incarnation. Approval applies only to that one incarnation. Never auto-resume
+   after a budget stop.
 
 6. Run `npx -y --loglevel=error unitbob@0.4.0 validate-worker-checkpoints` after
    fan-out and before assembly or repair. It verifies one compact checkpoint per
@@ -147,9 +165,12 @@ Never continue a coordinator or worker context after its bounded phase.
    valid checkpoint with `unresolved_promises`, create one narrow failure packet
    containing only its plan item, checkpoint, owned paths, and related traces.
 
-10. Launch one fresh `unitbob:suite-repair-worker` per failure packet. It first
+10. Launch one fresh named repair role per failure packet:
+    `unitbob:suite-repair-worker` on Claude Code and `suite-repair-worker` on
+    Codex. It first
     completes `unresolved_promises` while preserving finished files, then fixes
-    only related harness errors. Its frontmatter pins Sonnet and `maxTurns: 20`.
+    only related harness errors. Its host-specific definition pins the cheaper
+    model and mechanical ceiling.
     Never continue either generation or repair worker, and never give a slice a
     second repair incarnation. After this one fresh repair rotation, run each
     affected branch exactly once as the final run. Remaining harness failures or

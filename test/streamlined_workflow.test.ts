@@ -148,7 +148,8 @@ test('the suite workflow obeys the budget the request states', () => {
 test('the suite workflow puts a bounded fan-out where the reading is', () => {
   assert.match(flat, /`unitbob:suite-worker`/i);
   assert.match(flat, /always exactly one reviewer/i);
-  assert.match(flat, /fresh `unitbob:suite-repair-worker`/i);
+  assert.match(flat, /fresh named repair role/i);
+  assert.match(flat, /`unitbob:suite-repair-worker`.*`suite-repair-worker`/i);
   assert.doesNotMatch(flat, /continuation of its own context/i);
 });
 
@@ -180,9 +181,9 @@ test("the suite workflow starts a branch's workers in one go", () => {
 // unnamed model is the session's, and the 72 % of a run they account for would
 // silently follow whichever model the operator opened their terminal on. Only
 // the cheap 11 % was pinned; this pins the expensive part too.
-test('the suite workflow uses named workers whose frontmatter owns model and maxTurns', () => {
-  assert.match(flat, /named agent.*`unitbob:suite-worker`/i);
-  assert.match(flat, /frontmatter.*60/i);
+test('the suite workflow uses host-specific named workers whose definitions own model and ceiling', () => {
+  assert.match(flat, /named role.*`unitbob:suite-worker`.*`suite-worker`/i);
+  assert.match(flat, /host-specific definition owns the cheaper model and mechanical ceiling/i);
   assert.match(flat, /never continue/i);
 });
 

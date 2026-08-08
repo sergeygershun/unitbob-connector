@@ -29,6 +29,7 @@ import { contractPrompt } from './verbs/contractPrompt.ts';
 import { suiteReviewPrepare } from './verbs/suiteReviewPrepare.ts';
 import { validateWorkerPlan } from './verbs/validateWorkerPlan.ts';
 import { validateWorkerCheckpoints } from './verbs/validateWorkerCheckpoints.ts';
+import { installCodexAgents } from './verbs/codexInstall.ts';
 
 const USAGE = `unitbob — thin local hands for the Unitbob server.
 
@@ -41,6 +42,7 @@ Options:
 
 Verbs:
   init                 Link this project to Unitbob (also happens automatically).
+  codex-install        Install the bounded Unitbob worker definitions for Codex.
   recipe <name>        Fetch and print a recipe from the server.
   show                 Print the link to this project's map.
   map-prepare          Internal: keylessly update the graph (no API key) and write the host map-build request.
@@ -97,6 +99,9 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
 
   try {
     switch (verb) {
+      case 'codex-install':
+        installCodexAgents(args);
+        return 0;
       case 'init':
         await init(args);
         return 0;

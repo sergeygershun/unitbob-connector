@@ -1,0 +1,27 @@
+{
+  "name": "unitbob",
+  "version": "0.4.0",
+  "description": "Unitbob business maps and executable guardrails for Codex.",
+  "author": {
+    "name": "Unitbob",
+    "url": "https://github.com/sergeygershun/unitbob-connector"
+  },
+  "repository": "https://github.com/sergeygershun/unitbob-connector",
+  "license": "MIT",
+  "keywords": ["testing", "guardrails", "business-map"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Unitbob",
+    "shortDescription": "Map business behavior and guard it with executable tests.",
+    "longDescription": "Build a living map of an application's business behavior, generate guardrail suites, run checks, and repair red guards.",
+    "developerName": "Unitbob",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write", "Shell"],
+    "websiteURL": "https://github.com/sergeygershun/unitbob-connector",
+    "defaultPrompt": [
+      "Build my Unitbob map",
+      "Generate the Unitbob guardrail tests",
+      "Run the Unitbob checks"
+    ]
+  }
+}

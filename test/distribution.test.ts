@@ -32,7 +32,7 @@ test('npm package metadata is publishable as the public unitbob CLI', () => {
 
   assert.equal(packageJson.name, 'unitbob');
   assert.deepEqual(packageJson.bin, { unitbob: 'dist/bin.js' });
-  assert.deepEqual(packageJson.files, ['dist']);
+  assert.deepEqual(packageJson.files, ['dist', 'plugin/codex/agents']);
 
   const scripts = packageJson.scripts as Record<string, string>;
   assert.equal(scripts.prepublishOnly, 'npm run build');
@@ -52,6 +52,9 @@ test('packed npm tarball includes built CLI output and excludes source and tests
   const binFile = pack.files.find((file) => file.path === 'dist/bin.js');
 
   assert.ok(paths.includes('dist/bin.js'));
+  assert.ok(paths.includes('plugin/codex/agents/suite-worker.toml'));
+  assert.ok(paths.includes('plugin/codex/agents/suite-repair-worker.toml'));
+  assert.ok(paths.includes('plugin/codex/agents/fact-finder.toml'));
   assert.equal(binFile?.mode, 0o755);
   assert.ok(paths.every((path) => !path.startsWith('src/')));
   assert.ok(paths.every((path) => !path.startsWith('test/')));

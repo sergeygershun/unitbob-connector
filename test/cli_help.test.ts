@@ -19,3 +19,7 @@ test('--help carries a pipeline note explaining prepare → host-build → put',
   assert.match(text, /output_path/);
   assert.match(text, /put-\*` uploads only the structured result/);
 });
+
+test('--help exposes the one-time Codex agent installer', () => {
+  assert.match(help(), /codex-install\s+Install the bounded Unitbob worker definitions for Codex/);
+});

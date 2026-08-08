@@ -20,15 +20,22 @@ Add the Unitbob plugin marketplace: sergeygershun/unitbob-connector
 Install the unitbob plugin
 ```
 
-**With commands (in the terminal):**
+**Claude Code (in the terminal):**
 ```
 claude plugin marketplace add sergeygershun/unitbob-connector
 claude plugin install unitbob@unitbob
 ```
 
-Restart the session so the commands load.
+**Codex (in the terminal):**
+```
+codex plugin marketplace add sergeygershun/unitbob-connector
+codex plugin add unitbob@unitbob
+npx -y unitbob@0.4.0 codex-install
+```
 
-In Codex it is the same — the same install, and the same phrasings below.
+Start a new Claude Code or Codex thread so the installed skill and named agents
+load. After setup, the phrasings and Unitbob flow below are the same on both
+hosts.
 
 ---
 
