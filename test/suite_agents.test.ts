@@ -22,6 +22,7 @@ test('suite-worker has a mechanical 60-turn Sonnet ceiling and one plan-item con
   assert.match(body, /unitbob:fact-finder/);
   assert.match(body, /never run.*suite/i);
   assert.match(body, /one final read/i);
+  assert.match(body, /final read.*confirm every `facts` entry.*object/i);
 });
 
 test('suite-repair-worker has a fresh 20-turn ceiling and cannot widen or recur', () => {
@@ -34,4 +35,5 @@ test('suite-repair-worker has a fresh 20-turn ceiling and cannot widen or recur'
   assert.match(body, /do not expand/i);
   assert.match(body, /never run.*suite/i);
   assert.match(body, /do not delegate.*repair/i);
+  assert.match(body, /final read.*confirm every `facts` entry.*object/i);
 });

@@ -17,7 +17,9 @@ continue only its `unresolved_promises`; never initialize that checkpoint again.
 Update the checkpoint after every completed promise. Also keep `known_problems` as a compact
 array of precise unresolved harness problems (empty when none are known). Facts are short statements with
 source references. The normative JSON shape of one facts entry is:
+```json
 {"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}
+```
 Every facts entry is an object in that shape, never a string. Never embed source
 files, suite copies, or transcript.
 
@@ -34,7 +36,9 @@ copy it into an owned file.
 
 Never run the suite, boot the application, or perform branch-global duplicate,
 marker, metadata, or surface validation. You may make one final read of your
-owned files before handoff. Do not create temporary self-validation scripts or
+owned files before handoff. During that final read, confirm every `facts` entry
+is an object in the normative shape above and correct the checkpoint if it is
+not. Do not create temporary self-validation scripts or
 loop over repeated rereads. If the turn ceiling arrives, leave partial files and
 an accurate checkpoint; the coordinator will rotate unresolved work into one
 fresh repair task.

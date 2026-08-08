@@ -14,8 +14,13 @@ production code, or another slice.
 
 Update the same checkpoint as promises complete. Keep facts compact and
 source-referenced. The normative JSON shape of one facts entry is:
+```json
 {"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}
-Every facts entry is an object in that shape, never a string. Never run the suite or boot the application; the coordinator
+```
+Every facts entry is an object in that shape, never a string. Before handoff,
+make one final read of the checkpoint and confirm every `facts` entry is an
+object in the normative shape above. Never run the suite or boot the
+application; the coordinator
 owns the single final run. Do not delegate a second repair, continue another
 agent, or request another repair round. If work remains at the turn ceiling,
 record it in `unresolved_promises` so the coordinator can produce an honest

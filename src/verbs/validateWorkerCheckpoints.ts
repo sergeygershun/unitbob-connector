@@ -84,7 +84,7 @@ function validateCompactFacts(value: unknown, label: string, errors: string[]): 
   }
   for (const [index, entry] of value.entries()) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      errors.push(`${label}: facts[${index}] must be an object with fact and source_refs`);
+      errors.push(`${label}: $.facts[${index}] must be an object with fact and source_refs; got ${jsonType(entry)}`);
       continue;
     }
     const fact = entry as Record<string, unknown>;
@@ -96,4 +96,10 @@ function validateCompactFacts(value: unknown, label: string, errors: string[]): 
       errors.push(`${label}: facts[${index}] may not embed source, transcript, or suite copies`);
     }
   }
+}
+
+function jsonType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
 }

@@ -10,11 +10,19 @@ import { validateWorkerCheckpoints } from '../src/verbs/validateWorkerCheckpoint
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 
-function documentedFactExample(): unknown {
-  const instructions = readFileSync(join(packageRoot, 'plugin/codex/agents/suite-worker.toml'), 'utf8');
-  const match = instructions.match(/The normative JSON shape of one facts entry is:\n(\{[^\n]+\})/);
-  assert.ok(match, 'suite-worker must carry a machine-readable facts entry example');
-  return JSON.parse(match[1]);
+function documentedFactExamples(): unknown[] {
+  const agentPaths = [
+    'plugin/agents/suite-worker.md',
+    'plugin/agents/suite-repair-worker.md',
+    'plugin/codex/agents/suite-worker.toml',
+    'plugin/codex/agents/suite-repair-worker.toml',
+  ];
+  return agentPaths.map((agentPath) => {
+    const instructions = readFileSync(join(packageRoot, agentPath), 'utf8');
+    const match = instructions.match(/```json\n(\{[^\n]+\})\n```/);
+    assert.ok(match, `${agentPath} must carry a machine-readable facts entry example`);
+    return JSON.parse(match[1]);
+  });
 }
 
 function fixture(facts: unknown[] = [{ fact: 'The route creates an order.', source_refs: ['app/x.rb:12'] }]): string {
@@ -50,16 +58,16 @@ test('accepts a partial checkpoint whose unresolved promises can rotate to repai
   assert.deepEqual(result.valid_workers, ['behavioral:b1']);
 });
 
-test('accepts the facts entry documented for suite workers', async () => {
-  const root = fixture([documentedFactExample()]);
-
-  const result = await validateWorkerCheckpoints(
-    { server: '', repoId: 1, projectRoot: root },
-    [],
-    { stdout: { write: () => true } },
-  );
-
-  assert.deepEqual(result.valid_workers, ['behavioral:b1']);
+test('accepts every facts entry documented for suite agents', async () => {
+  for (const fact of documentedFactExamples()) {
+    const root = fixture([fact]);
+    const result = await validateWorkerCheckpoints(
+      { server: '', repoId: 1, projectRoot: root },
+      [],
+      { stdout: { write: () => true } },
+    );
+    assert.deepEqual(result.valid_workers, ['behavioral:b1']);
+  }
 });
 
 test('reports string facts as checkpoint schema errors instead of leaking a TypeError', async () => {
@@ -72,8 +80,8 @@ test('reports string facts as checkpoint schema errors instead of leaking a Type
     validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
     (error: Error) => {
       assert.match(error.message, /Worker checkpoints are invalid/);
-      assert.match(error.message, /facts\[0\].*object.*fact.*source_refs/i);
-      assert.match(error.message, /facts\[1\].*object.*fact.*source_refs/i);
+      assert.match(error.message, /\$\.facts\[0\].*object.*fact.*source_refs.*got string/i);
+      assert.match(error.message, /\$\.facts\[1\].*object.*fact.*source_refs.*got string/i);
       assert.doesNotMatch(error.message, /Cannot use 'in' operator/);
       return true;
     },
