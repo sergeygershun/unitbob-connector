@@ -155,6 +155,7 @@ function withReview(config: Config, request: SuiteBuildRequest, output: HostBran
       ...qualityReview,
       candidate_digest: review.candidate_digest,
     },
+    ...(review.selection_review ? { selection_review: review.selection_review } : {}),
     known_defect_probe: review.known_defect_probe,
     known_defect_context: request.known_defect_context,
     candidate_run: review.candidate_run,

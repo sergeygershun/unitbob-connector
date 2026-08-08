@@ -283,6 +283,48 @@ function bddAnswer(coverage: unknown): Record<string, unknown> {
   };
 }
 
+test('duplicate step expressions across worker files are reported once after assembly', () => {
+  const built = writeSuiteBuildRequest(tmpProject(), bddRequest());
+  const branch = bddAnswer(FULL_COVERAGE);
+  (branch.suite_file as Record<string, unknown>).support_files = [
+    { path: '.unitbob/behavioral/step_definitions/client_steps.rb', content: "Given('a signed-in partner') {}\n" },
+    { path: '.unitbob/behavioral/step_definitions/billing_steps.rb', content: "Given('a signed-in partner') {}\n" },
+  ];
+
+  const found = collectBuildProblems(built, [branch as never]).map((problem) => problem.message);
+
+  assert.equal(found.filter((message) => /duplicate step expression/i.test(message)).length, 1);
+  assert.match(found.join('\n'), /a signed-in partner/);
+  assert.match(found.join('\n'), /client_steps\.rb/);
+  assert.match(found.join('\n'), /billing_steps\.rb/);
+});
+
+test('duplicate step expressions are checked when assembled support files are path-only', () => {
+  const projectRoot = tmpProject();
+  const built = writeSuiteBuildRequest(projectRoot, bddRequest());
+  const branch = bddAnswer(FULL_COVERAGE);
+  const featurePath = '.unitbob/behavioral/features/surface_contracts.feature';
+  const firstPath = '.unitbob/behavioral/step_definitions/client_steps.rb';
+  const secondPath = '.unitbob/behavioral/step_definitions/billing_steps.rb';
+  for (const [path, content] of [
+    [featurePath, FEATURE],
+    [firstPath, "Given('a signed-in partner') {}\n"],
+    [secondPath, "Given('a signed-in partner') {}\n"],
+  ]) {
+    mkdirSync(join(projectRoot, path.split('/').slice(0, -1).join('/')), { recursive: true });
+    writeFileSync(join(projectRoot, path), content);
+  }
+  branch.suite_file = {
+    path: featurePath,
+    support_files: [{ path: firstPath }, { path: secondPath }],
+  };
+  writeFileSync(built.output_path, JSON.stringify({ branches: [branch] }));
+
+  const found = validateBuildProblems(config(projectRoot)).map((problem) => problem.message);
+
+  assert.equal(found.filter((message) => /duplicate step expression/i.test(message)).length, 1);
+});
+
 function bddProblems(coverage: unknown): string[] {
   const built = writeSuiteBuildRequest(tmpProject(), bddRequest());
   return collectBuildProblems(built, [bddAnswer(coverage) as never]).map((problem) => problem.message);

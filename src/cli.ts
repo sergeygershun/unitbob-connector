@@ -27,6 +27,8 @@ import { validateBuild } from './verbs/validateBuild.ts';
 import { fixPrepare } from './verbs/fixPrepare.ts';
 import { contractPrompt } from './verbs/contractPrompt.ts';
 import { suiteReviewPrepare } from './verbs/suiteReviewPrepare.ts';
+import { validateWorkerPlan } from './verbs/validateWorkerPlan.ts';
+import { validateWorkerCheckpoints } from './verbs/validateWorkerCheckpoints.ts';
 
 const USAGE = `unitbob — thin local hands for the Unitbob server.
 
@@ -50,6 +52,9 @@ Verbs:
   suite-review-prepare Internal: bind an independent BDD quality review to the built behavioral candidate.
   validate-build       Internal: check the host's suite answer against the request, locally, before
                        uploading. Reports every problem at once; put-suite-build runs it too.
+  validate-worker-plan Internal: validate the exact request-bound worker plan before fan-out.
+  validate-worker-checkpoints
+                       Internal: validate every worker checkpoint before assembly or repair.
   put-suite-build      Internal: upload the host-built guardrail suite (whole spec file + test_metadata),
                        then run every branch it published and report the server's results.
   run-local [branch]   Internal: run the suite you just wrote, before publishing it, with the same runner
@@ -118,6 +123,12 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
         return 0;
       case 'validate-build':
         await validateBuild(await linked(), args);
+        return 0;
+      case 'validate-worker-plan':
+        await validateWorkerPlan(await linked(), args);
+        return 0;
+      case 'validate-worker-checkpoints':
+        await validateWorkerCheckpoints(await linked(), args);
         return 0;
       case 'put-suite-build':
         return await publishAndRun(await linked(), args);

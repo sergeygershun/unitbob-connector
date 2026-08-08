@@ -5,6 +5,7 @@ import type { Recipe, SuitePacket } from '../wire.ts';
 import type { RunnerEnvelope } from '../runner/manifest.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
 import { readBudget, RUN_BUDGET, type RunBudget } from './budget.ts';
+import { readWorkerPlan, validateWorkerPlanFiles, workerPlanDigest, workerPlanPath } from './workerPlan.ts';
 
 // The task the host reads (spec 32): the two peer assignments to build, one per
 // contract system, each with its recipe, its source digest, its path root, and
@@ -53,6 +54,7 @@ export interface HostBranchOutput {
 export interface BehavioralReviewArtifact {
   candidate_digest: string;
   bdd_quality_review: unknown;
+  selection_review?: unknown;
   known_defect_probe: unknown;
   candidate_run: CandidateRunEvidence;
   fixed_candidate_run?: CandidateRunEvidence;
@@ -79,6 +81,9 @@ export interface BehavioralReviewRequest {
   known_defect_context: KnownDefectContext;
   candidate_run?: CandidateRunEvidence;
   fixed_candidate_run?: CandidateRunEvidence;
+  behavioral_assignment?: unknown;
+  worker_plan?: unknown;
+  plan_digest?: string;
 }
 
 // The connector's own record of the runs it made of this exact candidate, under
@@ -142,6 +147,27 @@ export function writeBehavioralReviewRequest(
       ...(evidence.fixed_candidate_run ? { fixed_candidate_run: evidence.fixed_candidate_run } : {}),
     } : {}),
   };
+  const workerPlanDigestInMetadata = metadata?.worker_plan_digest;
+  if (workerPlanDigestInMetadata === undefined && existsSync(workerPlanPath(projectRoot))) {
+    throw new Error('behavioral test_metadata.worker_plan_digest is required when a local worker-plan.json exists.');
+  }
+  if (workerPlanDigestInMetadata !== undefined) {
+    if (typeof workerPlanDigestInMetadata !== 'string' || !/^[a-f0-9]{64}$/.test(workerPlanDigestInMetadata)) {
+      throw new Error('behavioral test_metadata.worker_plan_digest must be a SHA-256 string.');
+    }
+    const planErrors = validateWorkerPlanFiles(projectRoot);
+    if (planErrors.length > 0) throw new Error(`Cannot review an invalid worker plan:\n- ${planErrors.join('\n- ')}`);
+    const digest = workerPlanDigest(projectRoot);
+    if (workerPlanDigestInMetadata !== digest) {
+      throw new Error('behavioral test_metadata.worker_plan_digest does not match the exact local worker-plan.json bytes.');
+    }
+    const buildRequest = readSuiteBuildRequest(projectRoot);
+    const assignment = buildRequest.branches.find((branch) => branch.suite_kind === 'behavioral')?.assignment;
+    const items = readWorkerPlan(projectRoot).workers.filter((item) => item.branch === 'behavioral');
+    request.behavioral_assignment = assignment;
+    request.worker_plan = items;
+    request.plan_digest = digest;
+  }
   writeArtifact(reviewRequestPath(projectRoot), request);
   return request;
 }
@@ -184,6 +210,7 @@ const POST_CANDIDATE_METADATA_KEYS = [
   'known_defect_context',
   'candidate_run',
   'fixed_candidate_run',
+  'selection_review',
 ];
 
 export function readBehavioralReview(projectRoot: string, output: HostBranchOutput): BehavioralReviewArtifact {
@@ -206,12 +233,50 @@ export function readBehavioralReview(projectRoot: string, output: HostBranchOutp
   if (!('bdd_quality_review' in review) || !('known_defect_probe' in review)) {
     throw new Error(`${path} must contain bdd_quality_review and known_defect_probe.`);
   }
+  validateSelectionReview(review, metadata);
   const evidence = readCandidateRunEvidence(projectRoot, output);
   return {
     ...review,
     candidate_run: evidence.candidate_run,
     ...(evidence.fixed_candidate_run ? { fixed_candidate_run: evidence.fixed_candidate_run } : {}),
   } as unknown as BehavioralReviewArtifact;
+}
+
+function validateSelectionReview(
+  review: Record<string, unknown>,
+  metadata: Record<string, unknown> | undefined,
+): void {
+  const digest = metadata?.worker_plan_digest;
+  if (digest === undefined) return;
+  const selection = review.selection_review as Record<string, unknown> | undefined;
+  if (!selection || selection.plan_digest !== digest || !Array.isArray(selection.capability_reviews)) {
+    throw new Error('The behavioral review must contain selection_review bound to worker_plan_digest.');
+  }
+  const expected = Array.isArray(metadata?.capabilities)
+    ? metadata.capabilities.flatMap((entry) => {
+      const id = (entry as Record<string, unknown>)?.capability_id;
+      return typeof id === 'string' && id ? [id] : [];
+    })
+    : [];
+  const entries = selection.capability_reviews as Array<Record<string, unknown>>;
+  const actual = entries.map((entry) => entry?.capability_id);
+  for (const id of expected) {
+    if (actual.filter((candidate) => candidate === id).length !== 1) {
+      throw new Error(`selection_review must contain exactly one verdict for capability ${id}.`);
+    }
+  }
+  for (const [index, entry] of entries.entries()) {
+    if (!expected.includes(entry?.capability_id as string)) {
+      throw new Error(`selection_review.capability_reviews[${index}] names an unassigned capability.`);
+    }
+    if (!['pass', 'does_not_pass'].includes(entry?.verdict as string)) {
+      throw new Error(`selection_review.capability_reviews[${index}].verdict must be pass or does_not_pass.`);
+    }
+    if (entry.verdict === 'does_not_pass' &&
+        (typeof entry.reviewer_objection_text !== 'string' || !entry.reviewer_objection_text.trim())) {
+      throw new Error(`selection_review.capability_reviews[${index}] must include reviewer_objection_text.`);
+    }
+  }
 }
 
 // Why a review does not bind — two different mistakes with one symptom.

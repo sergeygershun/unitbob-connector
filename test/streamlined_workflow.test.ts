@@ -145,13 +145,11 @@ test('the suite workflow obeys the budget the request states', () => {
 // mechanical, and was missing from generation, where the work is reading code —
 // one agent took 63 capabilities and wrote the last third without reading the
 // sources.
-test('the suite workflow puts the fan-out where the reading is', () => {
-  assert.match(flat, /up to `budget.workers` workers/i);
+test('the suite workflow puts a bounded fan-out where the reading is', () => {
+  assert.match(flat, /`unitbob:suite-worker`/i);
   assert.match(flat, /always exactly one reviewer/i);
-  // Triage continues the worker that wrote the scenarios rather than paying a
-  // cold agent to read everything again.
-  assert.match(flat, /continuation of its own context/i);
-  assert.match(flat, /never hand the failures to a fresh agent/i);
+  assert.match(flat, /fresh `unitbob:suite-repair-worker`/i);
+  assert.doesNotMatch(flat, /continuation of its own context/i);
 });
 
 // Spec 34-3, criterion 3. `budget.workers: 4` never said what it counted, and
@@ -161,11 +159,10 @@ test('the suite workflow puts the fan-out where the reading is', () => {
 // turn, so only the variable half of its cost divides when you split it — which
 // means splitting never loses, and the smallest sufficient number of workers is
 // the most expensive choice available.
-test('the suite workflow counts budget.workers per branch and spends all of it', () => {
+test('the suite workflow counts budget.workers per branch and creates only non-empty slices', () => {
   assert.match(flat, /ceiling is \*\*per branch\*\*/i);
-  assert.match(flat, /four on the structural branch and four on the behavioral one/i);
-  assert.match(flat, /not four across the build/i);
-  assert.match(flat, /Use all of them even where fewer would do/i);
+  assert.match(flat, /`1\.\.min\(budget\.workers, capability_count\)`/i);
+  assert.match(flat, /never create an empty slice/i);
 });
 
 // Same criterion, and nothing in the plugin used to say it: `parallel`,
@@ -183,12 +180,10 @@ test("the suite workflow starts a branch's workers in one go", () => {
 // unnamed model is the session's, and the 72 % of a run they account for would
 // silently follow whichever model the operator opened their terminal on. Only
 // the cheap 11 % was pinned; this pins the expensive part too.
-test('the suite workflow names the workers model instead of inheriting it', () => {
-  assert.match(flat, /Launch every worker on Sonnet/i);
-  assert.match(flat, /do not let it inherit yours/i);
-  // Reproducing the measured baseline, which is not the same decision as
-  // stepping below it — that one is deferred with its own counter-risk.
-  assert.match(flat, /pins the baseline rather than lowering it/i);
+test('the suite workflow uses named workers whose frontmatter owns model and maxTurns', () => {
+  assert.match(flat, /named agent.*`unitbob:suite-worker`/i);
+  assert.match(flat, /frontmatter.*60/i);
+  assert.match(flat, /never continue/i);
 });
 
 // Criterion 1. The workers' own lookups are what turned a budget of four into 36
@@ -218,10 +213,28 @@ test('the suite workflow sends workers to the named fact-finder, capped at eight
 test('the suite workflow groups failures and keeps the shared file for the coordinator', () => {
   assert.match(flat, /group the failures by the verbatim text of the error/i);
   assert.match(flat, /look yourself at any error that turns up under more than one worker/i);
-  assert.match(flat, /the shared step file is yours, fixed once and never handed back/i);
+  assert.match(flat, /host-owned shared step.*fixed once/i);
+  assert.match(flat, /connector-owned World.*never.*patch/i);
   // The verdict itself is the recipe's, and is not repeated here.
   assert.doesNotMatch(flat, /bucket one/i);
   assert.doesNotMatch(flat, /first frame/i);
+});
+
+test('the suite workflow mechanically gates plan before fan-out and checkpoints before repair', () => {
+  const planGate = flat.indexOf('validate-worker-plan');
+  const fanOut = flat.indexOf("Start a branch's workers together");
+  const checkpointGate = flat.indexOf('validate-worker-checkpoints');
+  assert.ok(planGate >= 0 && fanOut > planGate);
+  assert.ok(checkpointGate > fanOut);
+  assert.match(flat, /If validation exits non-zero.*stop before fan-out/i);
+});
+
+test('the coordinator workflow is finite', () => {
+  assert.match(flat, /one planning pass/i);
+  assert.match(flat, /at most one host-owned shared harness correction/i);
+  assert.match(flat, /one fresh repair rotation/i);
+  assert.match(flat, /exactly one final run/i);
+  assert.doesNotMatch(flat, /continue (?:the )?(?:coordinator|worker).*context/i);
 });
 
 // Criterion 2, and the reason this whole spec exists. The deadlock was never the

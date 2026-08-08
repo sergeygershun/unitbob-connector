@@ -1,0 +1,3 @@
+test:
+  adapter: sqlite3
+  database: <%= ENV.fetch('UNITBOB_PROFILE_DB') %>

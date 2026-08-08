@@ -16,6 +16,7 @@ import {
 import { classifyPublication, putSuiteBuild } from '../src/verbs/putSuiteBuild.ts';
 import type { Config } from '../src/config.ts';
 import type { SuiteBuildItem, SuiteBuildResult } from '../src/wire.ts';
+import { requestDigest, workerPlanDigest, workerPlanPath } from '../src/files/workerPlan.ts';
 
 function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'unitbob-put-suite-build-'));
@@ -154,6 +155,88 @@ test('put-suite-build uploads both branches, echoing each source_digest from the
       candidate_digest: suiteCandidateDigest(behavioral as unknown as HostBranchOutput),
     },
   );
+});
+
+test('a planned candidate uploads a complete digest-bound selection review', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  const requested = branches();
+  requested[1].assignment = { capabilities: [{
+    capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ub_checkout', surfaces: [],
+  }] };
+  writeSuiteBuildRequest(projectRoot, requested);
+  const worker = {
+    branch: 'behavioral', worker_id: 'b1', capability_ids: ['checkout'], promises: ['finish checkout'],
+    planned_cases: ['successful checkout'], source_paths: ['app/checkout.rb'],
+    owned_paths: ['.unitbob/behavioral/features/checkout.feature'],
+    harness_path: '.unitbob/behavioral/step_definitions/00_unitbob_world.rb',
+    limits: { planned_cases: 1, fact_finder_lookups: 8 }, done_when: 'done',
+  };
+  writeFileSync(workerPlanPath(projectRoot), JSON.stringify({ request_digest: requestDigest(projectRoot), workers: [worker] }));
+  const behavioral = behavioralBranch();
+  behavioral.test_metadata = { capabilities: [{
+    capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ub_checkout',
+    status: 'unguarded', reason: 'needs a live provider',
+  }] };
+  (behavioral.test_metadata as Record<string, unknown>).worker_plan_digest = workerPlanDigest(projectRoot);
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+  writeBehavioralReviewRequest(
+    projectRoot,
+    behavioral as unknown as HostBranchOutput,
+    { revision: 'candidate-sha', run_result: 'raw machine report' },
+  );
+  const selectionReview = {
+    plan_digest: workerPlanDigest(projectRoot),
+    capability_reviews: [{ capability_id: 'checkout', verdict: 'pass' }],
+  };
+  writeFileSync(reviewOutputPath(projectRoot), JSON.stringify({
+    candidate_digest: suiteCandidateDigest(behavioral as unknown as HostBranchOutput),
+    bdd_quality_review: { reviewer: 'independent', scenario_reviews: [] },
+    selection_review: selectionReview,
+    known_defect_probe: { status: 'not_supplied' },
+  }));
+
+  let uploaded: SuiteBuildItem[] = [];
+  await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async (items) => { uploaded = items; return okResults; },
+    stdout: { write: () => true },
+  });
+
+  assert.deepEqual((uploaded[1].artifacts!.test_metadata as Record<string, unknown>).selection_review, selectionReview);
+});
+
+test('a planned candidate is blocked when selection review is missing', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  const requested = branches();
+  requested[1].assignment = { capabilities: [{
+    capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ub_checkout', surfaces: [],
+  }] };
+  writeSuiteBuildRequest(projectRoot, requested);
+  const worker = {
+    branch: 'behavioral', worker_id: 'b1', capability_ids: ['checkout'], promises: ['finish checkout'],
+    planned_cases: ['successful checkout'], source_paths: ['app/checkout.rb'],
+    owned_paths: ['.unitbob/behavioral/features/checkout.feature'],
+    harness_path: '.unitbob/behavioral/step_definitions/00_unitbob_world.rb',
+    limits: { planned_cases: 1, fact_finder_lookups: 8 }, done_when: 'done',
+  };
+  writeFileSync(workerPlanPath(projectRoot), JSON.stringify({ request_digest: requestDigest(projectRoot), workers: [worker] }));
+  const behavioral = behavioralBranch();
+  behavioral.test_metadata = { capabilities: [{
+    capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ub_checkout',
+    status: 'unguarded', reason: 'needs a live provider',
+  }] };
+  (behavioral.test_metadata as Record<string, unknown>).worker_plan_digest = workerPlanDigest(projectRoot);
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+  writeBehavioralReviewRequest(projectRoot, behavioral as unknown as HostBranchOutput,
+    { revision: 'candidate-sha', run_result: 'raw machine report' });
+  writeFileSync(reviewOutputPath(projectRoot), JSON.stringify({
+    candidate_digest: suiteCandidateDigest(behavioral as unknown as HostBranchOutput),
+    bdd_quality_review: { reviewer: 'independent', scenario_reviews: [] },
+    known_defect_probe: { status: 'not_supplied' },
+  }));
+
+  await assertBehavioralBlocked(projectRoot, /selection_review/);
 });
 
 test('put-suite-build relays a per-branch build_error without rolling back the peer', async () => {

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { outputPath, reviewRequestPath, suiteCandidateDigest, writeSuiteBuildRequest } from '../src/files/suiteBuild.ts';
+import { requestDigest, workerPlanDigest, workerPlanPath } from '../src/files/workerPlan.ts';
 import { suiteReviewPrepare } from '../src/verbs/suiteReviewPrepare.ts';
 import type { Config } from '../src/config.ts';
 
@@ -43,6 +44,66 @@ test('suite-review-prepare binds a separate review request to the behavioral can
     run_result: 'raw machine report',
   });
   assert.match(request.output_path, /behavioral_review\.json$/);
+});
+
+test('a planned candidate gives the reviewer its original assignment and exact behavioral plan', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-suite-review-plan-'));
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  const assignment = { capabilities: [{ capability_id: 'billing' }] };
+  writeSuiteBuildRequest(projectRoot, [{
+    suite_kind: 'behavioral', source_digest: 'surface-d', path_root: '.unitbob/behavioral/',
+    recipe: { name: 'generate_behavioral', version: 'b1', text: 'b' }, assignment,
+  }], { status: 'not_supplied' });
+  const worker = {
+    branch: 'behavioral', worker_id: 'b1', capability_ids: ['billing'], promises: ['charge card'],
+    planned_cases: ['successful charge'], source_paths: ['app/payments.rb'],
+    owned_paths: ['.unitbob/behavioral/features/billing.feature'],
+    harness_path: '.unitbob/behavioral/step_definitions/00_unitbob_world.rb',
+    limits: { planned_cases: 1, fact_finder_lookups: 8 }, done_when: 'done',
+  };
+  writeFileSync(workerPlanPath(projectRoot), JSON.stringify({ request_digest: requestDigest(projectRoot), workers: [worker] }));
+  const behavioral = {
+    suite_kind: 'behavioral',
+    suite_file: { path: '.unitbob/behavioral/features/billing.feature', content: 'Feature: Billing\n' },
+    runner_manifest: { runner: 'cucumber' },
+    test_metadata: { worker_plan_digest: workerPlanDigest(projectRoot), capabilities: [{ capability_id: 'billing' }] },
+  };
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [behavioral] }));
+
+  await suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
+    runCandidate: async () => ({ revision: 'sha', run_result: 'raw' }),
+    stdout: { write: () => true },
+  });
+
+  const request = JSON.parse(readFileSync(reviewRequestPath(projectRoot), 'utf8'));
+  assert.deepEqual(request.behavioral_assignment, assignment);
+  assert.deepEqual(request.worker_plan, [worker]);
+  assert.equal(request.plan_digest, workerPlanDigest(projectRoot));
+});
+
+test('a local bounded plan cannot silently fall back to the legacy review contract', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-suite-review-missing-plan-digest-'));
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  writeSuiteBuildRequest(projectRoot, [{
+    suite_kind: 'behavioral', source_digest: 'surface-d', path_root: '.unitbob/behavioral/',
+    recipe: { name: 'generate_behavioral', version: 'b1', text: 'b' },
+    assignment: { capabilities: [{ capability_id: 'billing' }] },
+  }], { status: 'not_supplied' });
+  writeFileSync(workerPlanPath(projectRoot), JSON.stringify({ request_digest: requestDigest(projectRoot), workers: [] }));
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [{
+    suite_kind: 'behavioral',
+    suite_file: { path: '.unitbob/behavioral/features/billing.feature', content: 'Feature: Billing\n' },
+    runner_manifest: { runner: 'cucumber' },
+    test_metadata: { capabilities: [{ capability_id: 'billing' }] },
+  }] }));
+
+  await assert.rejects(
+    suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
+      runCandidate: async () => ({ revision: 'sha', run_result: 'raw' }),
+      stdout: { write: () => true },
+    }),
+    /worker_plan_digest is required/,
+  );
 });
 
 test('suite-review-prepare records a separate machine run for a supplied fixed revision', async () => {

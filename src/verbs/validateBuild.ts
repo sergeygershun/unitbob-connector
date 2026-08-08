@@ -81,10 +81,36 @@ export function collectBuildProblems(
     const add = (message: string): void => { problems.push({ branch: output.suite_kind, message }); };
     checkRunnerManifest(branch, output, add);
     checkAssignment(branch, output, add);
+    if (output.suite_kind === 'behavioral') checkDuplicateStepExpressions(output, add);
   }
 
   problems.push(...unansweredBranches(request, outputs, unreadable));
   return problems;
+}
+
+function checkDuplicateStepExpressions(
+  output: HostBranchOutput,
+  add: (message: string) => void,
+): void {
+  const suite = output.suite_file as { support_files?: Array<{ path?: unknown; content?: unknown }> } | undefined;
+  const definitions = new Map<string, string[]>();
+  for (const file of Array.isArray(suite?.support_files) ? suite.support_files : []) {
+    if (typeof file.path !== 'string' || typeof file.content !== 'string') continue;
+    for (const line of file.content.split('\n')) {
+      const call = line.match(/^\s*(?:Given|When|Then|And|But)\s*\(\s*(['"`])(.*?)\1/);
+      const decorator = line.match(/^\s*@(given|when|then)\s*\(\s*(['"])(.*?)\2/i);
+      const expression = call?.[2] ?? decorator?.[3];
+      if (!expression) continue;
+      definitions.set(expression, [...(definitions.get(expression) ?? []), file.path]);
+    }
+  }
+
+  for (const [expression, paths] of definitions) {
+    const uniquePaths = [...new Set(paths)];
+    if (paths.length > 1) {
+      add(`duplicate step expression "${expression}" appears in ${uniquePaths.join(', ')} — step expressions share one branch-global namespace.`);
+    }
+  }
 }
 
 // The branch that is not there at all. Every check above reads the answer and

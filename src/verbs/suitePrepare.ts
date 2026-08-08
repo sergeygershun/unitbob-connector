@@ -1,6 +1,7 @@
 import type { Config } from '../config.ts';
 import { clearSpending } from '../files/budget.ts';
 import { materializeHelper } from '../files/guardrails.ts';
+import { materializeBehavioralWorld } from '../files/behavioral.ts';
 import {
   recipeNameFor,
   writeSuiteBuildRequest,
@@ -11,6 +12,7 @@ import { bootCheck, SIGNAL_STRENGTH, type BootCheck } from '../runner/bootcheck.
 import { anyStackPrecheck, detectBddRunner, detectStructuralRunner } from '../runner/precheck.ts';
 import { selectRunnerEnvelope, withInstalledRunnerVersion, type RunnerEnvelope } from '../runner/manifest.ts';
 import { ensureRunner, type ProvisionResult } from '../runner/provision.ts';
+import { probeBehavioralWorld, type WorldProbeResult } from '../runner/worldProbe.ts';
 import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
 
 interface SuitePrepareDeps {
@@ -19,6 +21,7 @@ interface SuitePrepareDeps {
   precheck: (projectRoot: string) => { ok: boolean; message?: string; runner?: string };
   bootCheck: (projectRoot: string, runner: string | null) => Promise<BootCheck>;
   ensureRunner: (projectRoot: string, runner: string) => Promise<ProvisionResult>;
+  worldProbe: (projectRoot: string) => Promise<WorldProbeResult>;
   runnerEnvelope: (packet: SuitePacket, runner: string | undefined, projectRoot: string) => RunnerEnvelope | null;
   stdout: { write: (chunk: string) => unknown };
 }
@@ -83,6 +86,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     precheck: anyStackPrecheck,
     bootCheck: (projectRoot, runner) => bootCheck(projectRoot, runner),
     ensureRunner: deps?.ensureRunner ?? ensureRunner,
+    worldProbe: deps?.worldProbe ?? probeBehavioralWorld,
     runnerEnvelope: runnerEnvelopeFor,
     stdout: process.stdout,
     ...deps,
@@ -129,6 +133,14 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
         const steps = prov.checklist?.length ? `\n    - ${prov.checklist.join('\n    - ')}` : '';
         fixableNotices.push(`  Behavioral runner "${runner}" not installed: ${prov.message ?? ''}${steps}`);
         continue;
+      }
+      if (runner === 'cucumber') {
+        materializeBehavioralWorld(config.projectRoot);
+        const probe = await actual.worldProbe(config.projectRoot);
+        if (probe.status === 'fixable') {
+          fixableNotices.push(`  Behavioral World profile is not ready (fixable): ${probe.message ?? 'probe failed'}`);
+          continue;
+        }
       }
     }
     buildable.push({ packet, runner });

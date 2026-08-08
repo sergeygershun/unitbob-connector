@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { suitePrepare } from '../src/verbs/suitePrepare.ts';
+import { suitePrepare as runSuitePrepare } from '../src/verbs/suitePrepare.ts';
 import { UNITBOB_HELPER_RB } from '../src/files/guardrails.ts';
+import { BEHAVIORAL_WORLD, BEHAVIORAL_WORLD_PATH } from '../src/files/behavioral.ts';
 import { readSuiteBuildRequest } from '../src/files/suiteBuild.ts';
 import type { Config } from '../src/config.ts';
 import type { SuitePacket } from '../src/wire.ts';
@@ -22,6 +23,11 @@ function config(projectRoot: string): Config {
 // out to pytest twice).
 const okPrecheck = () => ({ ok: true, runner: 'rspec' });
 const okRunner = async () => ({ status: 'provisioned' as const });
+const okWorld = async () => ({ status: 'ok' as const });
+
+type SuitePrepareDeps = NonNullable<Parameters<typeof runSuitePrepare>[2]>;
+const suitePrepare = (cfg: Config, args: string[], deps?: Partial<SuitePrepareDeps>) =>
+  runSuitePrepare(cfg, args, { worldProbe: okWorld, ...deps });
 
 // Spec 32-6: suite-prepare now loads the file the suite starts from before it
 // fetches or writes anything. These tests are about everything that happens
@@ -264,6 +270,48 @@ test('suite-prepare invokes the runner provision for the behavioral branch', asy
   });
 
   assert.deepEqual(provisioned, ['cucumber']);
+});
+
+test('suite-prepare materializes and probes the connector-owned World after provisioning', async () => {
+  const projectRoot = railsProject();
+  const events: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: async () => { events.push('provision'); return { status: 'provisioned' }; },
+    worldProbe: async (root) => {
+      events.push('probe');
+      assert.equal(readFileSync(join(root, BEHAVIORAL_WORLD_PATH), 'utf8'), BEHAVIORAL_WORLD);
+      return { status: 'ok' };
+    },
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: () => true },
+  });
+
+  assert.deepEqual(events, ['provision', 'probe']);
+});
+
+test('a failed World probe is fixable and excludes only the behavioral branch before fan-out', async () => {
+  const projectRoot = railsProject();
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    worldProbe: async () => ({ status: 'fixable', message: 'assertion counter did not advance' }),
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk: string) => { output += chunk; return true; } },
+  });
+
+  assert.deepEqual(readSuiteBuildRequest(projectRoot).branches.map((branch) => branch.suite_kind), ['structural']);
+  assert.match(output, /assertion counter did not advance/);
+  assert.match(output, /fixable/i);
 });
 
 test('a provisioned behavioral runner keeps both peer suites in the request', async () => {

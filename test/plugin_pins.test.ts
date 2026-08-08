@@ -79,3 +79,24 @@ test('no workflow invokes the connector without naming a version', () => {
 
   assert.deepEqual(unpinned.map((file) => file.slice(root.length)), []);
 });
+
+test('the local release carries the bounded-suite runtime contract', () => {
+  const suite = readFileSync(join(root, 'plugin', 'skills', 'unitbob', 'workflows', 'suite.md'), 'utf8');
+  const behavioralSource = readFileSync(join(root, 'src', 'files', 'behavioral.ts'), 'utf8');
+
+  assert.match(suite, /validate-worker-plan/);
+  assert.match(suite, /validate-worker-checkpoints/);
+  assert.match(suite, /unitbob:suite-worker/);
+  assert.match(suite, /unitbob:suite-repair-worker/);
+  assert.match(behavioralSource, /00_unitbob_world\.rb/);
+  assert.ok(exists(join(root, 'plugin', 'agents', 'suite-worker.md')));
+  assert.ok(exists(join(root, 'plugin', 'agents', 'suite-repair-worker.md')));
+});
+
+function exists(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}

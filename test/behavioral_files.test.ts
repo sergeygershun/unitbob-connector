@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BEHAVIORAL_DIR, filesLostOnMaterialize, materializeBehavioral } from '../src/files/behavioral.ts';
+import {
+  BEHAVIORAL_DIR,
+  BEHAVIORAL_WORLD,
+  BEHAVIORAL_WORLD_PATH,
+  filesLostOnMaterialize,
+  materializeBehavioral,
+} from '../src/files/behavioral.ts';
 import type { SuiteArtifact } from '../src/wire.ts';
 
 function tmpProject(): string {
@@ -29,6 +35,28 @@ test('materializes the .feature and every support file under the behavioral root
     readFileSync(join(projectRoot, BEHAVIORAL_DIR, 'step_definitions', 'surface_steps.rb'), 'utf8'),
     "Given('a shopper') {}\n",
   );
+  assert.equal(readFileSync(join(projectRoot, BEHAVIORAL_WORLD_PATH), 'utf8'), BEHAVIORAL_WORLD);
+});
+
+test('restores the connector-owned Ruby World byte-for-byte on every materialization', () => {
+  const projectRoot = tmpProject();
+  materializeBehavioral(projectRoot, artifact(), 'cucumber');
+  writeFileSync(join(projectRoot, BEHAVIORAL_WORLD_PATH), '# host changed it\n');
+
+  materializeBehavioral(projectRoot, artifact(), 'cucumber');
+
+  assert.equal(readFileSync(join(projectRoot, BEHAVIORAL_WORLD_PATH), 'utf8'), BEHAVIORAL_WORLD);
+  assert.match(BEHAVIORAL_WORLD, /DO NOT EDIT/);
+  assert.doesNotMatch(BEHAVIORAL_WORLD, /render_template|FactoryBot/);
+});
+
+test('refuses a host support file at the connector-owned World path before writing anything', () => {
+  const projectRoot = tmpProject();
+  const collided = artifact();
+  collided.support_files?.push({ path: BEHAVIORAL_WORLD_PATH, content: '# mine\n' });
+
+  assert.throws(() => materializeBehavioral(projectRoot, collided, 'cucumber'), /connector-owned World/);
+  assert.equal(existsSync(join(projectRoot, BEHAVIORAL_DIR)), false);
 });
 
 test('refuses a file that escapes the behavioral root and writes nothing', () => {
@@ -127,6 +155,13 @@ test('the lost-file warning ignores the connector run artifacts it writes itself
   }
 
   assert.deepEqual(filesLostOnMaterialize(root, artifact, 'cucumber'), []);
+});
+
+test('the lost-file warning does not call the connector-owned World a forgotten host file', () => {
+  const projectRoot = tmpProject();
+  materializeBehavioral(projectRoot, artifact(), 'cucumber');
+
+  assert.deepEqual(filesLostOnMaterialize(projectRoot, artifact(), 'cucumber'), []);
 });
 
 // The whole point of the warning still has to fire: a step file the answer
