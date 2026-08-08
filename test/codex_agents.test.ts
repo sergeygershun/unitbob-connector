@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,15 @@ test('Codex suite agents use the accepted cheaper models and fixed rollout budge
   assert.match(repair, /^limit_tokens = 15000$/m);
 });
 
+test('only the three risky Codex roles are installed and budgeted', () => {
+  const names = readdirSync(`${root}/plugin/codex/agents`).sort();
+
+  assert.deepEqual(names, ['fact-finder.toml', 'suite-repair-worker.toml', 'suite-worker.toml']);
+  for (const name of names) {
+    assert.match(codexAgent(name.replace(/\.toml$/, '')), /^\[features\.rollout_budget\]$/m);
+  }
+});
+
 test('Codex fact finder is cheap, read-only, and bounded', () => {
   const finder = codexAgent('fact-finder');
 
@@ -52,6 +61,14 @@ test('Codex and Claude definitions carry the same behavioral instructions with h
 
     assert.equal(normalizedCodexInstructions, body);
   }
+});
+
+test('a budget continuation preserves the existing checkpoint instead of reinitializing it', () => {
+  const worker = codexInstructions(codexAgent('suite-worker'));
+
+  assert.match(worker, /approved fresh incarnation after a\s+native budget stop/i);
+  assert.match(worker, /preserve the supplied checkpoint and completed files/i);
+  assert.match(worker, /never initialize that checkpoint again/i);
 });
 
 test('codex-install places all definitions in the Codex user agent directory', () => {

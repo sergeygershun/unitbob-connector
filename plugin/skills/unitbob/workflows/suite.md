@@ -78,11 +78,12 @@ Never continue a coordinator or worker context after its bounded phase.
    On Codex, the Unitbob definitions must already be discoverable in
    `~/.codex/agents/`; if they are missing, stop and run
    `npx -y --loglevel=error unitbob@0.4.0 codex-install`, then tell the user to
-   start a new Codex thread. Codex rollout budgets are experimental. If this
-   runtime's rollout budget is not enforced per named agent, ask whether to run
-   this invocation without a mechanical ceiling. Declining stops before fan-out;
-   approval applies only to this invocation. Do not emulate the ceiling with a
-   supervisor, timer, hook, token ledger, or App Server.
+   start a new Codex thread. No Codex version is currently qualified by Unitbob
+   for a per-named-agent rollout budget. Before the first bounded role, ask:
+   `This Codex version cannot enforce the Unitbob worker token limit. Run this
+   invocation without the limit? [Continue once / Stop]`. Stop declines before
+   fan-out; Continue once applies only to this invocation. Do not emulate the
+   ceiling with a supervisor, timer, hook, token ledger, or App Server.
 
    The bounded flow applies to structural and behavioral alike. The behavioral
    World and later selection review remain behavioral-only. Workers write only
@@ -99,10 +100,14 @@ Never continue a coordinator or worker context after its bounded phase.
    script loop. Partial files and unresolved promises survive the host's
    mechanical ceiling.
 
-   If Codex returns `budgetLimited` or `session_budget_exceeded`, keep the partial
-   files and checkpoint and ask the user before launching another bounded
-   incarnation. Approval applies only to that one incarnation. Never auto-resume
-   after a budget stop.
+   If a qualified Codex later returns `budgetLimited` or
+   `session_budget_exceeded`, keep the partial files and checkpoint and ask
+   `[Continue once / Stop]` before launching another bounded incarnation.
+   Continue once passes the existing checkpoint and unresolved promises as a
+   resume packet; the fresh worker must preserve completed state rather than
+   initialize the checkpoint again. Approval applies only to that one
+   incarnation. Stop follows the existing incomplete/checkpoint path. Never
+   auto-resume or report the incomplete slice as successful after a budget stop.
 
 6. Run `npx -y --loglevel=error unitbob@0.4.0 validate-worker-checkpoints` after
    fan-out and before assembly or repair. It verifies one compact checkpoint per

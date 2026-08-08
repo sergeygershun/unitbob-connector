@@ -37,6 +37,15 @@ Start a new Claude Code or Codex thread so the installed skill and named agents
 load. After setup, the phrasings and Unitbob flow below are the same on both
 hosts.
 
+Codex compatibility: version 0.145.0 accepts the Unitbob custom-agent TOML files,
+but its experimental rollout budget is shared by the root and subagents rather
+than enforced separately for each named agent. No Codex version is currently
+qualified by Unitbob for a native per-agent ceiling. Before the first bounded
+role, Unitbob therefore asks whether to continue this invocation without that
+mechanical ceiling; approval is never persisted. The definitions keep the native
+budget values so a future Codex release can be qualified without introducing a
+Unitbob supervisor.
+
 ---
 
 ## Full cycle

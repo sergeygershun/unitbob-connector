@@ -24,6 +24,9 @@ test('the co-located Unitbob bundle is a Codex plugin using the shared skill', (
   assert.equal(manifest.version, '0.4.0');
   assert.equal(manifest.skills, './skills/');
   assert.equal(manifest.description, 'Unitbob business maps and executable guardrails for Codex.');
+  for (const name of ['map', 'suite', 'check', 'show', 'fix']) {
+    assert.match(skill, new RegExp(`workflows/${name}\\.md`));
+  }
 });
 
 test('the shared skill and suite workflow do not select a Claude-only host path', () => {
@@ -34,11 +37,15 @@ test('the shared skill and suite workflow do not select a Claude-only host path'
 });
 
 test('Codex asks before every run whose native per-agent ceiling is unavailable or exhausted', () => {
-  assert.match(suite, /rollout budget is not enforced per named agent/i);
-  assert.match(suite, /ask whether to run\s+this invocation without a mechanical ceiling/i);
+  assert.match(suite, /No Codex version is currently qualified.*per-named-agent rollout budget/is);
+  assert.match(suite, /Before the first bounded role, ask/i);
+  assert.match(suite, /Continue once \/ Stop/);
+  assert.match(suite, /Stop declines before\s+fan-out/i);
   assert.match(suite, /budgetLimited|session_budget_exceeded/);
-  assert.match(suite, /ask the user before.*another bounded\s+incarnation/is);
-  assert.match(suite, /approval applies only to that one incarnation/i);
+  assert.match(suite, /before launching another bounded incarnation/is);
+  assert.match(suite, /approval applies only to that one\s+incarnation/i);
+  assert.match(suite, /Stop follows the existing incomplete\/checkpoint path/i);
+  assert.match(suite, /Never\s+auto-resume or report the incomplete slice as successful/i);
 });
 
 test('Codex setup installs the shared plugin and the three discoverable roles', () => {
@@ -46,4 +53,6 @@ test('Codex setup installs the shared plugin and the three discoverable roles', 
   assert.match(readme, /codex plugin add unitbob@unitbob/);
   assert.match(readme, /npx -y unitbob@0\.4\.0 codex-install/);
   assert.match(readme, /start a new .*Codex thread/i);
+  assert.match(readme, /version 0\.145\.0 accepts.*custom-agent TOML/is);
+  assert.match(readme, /No Codex version is currently\s+qualified.*native per-agent ceiling/is);
 });

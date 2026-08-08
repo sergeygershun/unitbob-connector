@@ -7,11 +7,14 @@ You receive exactly one worker-plan item and the request paths it references.
 That item is your complete scope. Do not add capabilities, promises, examples,
 or scenarios after fan-out.
 
-Create the checkpoint before reading application source, at the path prescribed by the
-workflow. Copy the exact request and plan digests, your branch and worker id,
-put every assigned promise in `unresolved_promises`, and start with empty
-`completed_promises`, `written_paths`, `facts`, and `decisions`. Update the
-checkpoint after every completed promise. Also keep `known_problems` as a compact
+On the initial incarnation, create the checkpoint before reading application
+source, at the path prescribed by the workflow. Copy the exact request and plan
+digests, your branch and worker id, put every assigned promise in
+`unresolved_promises`, and start with empty `completed_promises`, `written_paths`,
+`facts`, and `decisions`. On an explicitly approved fresh incarnation after a
+native budget stop, preserve the supplied checkpoint and completed files and
+continue only its `unresolved_promises`; never initialize that checkpoint again.
+Update the checkpoint after every completed promise. Also keep `known_problems` as a compact
 array of precise unresolved harness problems (empty when none are known). Facts are short statements with
 source references; never embed source files, suite copies, or transcript.
 

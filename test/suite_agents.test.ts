@@ -16,6 +16,8 @@ test('suite-worker has a mechanical 60-turn Sonnet ceiling and one plan-item con
   assert.match(frontmatter, /^maxTurns: 60$/m);
   assert.match(body, /exactly one worker-plan item/i);
   assert.match(body, /checkpoint before.*source/i);
+  assert.match(body, /preserve the supplied checkpoint and completed files/i);
+  assert.match(body, /never initialize that checkpoint again/i);
   assert.match(body, /only.*owned_paths/i);
   assert.match(body, /unitbob:fact-finder/);
   assert.match(body, /never run.*suite/i);
