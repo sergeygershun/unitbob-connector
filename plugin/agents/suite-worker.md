@@ -18,7 +18,10 @@ native budget stop, preserve the supplied checkpoint and completed files and
 continue only its `unresolved_promises`; never initialize that checkpoint again.
 Update the checkpoint after every completed promise. Also keep `known_problems` as a compact
 array of precise unresolved harness problems (empty when none are known). Facts are short statements with
-source references; never embed source files, suite copies, or transcript.
+source references. The normative JSON shape of one facts entry is:
+{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}
+Every facts entry is an object in that shape, never a string. Never embed source
+files, suite copies, or transcript.
 
 Read only the initial `source_paths` and dependencies needed for the finite
 planned cases. Ask closed questions with the files to look in. For a closed

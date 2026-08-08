@@ -83,12 +83,16 @@ function validateCompactFacts(value: unknown, label: string, errors: string[]): 
     return;
   }
   for (const [index, entry] of value.entries()) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(`${label}: facts[${index}] must be an object with fact and source_refs`);
+      continue;
+    }
     const fact = entry as Record<string, unknown>;
-    if (!fact || typeof fact.fact !== 'string' || !fact.fact.trim()) errors.push(`${label}: facts[${index}].fact must be non-empty`);
-    if (!Array.isArray(fact?.source_refs) || fact.source_refs.some((ref) => typeof ref !== 'string' || !ref.trim())) {
+    if (typeof fact.fact !== 'string' || !fact.fact.trim()) errors.push(`${label}: facts[${index}].fact must be non-empty`);
+    if (!Array.isArray(fact.source_refs) || fact.source_refs.some((ref) => typeof ref !== 'string' || !ref.trim())) {
       errors.push(`${label}: facts[${index}].source_refs must be compact source references`);
     }
-    if ('source' in (fact ?? {}) || 'transcript' in (fact ?? {}) || 'suite' in (fact ?? {})) {
+    if ('source' in fact || 'transcript' in fact || 'suite' in fact) {
       errors.push(`${label}: facts[${index}] may not embed source, transcript, or suite copies`);
     }
   }

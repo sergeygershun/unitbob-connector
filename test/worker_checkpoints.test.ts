@@ -4,10 +4,20 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { checkpointPath, workerPlanDigest, workerPlanPath } from '../src/files/workerPlan.ts';
 import { validateWorkerCheckpoints } from '../src/verbs/validateWorkerCheckpoints.ts';
 
-function fixture(): string {
+const packageRoot = fileURLToPath(new URL('..', import.meta.url));
+
+function documentedFactExample(): unknown {
+  const instructions = readFileSync(join(packageRoot, 'plugin/codex/agents/suite-worker.toml'), 'utf8');
+  const match = instructions.match(/The normative JSON shape of one facts entry is:\n(\{[^\n]+\})/);
+  assert.ok(match, 'suite-worker must carry a machine-readable facts entry example');
+  return JSON.parse(match[1]);
+}
+
+function fixture(facts: unknown[] = [{ fact: 'The route creates an order.', source_refs: ['app/x.rb:12'] }]): string {
   const root = mkdtempSync(join(tmpdir(), 'unitbob-checkpoints-'));
   mkdirSync(join(root, '.unitbob/suite-build'), { recursive: true });
   const requestBytes = '{"budget":{"workers":4},"branches":[{"suite_kind":"behavioral","assignment":{"capabilities":[{"capability_id":"c1"}]}}]}\n';
@@ -25,7 +35,7 @@ function fixture(): string {
     request_digest: requestDigest, plan_digest: workerPlanDigest(root), branch: 'behavioral', worker_id: 'b1',
     completed_promises: ['p1'], unresolved_promises: ['p2'],
     written_paths: ['.unitbob/behavioral/features/b1.feature'],
-    facts: [{ fact: 'The route creates an order.', source_refs: ['app/x.rb:12'] }],
+    facts,
     decisions: ['Keep the refusal outcome separate.'],
     known_problems: [],
   };
@@ -38,6 +48,36 @@ test('accepts a partial checkpoint whose unresolved promises can rotate to repai
   const root = fixture();
   const result = await validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } });
   assert.deepEqual(result.valid_workers, ['behavioral:b1']);
+});
+
+test('accepts the facts entry documented for suite workers', async () => {
+  const root = fixture([documentedFactExample()]);
+
+  const result = await validateWorkerCheckpoints(
+    { server: '', repoId: 1, projectRoot: root },
+    [],
+    { stdout: { write: () => true } },
+  );
+
+  assert.deepEqual(result.valid_workers, ['behavioral:b1']);
+});
+
+test('reports string facts as checkpoint schema errors instead of leaking a TypeError', async () => {
+  const root = fixture([
+    'The route creates an order (app/x.rb:12).',
+    'The order redirects to its receipt (app/x.rb:20).',
+  ]);
+
+  await assert.rejects(
+    validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    (error: Error) => {
+      assert.match(error.message, /Worker checkpoints are invalid/);
+      assert.match(error.message, /facts\[0\].*object.*fact.*source_refs/i);
+      assert.match(error.message, /facts\[1\].*object.*fact.*source_refs/i);
+      assert.doesNotMatch(error.message, /Cannot use 'in' operator/);
+      return true;
+    },
+  );
 });
 
 test('batches a malformed checkpoint with other checkpoint schema errors', async () => {
