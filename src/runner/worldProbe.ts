@@ -43,12 +43,13 @@ export async function probeBehavioralWorld(
       env: {
         ...process.env,
         RAILS_ENV: 'test',
+        CUCUMBER_PUBLISH_QUIET: 'true',
         UNITBOB_REPO_ROOT: projectRoot,
         BUNDLE_GEMFILE: join(projectRoot, '.unitbob', 'behavioral', 'Gemfile'),
       },
     });
     if (result.code === 0) return { status: 'ok' };
-    const detail = [result.stderr, result.stdout].find((text) => text.trim())?.trim() ?? `exit ${result.code}`;
+    const detail = [result.stdout, result.stderr].map((text) => text.trim()).filter(Boolean).join('\n') || `exit ${result.code}`;
     return { status: 'fixable', message: `The connector-owned Ruby/Cucumber World probe failed: ${detail}` };
   } catch (error) {
     return { status: 'fixable', message: `The connector-owned Ruby/Cucumber World probe could not run: ${String(error)}` };
@@ -71,6 +72,14 @@ PROBE_TIME_ZONE = Time.zone
 PROBE_OTHER_TIME_ZONE = PROBE_TIME_ZONE&.name == 'UTC' ? 'Hawaii' : 'UTC'
 PROBE_LOCALE = I18n.locale
 PROBE_RECEIVER = Object.new
+
+# The probe runs in a dedicated process, so replacing its in-memory route set
+# cannot affect the host application after the process exits. Keeping these
+# endpoints here makes the profile check independent of routes the host owns.
+Rails.application.routes.draw do
+  match '/__unitbob_world_probe__', to: proc { [200, { 'Content-Type' => 'text/plain' }, ['ok']] }, via: :all
+  match '/__unitbob_world_probe_redirect__', to: redirect('/__unitbob_world_probe_target__'), via: :all
+end
 
 Given('the first World probe scenario mutates supported state') do
   @unitbob_connection.execute("INSERT INTO schema_migrations (version) VALUES ('#{PROBE_VERSION}')")

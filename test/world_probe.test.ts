@@ -16,6 +16,7 @@ test('the World probe executes two scenarios and checks request, mocks, assertio
       feature = readFileSync(args[2], 'utf8');
       steps = readFileSync(args[args.indexOf('--require', 5) + 1], 'utf8');
       assert.equal(options.env.RAILS_ENV, 'test');
+      assert.equal(options.env.CUCUMBER_PUBLISH_QUIET, 'true');
       return { code: 0, stdout: '', stderr: '' };
     },
   });
@@ -28,7 +29,22 @@ test('the World probe executes two scenarios and checks request, mocks, assertio
   assert.match(steps, /not_to respond_to\(:unitbob_probe\)/);
   assert.match(steps, /schema_migrations/);
   assert.match(steps, /Time\.zone|I18n\.locale/);
+  assert.match(steps, /Rails\.application\.routes\.draw/);
   assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'world-probe')), false);
+});
+
+test('the World probe reports scenario output instead of hiding it behind stderr noise', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-world-probe-output-'));
+  const result = await probeBehavioralWorld(projectRoot, {
+    runCmd: async () => ({
+      code: 1,
+      stdout: 'No route matches [GET] "/__unitbob_world_probe__"',
+      stderr: 'Share your Cucumber Report with your team',
+    }),
+  });
+
+  assert.equal(result.status, 'fixable');
+  assert.match(result.message ?? '', /No route matches/);
 });
 
 test('the World probe returns an exact fixable runner failure', async () => {

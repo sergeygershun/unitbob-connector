@@ -212,7 +212,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   // vibecoder the one command that unblocks the behavioral peer, then re-run suite-prepare.
   if (fixableNotices.length > 0) {
     actual.stdout.write(
-      '\nBehavioral suite skipped this run — its BDD runner is not installed yet. ' +
+      '\nBehavioral suite skipped this run — its runner or connector-owned World profile is not ready. ' +
         'This is a fixable setup step, not a build failure, and it does not affect the structural suite:\n' +
         fixableNotices.join('\n') +
         '\nFix the above, then re-run `unitbob suite-prepare` to build the behavioral peer.\n',

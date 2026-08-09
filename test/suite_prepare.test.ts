@@ -312,6 +312,7 @@ test('a failed World probe is fixable and excludes only the behavioral branch be
   assert.deepEqual(readSuiteBuildRequest(projectRoot).branches.map((branch) => branch.suite_kind), ['structural']);
   assert.match(output, /assertion counter did not advance/);
   assert.match(output, /fixable/i);
+  assert.doesNotMatch(output, /BDD runner is not installed yet/);
 });
 
 test('a provisioned behavioral runner keeps both peer suites in the request', async () => {
