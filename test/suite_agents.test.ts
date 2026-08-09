@@ -33,7 +33,7 @@ test('suite-repair-worker validates its owned slice within a 60-turn ceiling', (
   assert.match(body, /one failure packet/i);
   assert.match(body, /unresolved_promises.*first/i);
   assert.match(body, /do not expand/i);
-  assert.match(body, /unitbob run-local <branch>/i);
+  assert.match(body, /npx -y --loglevel=error unitbob@0\.4\.3 run-local <branch>/i);
   assert.match(body, /repeat.*edit.*run-local.*inspect/i);
   assert.match(body, /owned paths.*case markers/i);
   assert.match(body, /do not require.*green.*branch/i);
