@@ -275,18 +275,18 @@ test('a branch run within the budget says nothing about the ceiling', async () =
   }
 });
 
-// Not a refusal, and the message is about the finding rather than the budget:
-// after eight rounds of repair the reds that are left are far more likely to be
-// the product's than the harness's, and a red first lamp is a discovery.
-test('a branch run past the budget still runs, and says what the reds probably are', async () => {
+// `repair_rounds` remains useful telemetry, but it is not a semantic classifier
+// or a stop signal. A repair worker may need more iterations to reach a faithful
+// owned-case result, so crossing the old number must stay silent.
+test('a branch run past the diagnostic budget still runs without publication advice', async () => {
   const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
   for (let run = 0; run < 8; run += 1) await runBranch(projectRoot, 'structural');
 
   const ninth = await runBranch(projectRoot, 'structural');
 
-  assert.match(ninth, /defects of your product/i);
-  assert.match(ninth, /publish/i);
-  assert.match(ninth, /not a failure/i);
+  assert.doesNotMatch(ninth, /defects of your product/i);
+  assert.doesNotMatch(ninth, /publish/i);
+  assert.doesNotMatch(ninth, /stop|ceiling|budgeted/i);
   // It ran. The report is the proof — a refusal would print no command at all.
   assert.match(ninth, /ran: bundle exec rspec/);
 });

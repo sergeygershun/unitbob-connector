@@ -9,7 +9,7 @@ pass, one fan-out, assembly and validation, at most one host-owned shared harnes
 correction, one fresh repair rotation, exactly one final run, and one review.
 Never continue a coordinator or worker context after its bounded phase.
 
-1. Run `npx -y --loglevel=error unitbob@0.4.2 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.4.3 suite-prepare` with exactly one
    defect-context option. Use `--known-defect='<exact description>'` (and
    `--fixed-revision='<revision>'` when supplied), otherwise use
    `--no-known-defect`. This command checks the supported stack, provisions the
@@ -25,10 +25,11 @@ Never continue a coordinator or worker context after its bounded phase.
    absent from the request.
 
    The request also carries a `budget`:
-   `{ "workers": 4, "review_rounds": 2, "repair_rounds": 8 }`. Treat it exactly
-   as `runner_manifest`: do not exceed it and do not invent it. Do not sort the
-   fields into ones you think are checked and ones you think are not. If an old
-   request has no `budget` at all, say so in one line and work without a ceiling.
+   `{ "workers": 4, "review_rounds": 2, "repair_rounds": 8 }`. Do not invent it.
+   `workers` and `review_rounds` are ceilings. `repair_rounds` remains a
+   compatibility diagnostic; it does not limit repair-worker `run-local` calls.
+   The repair role's mechanical budget is its only ceiling. If an old request has
+   no `budget` at all, say so in one line and continue without the diagnostics.
    The workers ceiling is **per branch**, not across the build.
 
 3. In one planning pass write strict JSON to
@@ -62,7 +63,7 @@ Never continue a coordinator or worker context after its bounded phase.
    different business outcome. `surface_budget` is a ceiling, never a quota;
    unselected assigned surfaces are `deferred_surfaces`, not `unreachable`.
 
-4. Run `npx -y --loglevel=error unitbob@0.4.2 validate-worker-plan`. If
+4. Run `npx -y --loglevel=error unitbob@0.4.3 validate-worker-plan`. If
    validation exits non-zero, fix the whole reported batch and run the gate
    again. If it remains non-zero, stop before fan-out. Do not replace this gate
    with a receipt, hook, or home-grown orchestrator.
@@ -77,7 +78,7 @@ Never continue a coordinator or worker context after its bounded phase.
 
    On Codex, the Unitbob definitions must already be discoverable in
    `~/.codex/agents/`; if they are missing, stop and run
-   `npx -y --loglevel=error unitbob@0.4.2 codex-install`, then tell the user to
+   `npx -y --loglevel=error unitbob@0.4.3 codex-install`, then tell the user to
    start a new Codex thread. No Codex version is currently qualified by Unitbob
    for a per-named-agent rollout budget. Before the first bounded role, ask:
    `This Codex version cannot enforce the Unitbob worker token limit. Run this
@@ -109,7 +110,7 @@ Never continue a coordinator or worker context after its bounded phase.
    incarnation. Stop follows the existing incomplete/checkpoint path. Never
    auto-resume or report the incomplete slice as successful after a budget stop.
 
-6. Run `npx -y --loglevel=error unitbob@0.4.2 validate-worker-checkpoints` after
+6. Run `npx -y --loglevel=error unitbob@0.4.3 validate-worker-checkpoints` after
    fan-out and before assembly or repair. It verifies one compact checkpoint per
    plan item against the exact request and plan digests, worker id, promises,
    and owned paths. A stale or invalid checkpoint never goes to repair: record a
@@ -148,12 +149,12 @@ Never continue a coordinator or worker context after its bounded phase.
    `known_defect_probe`, `known_defect_context`, or runner reports in generator
    `test_metadata`.
 
-8. Run `npx -y --loglevel=error unitbob@0.4.2 validate-build` once after merge.
+8. Run `npx -y --loglevel=error unitbob@0.4.3 validate-build` once after merge.
    It batch-checks duplicate step expressions, markers, metadata, assigned ids,
    surface arithmetic, paths, and files. Correct that mechanical batch during
    assembly; workers do not repeat it locally.
 
-9. Run `npx -y --loglevel=error unitbob@0.4.2 run-local` once for the assembled
+9. Run `npx -y --loglevel=error unitbob@0.4.3 run-local` once for the assembled
    branches. The connector owns the exact runner commands. A runner that never
    starts is a harness failure, not a red test. If the runner never started, it
    died before the first test or scenario; report its exact error, upload nothing
@@ -166,25 +167,42 @@ Never continue a coordinator or worker context after its bounded phase.
    host-owned shared step is yours, fixed once and never handed back;
    the connector-owned World is never locally patched. A World incompatibility
    missed by the pre-fan-out probe makes the behavioral branch a `build_error`.
-   An application stack remains red. For owned-file failures, and for every
+   A production stack frame alone does not prove a product defect: incorrect
+   generated setup can fail inside production. For owned-file failures, and for every
    valid checkpoint with `unresolved_promises`, create one narrow failure packet
-   containing only its plan item, checkpoint, owned paths, and related traces.
+   containing only its plan item, checkpoint, branch, owned paths and case markers,
+   and related traces. A valid partial checkpoint with `unresolved_promises` enters
+   repair even without an initial runner failure.
 
 10. Launch one fresh named repair role per failure packet:
     `unitbob:suite-repair-worker` on Claude Code and `suite-repair-worker` on
-    Codex. It first
-    completes `unresolved_promises` while preserving finished files, then fixes
-    only related harness errors. Its host-specific definition pins the cheaper
-    model and mechanical ceiling.
-    Never continue either generation or repair worker, and never give a slice a
-    second repair incarnation. After this one fresh repair rotation, run each
-    affected branch exactly once as the final run. Remaining harness failures or
-    unfinished promises become that branch's honest `build_error`; real
-    application failures remain executable and red.
+    Codex. Run repair packets sequentially so they never share the project test DB.
+    Each role completes `unresolved_promises` first while preserving finished files,
+    then runs the same loop: `edit → run-local <branch> → inspect`. It may repeat
+    that loop within its bounded incarnation. After each run it reads only cases
+    matching its owned paths or case markers; it does not require a green exit code
+    from the whole branch and never repairs foreign failures.
+
+    The worker may read stack-referenced source, the actual runner setup and
+    harness, helpers, and factories, but edits only owned generated files and its
+    checkpoint. It never runs the project suite directly, changes production or
+    shared harness, removes a case, marker, binding or assertion, adds
+    `skip`/`pending`/`todo`, or weakens a business promise. A product defect handoff
+    briefly names the violated business contract, reason, and production source
+    references. There is no strict JSON handoff. Ambiguous owned failures, an
+    unusable runner, unfinished promises, and `Stop` after a ceiling are
+    `build_error`, never product red; this supersedes spec 40's ambiguous-red
+    fallback. Shared harness that remains broken after the one coordinator-owned
+    correction is also `build_error` and has no repair feedback loop in this MVP.
+
+    Preserve spec 35 after a repair ceiling: keep files and checkpoint, then ask
+    `[Continue once / Stop]`; never auto-resume. After all sequential repair
+    packets finish, run each affected branch exactly once as the final run.
+    Confirmed production defects remain executable and red.
 
 11. If behavioral is a `build_error`, skip review and keep the structural peer.
     Otherwise run
-    `npx -y --loglevel=error unitbob@0.4.2 suite-review-prepare`. It runs and binds
+    `npx -y --loglevel=error unitbob@0.4.3 suite-review-prepare`. It runs and binds
     the exact candidate, then writes
     `.unitbob/suite-build/review-request.json`. That request includes the
     original behavioral assignment, its worker-plan items, and exact
@@ -209,7 +227,7 @@ Never continue a coordinator or worker context after its bounded phase.
     required. Write strict JSON only to
     `.unitbob/suite-build/behavioral_review.json`.
 
-13. Run `npx -y --loglevel=error unitbob@0.4.2 put-suite-build` exactly once. It
+13. Run `npx -y --loglevel=error unitbob@0.4.3 put-suite-build` exactly once. It
     validates and publishes each branch independently, runs every branch it published,
     and prints the server summaries and map URL. Never ask the user
     to run the checks to finish generating.

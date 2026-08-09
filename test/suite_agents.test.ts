@@ -25,15 +25,23 @@ test('suite-worker has a mechanical 60-turn Sonnet ceiling and one plan-item con
   assert.match(body, /final read.*confirm every `facts` entry.*object/i);
 });
 
-test('suite-repair-worker has a fresh 20-turn ceiling and cannot widen or recur', () => {
+test('suite-repair-worker validates its owned slice within a 60-turn ceiling', () => {
   const { frontmatter, body } = agent('suite-repair-worker');
   assert.match(frontmatter, /^name: suite-repair-worker$/m);
   assert.match(frontmatter, /^model: sonnet$/m);
-  assert.match(frontmatter, /^maxTurns: 20$/m);
+  assert.match(frontmatter, /^maxTurns: 60$/m);
   assert.match(body, /one failure packet/i);
   assert.match(body, /unresolved_promises.*first/i);
   assert.match(body, /do not expand/i);
-  assert.match(body, /never run.*suite/i);
-  assert.match(body, /do not delegate.*repair/i);
+  assert.match(body, /unitbob run-local <branch>/i);
+  assert.match(body, /repeat.*edit.*run-local.*inspect/i);
+  assert.match(body, /owned paths.*case markers/i);
+  assert.match(body, /do not require.*green.*branch/i);
+  assert.match(body, /runner setup.*helpers.*factories/i);
+  assert.match(body, /do not run.*project.*suite/i);
+  assert.match(body, /production code.*shared.*another slice/i);
+  assert.match(body, /skip.*pending.*todo/i);
+  assert.match(body, /ambigu.*build_error/i);
+  assert.match(body, /business contract.*production source/i);
   assert.match(body, /final read.*confirm every `facts` entry.*object/i);
 });

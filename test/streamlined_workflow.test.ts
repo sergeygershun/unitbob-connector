@@ -124,19 +124,16 @@ test('the suite workflow stops generally when suite-prepare wrote no request', (
 // Spec 34-2, criterion 5. The ceiling has to be somewhere the host reads on its
 // first step. It is in `request.json` for that reason, and repeated here because
 // the workflow is what turns a number into an instruction.
-test('the suite workflow obeys the budget the request states', () => {
+test('the suite workflow obeys worker and review budgets while repair_rounds stays diagnostic', () => {
   // Derived from the constant, never retyped. The numbers live in `budget.ts`
   // and are quoted here as instructions; a literal in both places is the drift
   // `plugin_pins.test.ts` already exists because of, on a value that is even
   // easier to tune and forget.
   const stated = Object.entries(RUN_BUDGET).map(([field, number]) => `"${field}": ${number}`).join(', ');
   assert.ok(flat.includes(`{ ${stated} }`), `suite.md must state the budget as { ${stated} }`);
-  // The same wording `runner_manifest` already gets, and for the same reason.
-  assert.match(flat, /do not exceed it and do not invent it/i);
-  // Only two of the three have a counter behind them, and the host must not be
-  // told which: knowing where the meter is, is a reason to treat the rest as
-  // advice.
-  assert.match(flat, /Do not sort the fields into ones you think are checked/i);
+  assert.match(flat, /workers.*review_rounds.*ceilings/i);
+  assert.match(flat, /repair_rounds.*diagnostic/i);
+  assert.match(flat, /does not limit.*run-local/i);
   // An older connector writes no budget, and that is not an error.
   assert.match(flat, /no `budget` at all/i);
 });
@@ -236,6 +233,28 @@ test('the coordinator workflow is finite', () => {
   assert.match(flat, /one fresh repair rotation/i);
   assert.match(flat, /exactly one final run/i);
   assert.doesNotMatch(flat, /continue (?:the )?(?:coordinator|worker).*context/i);
+});
+
+test('repair packets run sequentially and validate owned cases before one final run', () => {
+  assert.match(flat, /repair packets sequentially/i);
+  assert.match(flat, /repeat.*edit.*run-local <branch>.*inspect/i);
+  assert.match(flat, /only.*owned paths.*case markers/i);
+  assert.match(flat, /does not require.*green.*whole branch/i);
+  assert.match(flat, /after all.*repair packets.*exactly once as the final run/i);
+  assert.doesNotMatch(flat, /run repair packets (?:together|in parallel)/i);
+});
+
+test('partial checkpoints enter the same executable repair loop', () => {
+  assert.match(flat, /unresolved_promises.*without.*initial.*failure/i);
+  assert.match(flat, /complete.*unresolved_promises.*first/i);
+  assert.match(flat, /then.*run-local <branch>/i);
+});
+
+test('repair keeps owned ambiguity and unfinished harness work out of product reds', () => {
+  assert.match(flat, /ambiguous.*build_error/i);
+  assert.match(flat, /shared harness.*build_error/i);
+  assert.match(flat, /product defect.*business contract.*production source/i);
+  assert.match(flat, /no strict JSON/i);
 });
 
 // Criterion 2, and the reason this whole spec exists. The deadlock was never the

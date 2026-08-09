@@ -80,26 +80,10 @@ export async function runLocal(
     // against — charging it would exhaust the budget on rounds that never
     // examined the suite.
     if (!ran) continue;
-    const spent = spend(config.projectRoot, `run-local:${suiteKind}`);
-    if (request.budget && spent > request.budget.repair_rounds) {
-      d.stdout.write(polishedEnoughNotice(suiteKind, spent, request.budget.repair_rounds));
-    }
+    // Kept as compatibility diagnostics only. The bounded repair role owns the
+    // mechanical ceiling; this counter never stops execution or classifies reds.
+    spend(config.projectRoot, `run-local:${suiteKind}`);
   }
-}
-
-// Not a refusal, and deliberately not about the budget either. After eight
-// rounds of repair the interesting fact is not that a number ran out — it is
-// what the remaining reds most likely are. Both real logs show 3-5 runs of a
-// branch as ordinary work, so a branch on its ninth has already been repaired
-// past the point where the harness is the usual explanation.
-function polishedEnoughNotice(suiteKind: string, spent: number, allowed: number): string {
-  return (
-    `\nThat was run ${spent} of the ${suiteKind} branch; this build budgeted ${allowed}. ` +
-    'Reds that survive this many rounds of repair are far more likely to be defects of your product ' +
-    'than of the harness around it.\n' +
-    'Publish the suite as it stands rather than keep polishing. A first suite that comes out red is ' +
-    'a finding, not a failure — finding those reds is what it was written to do.\n'
-  );
 }
 
 // Which branches to run. No argument runs every branch the request asked for —

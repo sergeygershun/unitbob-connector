@@ -21,7 +21,7 @@ const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.ur
 
 test('the co-located Unitbob bundle is a Codex plugin using the shared skill', () => {
   assert.equal(manifest.name, 'unitbob');
-  assert.equal(manifest.version, '0.4.2');
+  assert.equal(manifest.version, '0.4.3');
   assert.equal(manifest.skills, './skills/');
   assert.equal(manifest.description, 'Unitbob business maps and executable guardrails for Codex.');
   for (const name of ['map', 'suite', 'check', 'show', 'fix']) {
@@ -51,7 +51,7 @@ test('Codex asks before every run whose native per-agent ceiling is unavailable 
 test('Codex setup installs the shared plugin and the three discoverable roles', () => {
   assert.match(readme, /codex plugin marketplace add sergeygershun\/unitbob-connector/);
   assert.match(readme, /codex plugin add unitbob@unitbob/);
-  assert.match(readme, /npx -y unitbob@0\.4\.2 codex-install/);
+  assert.match(readme, /npx -y unitbob@0\.4\.3 codex-install/);
   assert.match(readme, /start a new .*Codex thread/i);
   assert.match(readme, /version 0\.145\.0 accepts.*custom-agent TOML/is);
   assert.match(readme, /No Codex version is currently\s+qualified.*native per-agent ceiling/is);

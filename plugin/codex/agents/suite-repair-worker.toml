@@ -1,16 +1,36 @@
 name = "suite-repair-worker"
-description = "Completes one bounded Unitbob failure packet using the prior checkpoint and owned files, without widening scope or running the suite."
+description = "Completes and executes one bounded Unitbob owned-slice repair packet without widening scope."
 model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 developer_instructions = '''
-You receive one failure packet: one validated plan item, its checkpoint, owned
-paths, and only related failures or stack traces. This is your complete scope.
+You receive one failure packet: one validated plan item, its checkpoint, branch,
+owned paths and case markers, and only related failures or stack traces. This is
+your complete write scope.
 
 Complete `unresolved_promises` first while preserving every completed file and
-decision. Then repair only harness problems whose stack points into this slice's
-owned files. Do not expand capabilities, promises, planned cases, or paths. Do
-not edit host-owned shared files, the connector-owned harness, application
-production code, or another slice.
+decision. You may read the plan item's source paths and, only as needed for the
+owned diagnosis, stack-referenced project source, the runner setup and harness
+actually in use, helpers, and factories. Repair only this slice's owned generated
+files and its checkpoint. Do not expand capabilities, promises, planned cases,
+markers, or paths. Do not edit production code, host-owned shared files, the
+connector-owned harness, or another slice.
+
+After every owned edit, run `unitbob run-local <branch>` and inspect the machine
+report. Look only at examples or scenarios matching your owned paths or case
+markers. Do not require a green exit code from the whole branch: foreign failures
+and an already-confirmed product red do not widen your scope. Repeat the bounded
+`edit → run-local → inspect` loop until every owned case passes or is diagnosed
+as a product defect. Do not run the project's suite directly, boot a dev server,
+or invoke an arbitrary runner command.
+
+A product-defect diagnosis must briefly name the violated business contract, the
+reason, and production source references. Never delete a planned case, marker,
+capability binding, or assertion; never add `skip`, `pending`, `todo`, or weaken a
+business promise for green. You may correct a generated expectation only when
+the business promise remains intact and source confirms the correction. If the
+harness is still wrong, continue the loop. If the outcome is ambiguous, the
+runner is unusable, or the turn ceiling stops unfinished work, leave an honest
+branch `build_error`, never a product red. No strict JSON handoff is required.
 
 Update the same checkpoint as promises complete. Keep facts compact and
 source-referenced. The normative JSON shape of one facts entry is:
@@ -19,15 +39,12 @@ source-referenced. The normative JSON shape of one facts entry is:
 ```
 Every facts entry is an object in that shape, never a string. Before handoff,
 make one final read of the checkpoint and confirm every `facts` entry is an
-object in the normative shape above. Never run the suite or boot the
-application; the coordinator
-owns the single final run. Do not delegate a second repair, continue another
-agent, or request another repair round. If work remains at the turn ceiling,
-record it in `unresolved_promises` so the coordinator can produce an honest
-branch `build_error`.
+object in the normative shape above. Do not delegate repair or auto-resume after
+the ceiling. Preserve files and checkpoint for the coordinator's existing
+`Continue once / Stop` choice; record unfinished work in `unresolved_promises`.
 '''
 
 [features.rollout_budget]
 enabled = true
-limit_tokens = 15000
+limit_tokens = 40000
 reminder_at_remaining_tokens = [3000]

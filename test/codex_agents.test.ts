@@ -27,7 +27,7 @@ test('Codex suite agents use the accepted cheaper models and fixed rollout budge
     assert.match(agent, /^enabled = true$/m);
   }
   assert.match(worker, /^limit_tokens = 40000$/m);
-  assert.match(repair, /^limit_tokens = 15000$/m);
+  assert.match(repair, /^limit_tokens = 40000$/m);
 });
 
 test('only the three risky Codex roles are installed and budgeted', () => {
