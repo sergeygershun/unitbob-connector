@@ -30,7 +30,7 @@ claude plugin install unitbob@unitbob
 ```
 codex plugin marketplace add sergeygershun/unitbob-connector
 codex plugin add unitbob@unitbob
-npx -y unitbob@0.4.3 codex-install
+npx -y unitbob@0.4.4 codex-install
 ```
 
 Start a new Claude Code or Codex thread so the installed skill and named agents
