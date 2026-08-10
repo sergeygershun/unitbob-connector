@@ -134,7 +134,7 @@ export const GRAPH_NOISE_PATTERNS = [
   // contributed 44 and 25 nodes and pushed their community to third-largest in
   // the whole project. The more often you run unitbob, the dirtier its map gets —
   // a feedback loop with no floor.
-  'unitbob*.md',
+  '/unitbob*.md',
 
   // Test scaffolding and boot wiring. Factories and model specs describe the
   // fixtures a suite builds, not a business promise a guardrail could protect;

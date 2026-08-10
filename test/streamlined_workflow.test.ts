@@ -143,6 +143,25 @@ test('the suite workflow chooses the lamps with the user before it plans', () =>
   assert.match(flat, /Nothing records this choice except the plan/i);
 });
 
+// The manifest the upload checks is exhaustive whatever the scope was, so a
+// narrowed build has to say something about the lamps it did not guard. It says
+// `unguarded`, with a reason — the one answer that is both true and accepted.
+// Leaving them out is rejected at upload, after every file has been written.
+test('the workflow answers the lamps outside the scope as unguarded, with a reason', () => {
+  assert.match(flat, /coverage manifest you write in step 9 stays exhaustive/i);
+  assert.match(flat, /every lamp you left out is `unguarded` with a reason/i);
+  assert.match(flat, /"n\/a" is not/i);
+});
+
+// Criterion 2.4. The fuse is not an outcome, and the coordinator's own document
+// is where that has to be written: the workers' definitions saying it describes
+// what someone else will do.
+test('the coordinator reports a fired fuse as a fault of the run', () => {
+  assert.match(flat, /fault of the run, not one of its outcomes/i);
+  assert.match(flat, /never call its branch successful/i);
+  assert.match(flat, /say in the report that the fuse fired/i);
+});
+
 // Both edges named in the requirements, so neither turns into a refusal the
 // workflow never wrote down.
 test('one lamp and every lamp are both legitimate answers', () => {

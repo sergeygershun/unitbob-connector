@@ -58,6 +58,22 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   [join('verbs', 'validateBuild.ts')]: [/manifest/i, /\bcovered\b/i, /\bunguarded\b/i, /\bcoverage\b/i],
 };
 
+// Spec 34-6, criterion 3 widened what a connector file may read, and this is the
+// written line, in the same place 32-5 and 32-6 wrote theirs.
+//
+// `runner/failureDigest.ts` reads runner reports and sorts each case into passed
+// or not. Its neighbour `boundReport.ts` deliberately does not — "Rails owns
+// every bit of their interpretation" — and that stays true of everything that
+// travels. What the digest produces travels nowhere: it is hashed, compared with
+// the same branch's previous run, and reaches exactly one exit code. It joins
+// nothing to the map, mints no marker, and its answer is never uploaded, printed
+// as a verdict, or read by the server.
+//
+// So the rule below is unchanged and needs no new exemption: a connector file
+// may look at a report to answer a question about *this machine's loop*, never
+// to answer one about the product. If a later change wants the digest's opinion
+// to leave the process, that is the moment this paragraph stops covering it.
+
 // `lamp` is the single domain noun the connector may name — but only in wire.ts,
 // where "lamps" is the URL of an opaque endpoint it fetches and prints verbatim.
 // Anywhere else, naming a lamp means reasoning about one.

@@ -60,6 +60,14 @@ after its bounded phase.
    stays exactly as the server sent it, and the publication line still counts
    against the whole map.
 
+   The coverage manifest you write in step 9 stays exhaustive all the same: every
+   assigned capability gets exactly one answer. The lamps you guarded are
+   `covered`; every lamp you left out is `unguarded` with a reason saying so in
+   one plain sentence — "not in this build's scope; billing and access were
+   guarded first" is a reason, "n/a" is not. An unguarded lamp is the honest
+   state of a capability nobody guarded yet, and leaving it out of the manifest
+   altogether is rejected at upload.
+
 4. Write strict JSON to `.unitbob/suite-build/worker-plan.json`. Compute
    `request_digest` as SHA-256 of the exact `request.json` bytes. The plan has
    this shape:
@@ -149,6 +157,11 @@ after its bounded phase.
    or connector-owned harness, and get one final read of their owned files—not a
    self-validation script loop. Partial files and unresolved promises survive
    the host's emergency fuse.
+
+   That fuse sits far above the work one plan item takes, so a worker reaching it
+   is a fault of the run, not one of its outcomes. Keep its files and checkpoint,
+   never call its branch successful, and say in the report that the fuse fired
+   and on which slices.
 
    If a qualified Codex later returns `budgetLimited` or
    `session_budget_exceeded`, keep the partial files and checkpoint and ask

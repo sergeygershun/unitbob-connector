@@ -106,9 +106,10 @@ test('vitest failures read the same way', () => {
   }]);
 });
 
-// pytest's JUnit XML treats failure, error and skipped alike: none of them is a
-// case that passed.
-test('junit failures, errors and skips all count', () => {
+// A skip reports the same thing on every run forever, so it can never be the
+// evidence that a repair changed nothing — counting it would stop a branch whose
+// only permanent case is a skip, while the repair was still fixing the rest.
+test('junit failures and errors count; a skip never does', () => {
   const report = `<?xml version="1.0"?><testsuites><testsuite>
     <testcase classname="t" name="test_ubc_0123456789ab_pays" file="t.py"><failure message="AssertionError: 500">trace</failure></testcase>
     <testcase classname="t" name="test_ubc_ba9876543210_refunds" file="t.py"><skipped message="no db"/></testcase>
@@ -117,7 +118,6 @@ test('junit failures, errors and skips all count', () => {
 
   assert.deepEqual(failureSet('pytest', report), [
     { marker: 'ubc_0123456789ab', file: 't.py', message: 'AssertionError: 500' },
-    { marker: 'ubc_ba9876543210', file: 't.py', message: 'no db' },
   ]);
 });
 
