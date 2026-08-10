@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { outputPath, writeSuiteBuildRequest, type SuiteBuildBranch } from '../src/files/suiteBuild.ts';
@@ -251,132 +251,134 @@ test('run-local separates an entry it cannot read from a branch not written yet'
   assert.match(out.join(''), /no entry for this branch yet/);
 });
 
-// Spec 34-2, criterion 5. Eight runs of a branch, against the 3-5 both real logs
-// show as ordinary work. The ceiling is not only about money: the recipe forbids
-// weakening a check to get green, and that rule breaks in the polishing loop —
-// on the fifth "why is it red again" the temptation to bend the expectation is
-// at its highest.
-async function runBranch(projectRoot: string, branch: string): Promise<string> {
+// Spec 34-6, criterion 3. `repair_rounds` is gone, and with it the only thing
+// that could ever end a repair loop. This is the replacement, and unlike a round
+// count it is silent for as long as the edits are doing something.
+const RED = JSON.stringify({
+  examples: [
+    { description: 'ubc_0123456789ab guards checkout', file_path: './a_spec.rb', status: 'failed',
+      exception: { message: 'expected 200, got 500\n  at line 4' } },
+  ],
+});
+
+// A different first line of the same message is a different failure: the repair
+// moved, even if the case is still red.
+const MOVED = JSON.stringify({
+  examples: [
+    { description: 'ubc_0123456789ab guards checkout', file_path: './a_spec.rb', status: 'failed',
+      exception: { message: 'expected 200, got 422\n  at line 4' } },
+  ],
+});
+
+async function runWithReport(projectRoot: string, report: string): Promise<{ code: number; out: string }> {
   const { out, stdout } = collect();
-  await runLocal(config(projectRoot), [branch], {
-    runStructural: async () => runnerResult(),
+  const code = await runLocal(config(projectRoot), ['structural'], {
+    runStructural: async () => runnerResult({ code: 1, report }),
     runBehavioral: async () => runnerResult(),
     validateStack: () => okStack,
     stdout,
   });
-  return out.join('');
+  return { code, out: out.join('') };
 }
 
-test('a branch run within the budget says nothing about the ceiling', async () => {
+test('the first run of a branch always passes: there is nothing to compare it to', async () => {
   const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
 
-  for (let run = 0; run < 8; run += 1) {
-    assert.doesNotMatch(await runBranch(projectRoot, 'structural'), /defects of your product/i);
-  }
+  const first = await runWithReport(projectRoot, RED);
+
+  assert.equal(first.code, 0);
+  assert.doesNotMatch(first.out, /Stopping structural/);
 });
 
-// `repair_rounds` remains useful telemetry, but it is not a semantic classifier
-// or a stop signal. A repair worker may need more iterations to reach a faithful
-// owned-case result, so crossing the old number must stay silent.
-test('a branch run past the diagnostic budget still runs without publication advice', async () => {
+test('the same set of failures twice in a row stops the branch with a non-zero code', async () => {
   const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
-  for (let run = 0; run < 8; run += 1) await runBranch(projectRoot, 'structural');
+  await runWithReport(projectRoot, RED);
 
-  const ninth = await runBranch(projectRoot, 'structural');
+  const second = await runWithReport(projectRoot, RED);
 
-  assert.doesNotMatch(ninth, /defects of your product/i);
-  assert.doesNotMatch(ninth, /publish/i);
-  assert.doesNotMatch(ninth, /stop|ceiling|budgeted/i);
-  // It ran. The report is the proof — a refusal would print no command at all.
-  assert.match(ninth, /ran: bundle exec rspec/);
+  assert.equal(second.code, 1);
+  assert.match(second.out, /Stopping structural/);
+  assert.match(second.out, /changed nothing this run can see/);
 });
 
-// Per branch, not per project: the structural peer being polished must not spend
-// the behavioral branch's budget, or a project with one hard branch reports the
-// ceiling on a branch that has run twice.
-test('the two branches spend their budgets independently', async () => {
+test('a failure that changed its message is progress, and the branch keeps running', async () => {
   const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
-  for (let run = 0; run < 9; run += 1) await runBranch(projectRoot, 'structural');
+  await runWithReport(projectRoot, RED);
 
-  assert.doesNotMatch(await runBranch(projectRoot, 'behavioral'), /defects of your product/i);
+  const second = await runWithReport(projectRoot, MOVED);
+
+  assert.equal(second.code, 0);
+  assert.doesNotMatch(second.out, /Stopping structural/);
 });
 
-// Every `run-local` is a separate `npx` process, so a count held in memory would
-// reset on each one and bound nothing at all.
-test('the branch run count survives the process that made it', async () => {
+// The set belongs to the branch, so polishing the structural peer must not stop
+// the behavioral one, and the two counters never touch.
+test('the two branches remember their failures separately', async () => {
   const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
-  await runBranch(projectRoot, 'structural');
-  await runBranch(projectRoot, 'structural');
-  await runBranch(projectRoot, 'behavioral');
+  await runWithReport(projectRoot, RED);
+  await runWithReport(projectRoot, RED);
 
-  const spent = JSON.parse(
-    readFileSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json'), 'utf8'),
-  );
-  assert.equal(spent['run-local:structural'], 2);
-  assert.equal(spent['run-local:behavioral'], 1);
-});
-
-test('a request with no budget block leaves the branch counter silent', async () => {
-  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
-  const path = join(projectRoot, '.unitbob', 'suite-build', 'request.json');
-  const request = JSON.parse(readFileSync(path, 'utf8'));
-  delete request.budget;
-  writeFileSync(path, JSON.stringify(request));
-
-  for (let run = 0; run < 10; run += 1) {
-    assert.doesNotMatch(await runBranch(projectRoot, 'structural'), /defects of your product/i);
-  }
-});
-
-// The whole reason `runOneBranch` reports whether it ran. A branch with no entry
-// written yet is the ordinary state halfway through a build; charging it would
-// burn the budget on rounds that never looked at a suite, and the ceiling would
-// arrive while the branch was still being written.
-test('a branch that never ran is not charged a repair round', async () => {
-  const projectRoot = project([structuralAnswer()]);
-  const { stdout } = collect();
-
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await runLocal(config(projectRoot), ['behavioral'], {
-      runStructural: async () => runnerResult(),
-      runBehavioral: async () => runnerResult(),
-      validateStack: () => okStack,
-      stdout,
-    });
-  }
-
-  // Nothing was charged at all, so there is no counter file to hold a zero in.
-  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json')), false);
-});
-
-// A branch the stack cannot execute is the same case: nothing ran, so nothing
-// was repaired.
-test('a branch the stack cannot run is not charged either', async () => {
-  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
-  const { stdout } = collect();
-
-  await runLocal(config(projectRoot), ['structural'], {
+  const { out, stdout } = collect();
+  const code = await runLocal(config(projectRoot), ['behavioral'], {
     runStructural: async () => runnerResult(),
-    runBehavioral: async () => runnerResult(),
-    validateStack: () => ({ ok: false, message: 'no rspec here' }) as never,
+    runBehavioral: async () => runnerResult({ code: 1, report: RED }),
+    validateStack: () => okStack,
     stdout,
   });
 
-  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json')), false);
+  assert.equal(code, 0);
+  assert.doesNotMatch(out.join(''), /Stopping/);
 });
 
-// A counter file that was hand-edited, or truncated by a killed process, counts
-// as nothing spent. Refusing to run over damaged bookkeeping would turn the one
-// mechanism that deliberately never blocks into the one that does.
-test('a damaged counter file costs a run nothing but the count', async () => {
-  const projectRoot = project([structuralAnswer()]);
-  writeFileSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json'), '{"run-local:struc');
+// Every `run-local` is a separate `npx` process, so a set held in memory would
+// reset on each one and compare nothing at all.
+test('the remembered failures survive the process that ran them', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  await runWithReport(projectRoot, RED);
 
-  const out = await runBranch(projectRoot, 'structural');
+  const state = JSON.parse(readFileSync(join(projectRoot, '.unitbob', 'suite-build', 'run-state.json'), 'utf8'));
+  assert.equal(typeof state.branches.structural, 'string');
+  assert.equal(state.branches.behavioral, undefined);
+});
 
-  assert.match(out, /ran: bundle exec rspec/);
-  const spent = JSON.parse(
-    readFileSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json'), 'utf8'),
-  );
-  assert.equal(spent['run-local:structural'], 1);
+// A green branch is not a branch that has stopped moving, and remembering an
+// empty set would stop one that passes twice.
+test('a branch that goes green is forgotten rather than remembered', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  await runWithReport(projectRoot, RED);
+
+  const green = await runWithReport(projectRoot, '{"examples":[]}');
+  const again = await runWithReport(projectRoot, '{"examples":[]}');
+
+  assert.equal(green.code, 0);
+  assert.equal(again.code, 0);
+  const state = JSON.parse(readFileSync(join(projectRoot, '.unitbob', 'suite-build', 'run-state.json'), 'utf8'));
+  assert.equal(state.branches.structural, undefined);
+});
+
+// A run that produced no readable report never reached the loop this bounds: it
+// is a harness problem. Comparing against the set from before the harness broke
+// would stop a branch for the wrong reason.
+test('a run with no readable report forgets the branch instead of matching it', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  await runWithReport(projectRoot, RED);
+
+  const died = await runWithReport(projectRoot, '');
+  const back = await runWithReport(projectRoot, RED);
+
+  assert.equal(died.code, 0);
+  assert.equal(back.code, 0);
+});
+
+// Refusing to run over damaged bookkeeping would turn the one soft stop in the
+// loop into the hardest thing in it.
+test('a damaged run-state file reads as "no previous run"', async () => {
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  await runWithReport(projectRoot, RED);
+  writeFileSync(join(projectRoot, '.unitbob', 'suite-build', 'run-state.json'), '{"branches":{"struc');
+
+  const next = await runWithReport(projectRoot, RED);
+
+  assert.equal(next.code, 0);
+  assert.doesNotMatch(next.out, /Stopping structural/);
 });

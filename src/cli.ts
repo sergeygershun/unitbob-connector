@@ -144,8 +144,10 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
         await contractPrompt(await linked(), args);
         return 0;
       case 'run-local':
-        await runLocal(await linked(), args);
-        return 0;
+        // The one verb whose non-zero exit is not an error: a branch that failed
+        // the same set of cases twice in a row (spec 34-6, criterion 3). Red
+        // tests still exit zero — a live defect is the suite working.
+        return await runLocal(await linked(), args);
       case 'run':
       case 'check':
         await run(await linked(), args);

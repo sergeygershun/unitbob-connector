@@ -12,7 +12,6 @@ function project(): string {
   mkdirSync(join(root, '.unitbob', 'suite-build'), { recursive: true });
   const request = {
     project_root: root, output_path: join(root, '.unitbob/suite-build/suite_output.json'),
-    budget: { workers: 4, review_rounds: 2, repair_rounds: 1 },
     branches: [
       { suite_kind: 'structural', assignment: { blocks: [{ block_id: 'billing', interfaces: [
         { interface_id: 'b1' }, { interface_id: 'b2' },
@@ -39,12 +38,12 @@ function item(branch: string, workerId: string, capabilities: string[], promises
     harness_path: branch === 'behavioral'
       ? '.unitbob/behavioral/step_definitions/00_unitbob_world.rb'
       : '.unitbob/structural/unitbob_helper.rb',
-    limits: { planned_cases: plannedCases.length, fact_finder_lookups: 8 },
+    limits: { planned_cases: plannedCases.length },
     done_when: 'All planned cases are written and checkpointed.',
   };
 }
 
-test('validates a complete non-empty balanced plan and returns its exact-byte digest', async () => {
+test('validates a complete non-empty plan and returns its exact-byte digest', async () => {
   const root = project();
   const result = await validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } });
   assert.equal(result.plan_digest, workerPlanDigest(root));
@@ -66,15 +65,13 @@ test('reports every plan problem in one batch', async () => {
     (error: Error) => {
       assert.match(error.message, /request_digest/);
       assert.match(error.message, /b1.*more than once|more than once.*b1/i);
-      assert.match(error.message, /b2.*missing|missing.*b2/i);
       assert.match(error.message, /owned path/i);
-      assert.match(error.message, /1\.5/);
       return true;
     },
   );
 });
 
-test('rejects empty slices and more workers than the branch budget or capability count', async () => {
+test('rejects empty slices', async () => {
   const root = project();
   const path = workerPlanPath(root);
   const plan = JSON.parse(readFileSync(path, 'utf8'));
@@ -83,7 +80,59 @@ test('rejects empty slices and more workers than the branch budget or capability
 
   await assert.rejects(
     validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
-    /non-empty|worker count/i,
+    /non-empty/i,
+  );
+});
+
+// Spec 34-6, criteria 1.6 and 2.1. The plan is where the coordinator's scope
+// choice is recorded, and there is nowhere else it is written down — so a plan
+// that guards two of the assignment's capabilities is an ordinary plan, not a
+// half-finished one. It is also allowed to be as wide as it likes, and as
+// unevenly split: the ceilings on worker count and on slice ratio made the plan
+// a copy of the assignment's shape rather than of the work's.
+test('a plan that covers part of the assignment passes, at any width and any balance', async () => {
+  const root = project();
+  const path = workerPlanPath(root);
+  const plan = JSON.parse(readFileSync(path, 'utf8'));
+  plan.workers = [
+    item('structural', 's1', ['b1'], ['p1'], ['e1'], ['.unitbob/structural/s1_spec.rb']),
+    item('behavioral', 'b1', ['c1'], ['p3'], ['1', '2', '3', '4', '5', '6'],
+      ['.unitbob/behavioral/features/b1.feature']),
+  ];
+  writeFileSync(path, `${JSON.stringify(plan, null, 2)}\n`);
+
+  const result = await validateWorkerPlan(
+    { server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } },
+  );
+
+  assert.equal(result.plan_digest, workerPlanDigest(root));
+});
+
+// The neighbours of the removed check catch a plan that is wrong rather than one
+// that is narrow, and they stay.
+test('a capability the request never assigned is still an error', async () => {
+  const root = project();
+  const path = workerPlanPath(root);
+  const plan = JSON.parse(readFileSync(path, 'utf8'));
+  plan.workers[3].capability_ids = ['c9'];
+  writeFileSync(path, JSON.stringify(plan));
+
+  await assert.rejects(
+    validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    /c9 was not assigned by the request/i,
+  );
+});
+
+test('a branch with an assignment and no slice at all is still an error', async () => {
+  const root = project();
+  const path = workerPlanPath(root);
+  const plan = JSON.parse(readFileSync(path, 'utf8'));
+  plan.workers = plan.workers.filter((worker: { branch: string }) => worker.branch === 'structural');
+  writeFileSync(path, JSON.stringify(plan));
+
+  await assert.rejects(
+    validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    /behavioral: no worker slice was planned/i,
   );
 });
 

@@ -4,12 +4,14 @@ on this machine; only the finished suites and metadata are uploaded.
 - **structural** protects internal interfaces with real unit examples.
 - **behavioral** protects business outcomes with Gherkin scenarios.
 
-Neither replaces the other. Follow this finite workflow exactly: one planning
-pass, one fan-out, assembly and validation, at most one host-owned shared harness
-correction, one fresh repair rotation, exactly one final run, and one review.
-Never continue a coordinator or worker context after its bounded phase.
+Neither replaces the other. Follow this finite workflow exactly: planning, one
+fan-out, assembly and validation, host-owned shared harness corrections, one
+fresh repair rotation, exactly one final run, and one review. Replanning after
+the first slice comes back is legitimate and cheap; do it rather than force a
+plan you already know is wrong. Never continue a coordinator or worker context
+after its bounded phase.
 
-1. Run `npx -y --loglevel=error unitbob@0.4.4 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.4.5 suite-prepare` with exactly one
    defect-context option. Use `--known-defect='<exact description>'` (and
    `--fixed-revision='<revision>'` when supplied), otherwise use
    `--no-known-defect`. This command checks the supported stack, provisions the
@@ -24,17 +26,43 @@ Never continue a coordinator or worker context after its bounded phase.
    `runner_manifest` verbatim. Never invent or edit one and never add a branch
    absent from the request.
 
-   The request also carries a `budget`:
-   `{ "workers": 4, "review_rounds": 2, "repair_rounds": 8 }`. Do not invent it.
-   `workers` and `review_rounds` are ceilings. `repair_rounds` remains a
-   compatibility diagnostic; it does not limit repair-worker `run-local` calls.
-   The repair role's mechanical budget is its only ceiling. If an old request has
-   no `budget` at all, say so in one line and continue without the diagnostics.
-   The workers ceiling is **per branch**, not across the build.
+3. Choose which lamps this build guards, before you plan anything. The
+   behavioral assignment lists every capability of the product map. A build that
+   takes all of them hands each worker more work than fits: on a2time,
+   2026-08-10, one worker carried 8–11 capabilities, seven of eight workers
+   wrote no file at all, and the run spent about 1.51M tokens on nothing.
 
-3. In one planning pass write strict JSON to
-   `.unitbob/suite-build/worker-plan.json`. Compute `request_digest` as SHA-256
-   of the exact `request.json` bytes. The plan has this shape:
+   Read the behavioral assignment's capability list and propose the important
+   ones, with a reason each in plain words. Judge from what the assignment
+   already carries — `title`, `description`, and the `surfaces`, `tables` and
+   `externals` lists. Money and access rights, many addresses, several external
+   systems: those are readable signals. There is no weight formula and no target
+   number of lamps. Aim to spread roughly one 2026-08-10 worker's load across
+   several workers instead of piling it on one.
+
+   Then ask the user in one message: these lamps, or which ones instead. **Do
+   not plan or fan out before the user answers.** This is the only place in the
+   whole workflow where a question is worth the user's turn, because a wrong
+   choice costs the entire run. One capability is a legitimate answer. All of
+   them is allowed too — say in one line that it returns the build to the size
+   that did not converge on 2026-08-10. If the product map has so few
+   capabilities that there is nothing to divide, do not ask: the scope is the
+   whole map.
+
+   Scope bounds the target, not the reading. A lamp is not a closed set of
+   files — billing pulls in users, projects and clients — so a capability left
+   out is one you do not aim at, never one you may not read.
+
+   The structural branch is never narrowed: it covers its whole assignment. Its
+   examples run in seconds, need no data setup, and repair cleanly.
+
+   Nothing records this choice except the plan you write next. The assignment
+   stays exactly as the server sent it, and the publication line still counts
+   against the whole map.
+
+4. Write strict JSON to `.unitbob/suite-build/worker-plan.json`. Compute
+   `request_digest` as SHA-256 of the exact `request.json` bytes. The plan has
+   this shape:
 
    ```json
    { "request_digest": "<sha256>", "workers": [
@@ -45,40 +73,61 @@ Never continue a coordinator or worker context after its bounded phase.
        "source_paths": ["initial local paths"],
        "owned_paths": ["files only this worker may write"],
        "harness_path": ".unitbob/...connector-owned helper...",
-       "limits": { "planned_cases": 3, "fact_finder_lookups": 8 },
+       "limits": { "planned_cases": 3 },
        "done_when": "all planned cases are written and checkpointed" }
    ] }
    ```
 
-   Plan every requested branch. Use
-   `1..min(budget.workers, capability_count)` workers on each and never create
-   an empty slice. Assign every capability exactly once, use globally unique
-   worker ids and owned paths, and balance non-empty slices so the largest
-   planned-case count is at most 1.5 times the smallest. Balance visible
-   business complexity too, but do not invent weights or a scheduler.
+   Plan every requested branch. The behavioral branch is planned over the lamps
+   the user confirmed in step 3 and no others; the structural branch is planned
+   over its whole assignment. There is no ceiling on how many workers a branch
+   gets: an agent re-reads its context every turn, so splitting the work never
+   costs more than keeping it together. Never create an empty slice. Assign each
+   planned capability exactly once and use globally unique worker ids and owned
+   paths. Balance visible business complexity, but do not invent weights or a
+   scheduler.
 
-   A promise may have several planned behavioral scenario intents. Usually plan
-   3–6 scenarios per capability; more than 8 requires an explanation in the
-   intent. Route aliases and technical mirrors do not earn scenarios without a
-   different business outcome. `surface_budget` is a ceiling, never a quota;
+   A promise may have several planned behavioral scenario intents. Plan the
+   scenarios the business outcome actually needs — no quota, in either
+   direction. Route aliases and technical mirrors do not earn scenarios without
+   a different business outcome. `surface_budget` is a ceiling, never a quota;
    unselected assigned surfaces are `deferred_surfaces`, not `unreachable`.
 
-4. Run `npx -y --loglevel=error unitbob@0.4.4 validate-worker-plan`. If
+5. Run `npx -y --loglevel=error unitbob@0.4.5 validate-worker-plan`. If
    validation exits non-zero, fix the whole reported batch and run the gate
-   again. If it remains non-zero, stop before fan-out. Do not replace this gate
-   with a receipt, hook, or home-grown orchestrator.
+   again. If it remains non-zero, stop before fan-out. The gate checks that the
+   plan is intact — digests, ids, paths, capabilities that were actually
+   assigned — and no longer requires it to cover every capability in the
+   assignment; that is what step 3 decided. Do not replace this gate with a
+   receipt, hook, or home-grown orchestrator.
 
-5. Use the same named role on both Claude Code and Codex: `unitbob:suite-worker`
+6. Seed every planned slice's checkpoint before fan-out. Write
+   `.unitbob/suite-build/checkpoints/<branch>-<worker-id>.json` yourself: the
+   exact request and plan digests, branch and worker id, every assigned promise
+   in `unresolved_promises`, empty `completed_promises` and `written_paths` —
+   and the facts you have already verified, each with its source references:
+
+   ```json
+   {"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}
+   ```
+
+   Everything every worker on the branch would otherwise discover alone belongs
+   here: how a session is opened, which factory builds a paying customer, what
+   the runner setup already does. On 2026-08-10 that list was assembled by hand
+   halfway through the run, and the packets that received it finished
+   completely.
+
+7. Use the same named role on both Claude Code and Codex: `unitbob:suite-worker`
    on Claude Code and `suite-worker` on Codex. For every plan item launch that
    role with only the plan item and referenced request paths. The host-specific
-   definition owns the cheaper model and mechanical ceiling; never launch a
+   definition owns the cheaper model and the emergency turn fuse; never launch a
    generic subagent and never continue an exhausted context. Start a branch's
    workers together, in one go.
    Sequential slices save nothing and finish later.
 
    On Codex, the Unitbob definitions must already be discoverable in
    `~/.codex/agents/`; if they are missing, stop and run
-   `npx -y --loglevel=error unitbob@0.4.4 codex-install`, then tell the user to
+   `npx -y --loglevel=error unitbob@0.4.5 codex-install`, then tell the user to
    start a new Codex thread. No Codex version is currently qualified by Unitbob
    for a per-named-agent rollout budget. Before the first bounded role, ask:
    `This Codex version cannot enforce the Unitbob worker token limit. Run this
@@ -88,18 +137,18 @@ Never continue a coordinator or worker context after its bounded phase.
 
    The bounded flow applies to structural and behavioral alike. The behavioral
    World and later selection review remain behavioral-only. Workers write only
-   their `owned_paths` plus
-   `.unitbob/suite-build/checkpoints/<branch>-<worker-id>.json`. They create the
-   checkpoint before source research and update it after every completed
-   promise. Ask closed questions with the files to look in. They may ask no more
-   than eight closed lookups of the named
-   fact-finder role (`unitbob:fact-finder` on Claude Code, `fact-finder` on
-   Codex), with no more than **eight** lookups per worker; a generic lookup agent has no ceiling on model, turn
-   count, or answer length. Workers never run the suite themselves, never do
-   branch-global validation, never edit another slice or connector-owned
-   harness, and get one final read of their owned files—not a self-validation
-   script loop. Partial files and unresolved promises survive the host's
-   mechanical ceiling.
+   their `owned_paths` plus their seeded
+   `.unitbob/suite-build/checkpoints/<branch>-<worker-id>.json`. They start by
+   writing what the seeded facts already support and go looking only for what
+   they still lack, and they update the checkpoint after every completed
+   promise. Ask closed questions with the files to look in. They may ask the
+   named fact-finder role (`unitbob:fact-finder` on Claude Code, `fact-finder`
+   on Codex) as many closed lookups as the work needs; a generic lookup agent
+   has no ceiling on model, turn count, or answer length. Workers never run the
+   suite themselves, never do branch-global validation, never edit another slice
+   or connector-owned harness, and get one final read of their owned files—not a
+   self-validation script loop. Partial files and unresolved promises survive
+   the host's emergency fuse.
 
    If a qualified Codex later returns `budgetLimited` or
    `session_budget_exceeded`, keep the partial files and checkpoint and ask
@@ -110,13 +159,13 @@ Never continue a coordinator or worker context after its bounded phase.
    incarnation. Stop follows the existing incomplete/checkpoint path. Never
    auto-resume or report the incomplete slice as successful after a budget stop.
 
-6. Run `npx -y --loglevel=error unitbob@0.4.4 validate-worker-checkpoints` after
+8. Run `npx -y --loglevel=error unitbob@0.4.5 validate-worker-checkpoints` after
    fan-out and before assembly or repair. It verifies one compact checkpoint per
    plan item against the exact request and plan digests, worker id, promises,
    and owned paths. A stale or invalid checkpoint never goes to repair: record a
    `build_error` for that branch and continue its peer.
 
-7. Assemble each valid branch without rereading the whole source tree. Follow
+9. Assemble each valid branch without rereading the whole source tree. Follow
    each server recipe and preserve every opaque id, `contract_key`, and
    `case_marker`. Structural examples exercise production code and assert an
    observable outcome. Behavioral Given/When/Then steps drive real public
@@ -149,32 +198,39 @@ Never continue a coordinator or worker context after its bounded phase.
    `known_defect_probe`, `known_defect_context`, or runner reports in generator
    `test_metadata`.
 
-8. Run `npx -y --loglevel=error unitbob@0.4.4 validate-build` once after merge.
-   It batch-checks duplicate step expressions, markers, metadata, assigned ids,
-   surface arithmetic, paths, and files. Correct that mechanical batch during
-   assembly; workers do not repeat it locally.
+10. Run `npx -y --loglevel=error unitbob@0.4.5 validate-build` once after merge.
+    It batch-checks duplicate step expressions, markers, metadata, assigned ids,
+    surface arithmetic, paths, and files. Correct that mechanical batch during
+    assembly; workers do not repeat it locally.
 
-9. Run `npx -y --loglevel=error unitbob@0.4.4 run-local` once for the assembled
-   branches. The connector owns the exact runner commands. A runner that never
-   starts is a harness failure, not a red test. If the runner never started, it
-   died before the first test or scenario; report its exact error, upload nothing
-   for that branch, and do not build on that harness. A runner that starts and reaches production code may expose a
-   real application failure. Application failures remain red. Let the lamp be red. Don't stop to repair the app before
-   generating, and never weaken a check to get green.
+11. Run `npx -y --loglevel=error unitbob@0.4.5 run-local` once for the assembled
+    branches. The connector owns the exact runner commands. A runner that never
+    starts is a harness failure, not a red test. If the runner never started, it
+    died before the first test or scenario; report its exact error, upload nothing
+    for that branch, and do not build on that harness. A runner that starts and reaches production code may expose a
+    real application failure. Application failures remain red. Let the lamp be red. Don't stop to repair the app before
+    generating, and never weaken a check to get green.
 
-   Group the failures by the verbatim text of the error. Look yourself at any
-   error that turns up under more than one worker: it is coordinator-owned. A
-   host-owned shared step is yours, fixed once and never handed back;
-   the connector-owned World is never locally patched. A World incompatibility
-   missed by the pre-fan-out probe makes the behavioral branch a `build_error`.
-   A production stack frame alone does not prove a product defect: incorrect
-   generated setup can fail inside production. For owned-file failures, and for every
-   valid checkpoint with `unresolved_promises`, create one narrow failure packet
-   containing only its plan item, checkpoint, branch, owned paths and case markers,
-   and related traces. A valid partial checkpoint with `unresolved_promises` enters
-   repair even without an initial runner failure.
+    `run-local` also remembers each branch's set of failures between runs. When a
+    branch comes back with exactly the set it came back with last time, it says
+    so and exits non-zero: the edits since then changed nothing. That stops the
+    branch, not one worker — the set belongs to the branch. Take it as the signal
+    to look yourself, replan, or call the branch a `build_error`, never as a
+    reason to run it again unchanged.
 
-10. Launch one fresh named repair role per failure packet:
+    Group the failures by the verbatim text of the error. Look yourself at any
+    error that turns up under more than one worker: it is coordinator-owned. A
+    host-owned shared step is yours, fixed once and never handed back;
+    the connector-owned World is never locally patched. A World incompatibility
+    missed by the pre-fan-out probe makes the behavioral branch a `build_error`.
+    A production stack frame alone does not prove a product defect: incorrect
+    generated setup can fail inside production. For owned-file failures, and for every
+    valid checkpoint with `unresolved_promises`, create one narrow failure packet
+    containing only its plan item, checkpoint, branch, owned paths and case markers,
+    and related traces. A valid partial checkpoint with `unresolved_promises` enters
+    repair even without an initial runner failure.
+
+12. Launch one fresh named repair role per failure packet:
     `unitbob:suite-repair-worker` on Claude Code and `suite-repair-worker` on
     Codex. Run repair packets sequentially so they never share the project test DB.
     Each role completes `unresolved_promises` first while preserving finished files,
@@ -185,31 +241,33 @@ Never continue a coordinator or worker context after its bounded phase.
 
     The worker may read stack-referenced source, the actual runner setup and
     harness, helpers, and factories, but edits only owned generated files and its
-    checkpoint. It never runs the project suite directly, changes production or
+    checkpoint. It inherits the checkpoint's facts rather than establishing them
+    again. It never runs the project suite directly, changes production or
     shared harness, removes a case, marker, binding or assertion, adds
     `skip`/`pending`/`todo`, or weakens a business promise. A product defect handoff
     briefly names the violated business contract, reason, and production source
     references. There is no strict JSON handoff. Ambiguous owned failures, an
     unusable runner, unfinished promises, and `Stop` after a ceiling are
     `build_error`, never product red; this supersedes spec 40's ambiguous-red
-    fallback. Shared harness that remains broken after the one coordinator-owned
-    correction is also `build_error` and has no repair feedback loop in this MVP.
+    fallback. Shared harness that is still broken when you have run out of
+    corrections to make is also `build_error` and has no repair feedback loop in
+    this MVP.
 
     Preserve spec 35 after a repair ceiling: keep files and checkpoint, then ask
     `[Continue once / Stop]`; never auto-resume. After all sequential repair
     packets finish, run each affected branch exactly once as the final run.
     Confirmed production defects remain executable and red.
 
-11. If behavioral is a `build_error`, skip review and keep the structural peer.
+13. If behavioral is a `build_error`, skip review and keep the structural peer.
     Otherwise run
-    `npx -y --loglevel=error unitbob@0.4.4 suite-review-prepare`. It runs and binds
+    `npx -y --loglevel=error unitbob@0.4.5 suite-review-prepare`. It runs and binds
     the exact candidate, then writes
     `.unitbob/suite-build/review-request.json`. That request includes the
     original behavioral assignment, its worker-plan items, and exact
     `plan_digest`, as well as the existing candidate and optional known-defect
     evidence.
 
-12. There is always exactly one reviewer. Give that request and referenced suite
+14. There is always exactly one reviewer. Give that request and referenced suite
     to one independent reviewer in a fresh context. If one is unavailable, do not upload the behavioral branch.
     Keep the existing BDD quality review: one
     `scenario_reviews` entry per Scenario, with exact scenario, marker, verified
@@ -227,7 +285,7 @@ Never continue a coordinator or worker context after its bounded phase.
     required. Write strict JSON only to
     `.unitbob/suite-build/behavioral_review.json`.
 
-13. Run `npx -y --loglevel=error unitbob@0.4.4 put-suite-build` exactly once. It
+15. Run `npx -y --loglevel=error unitbob@0.4.5 put-suite-build` exactly once. It
     validates and publishes each branch independently, runs every branch it published,
     and prints the server summaries and map URL. Never ask the user
     to run the checks to finish generating.

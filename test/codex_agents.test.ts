@@ -16,7 +16,10 @@ function codexInstructions(agent: string): string {
   return agent.match(/developer_instructions = '''\n([\s\S]*?)\n'''/)?.[1].trim() ?? '';
 }
 
-test('Codex suite agents use the accepted cheaper models and fixed rollout budgets', () => {
+// Spec 34-6, criterion 2.4. The number is no longer a budget the work is meant
+// to fit inside: it is an emergency fuse, raised well above the work one packet
+// takes so that reaching it means the run is broken rather than large.
+test('Codex suite agents use the accepted cheaper models and an emergency rollout fuse', () => {
   const worker = codexAgent('suite-worker');
   const repair = codexAgent('suite-repair-worker');
 
@@ -26,8 +29,8 @@ test('Codex suite agents use the accepted cheaper models and fixed rollout budge
     assert.match(agent, /^\[features\.rollout_budget\]$/m);
     assert.match(agent, /^enabled = true$/m);
   }
-  assert.match(worker, /^limit_tokens = 40000$/m);
-  assert.match(repair, /^limit_tokens = 40000$/m);
+  assert.match(worker, /^limit_tokens = 100000$/m);
+  assert.match(repair, /^limit_tokens = 100000$/m);
 });
 
 test('only the three risky Codex roles are installed and budgeted', () => {
@@ -63,12 +66,14 @@ test('Codex and Claude definitions carry the same behavioral instructions with h
   }
 });
 
+// Spec 34-6, criterion 4.1: the checkpoint is seeded by the coordinator now, so
+// there is no incarnation — first or approved-resume — that may create one.
 test('a budget continuation preserves the existing checkpoint instead of reinitializing it', () => {
   const worker = codexInstructions(codexAgent('suite-worker'));
 
   assert.match(worker, /approved fresh incarnation after a\s+native budget stop/i);
   assert.match(worker, /preserve the supplied checkpoint and completed files/i);
-  assert.match(worker, /never initialize that checkpoint again/i);
+  assert.match(worker, /never initialize it again/i);
 });
 
 test('codex-install places all definitions in the Codex user agent directory', () => {

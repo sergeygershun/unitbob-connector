@@ -337,11 +337,17 @@ function checkSurfaceCoverage(
   // Spec 34-3, criterion 6. Cheap here and expensive later: over the ceiling is
   // one of the answers the server rejects, and finding it after the suite has
   // been written, run and reviewed costs the whole cycle.
+  //
+  // Spec 34-6, criterion 5: it names how many surfaces have to move, because
+  // that number is the edit, and it lands in the same batch as every other
+  // capability over the ceiling. On a2time, 2026-08-09 the server's version of
+  // this complaint arrived one capability at a time and cost five
+  // `validate-build` rounds for one kind of mistake.
   const budget = expected.surfaceBudget;
   if (budget !== undefined && reached.size > budget) {
     add(
       `${id} guards ${reached.size} surfaces, over the surface_budget of ${budget}` +
-        ' — guard the most important ones up to that number and list the rest in deferred_surfaces.',
+        ` — move ${reached.size - budget} of them into deferred_surfaces and keep the most important ones guarded.`,
     );
   }
 

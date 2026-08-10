@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { RUN_BUDGET } from '../src/files/budget.ts';
 
 // Spec 32-3: building maps + suites on a2time cost far too much back-and-forth —
 // an approval per command, walls of reasoning, and questions scattered one at a
@@ -121,21 +120,69 @@ test('the suite workflow stops generally when suite-prepare wrote no request', (
   assert.doesNotMatch(flat, /If it reports there is no current map/i);
 });
 
-// Spec 34-2, criterion 5. The ceiling has to be somewhere the host reads on its
-// first step. It is in `request.json` for that reason, and repeated here because
-// the workflow is what turns a number into an instruction.
-test('the suite workflow obeys worker and review budgets while repair_rounds stays diagnostic', () => {
-  // Derived from the constant, never retyped. The numbers live in `budget.ts`
-  // and are quoted here as instructions; a literal in both places is the drift
-  // `plugin_pins.test.ts` already exists because of, on a value that is even
-  // easier to tune and forget.
-  const stated = Object.entries(RUN_BUDGET).map(([field, number]) => `"${field}": ${number}`).join(', ');
-  assert.ok(flat.includes(`{ ${stated} }`), `suite.md must state the budget as { ${stated} }`);
-  assert.match(flat, /workers.*review_rounds.*ceilings/i);
-  assert.match(flat, /repair_rounds.*diagnostic/i);
-  assert.match(flat, /does not limit.*run-local/i);
-  // An older connector writes no budget, and that is not an error.
-  assert.match(flat, /no `budget` at all/i);
+// Spec 34-6, criterion 1. The load a worker was handed was never bounded: it was
+// "the whole assignment, divided", and the assignment is the whole product map.
+// On a2time, 2026-08-10 that meant 8–11 capabilities each, and seven of eight
+// workers wrote nothing at all. The workflow now picks the lamps before it plans
+// anything, and asks the user to confirm them — the only question in the whole
+// workflow worth a user's turn, because a wrong choice costs the entire run.
+test('the suite workflow chooses the lamps with the user before it plans', () => {
+  assert.match(flat, /Choose which lamps this build guards, before you plan anything/i);
+  // Judged from what the assignment already carries, in words, with no formula
+  // and no target number.
+  assert.match(flat, /`title`, `description`, and the `surfaces`, `tables` and `externals` lists/i);
+  assert.match(flat, /no weight formula and no target number of lamps/i);
+  // The run does not move until the user answers.
+  assert.match(flat, /Do not plan or fan out before the user answers/i);
+  assert.match(flat, /only place in the whole workflow where a question is worth the user's turn/i);
+  // Criterion 1.8: scope bounds the target, not the reading.
+  assert.match(flat, /Scope bounds the target, not the reading/i);
+  // Criterion 1.7: the structural peer keeps its whole assignment.
+  assert.match(flat, /structural branch is never narrowed/i);
+  // Criterion 1.5: the plan is the only record of the choice.
+  assert.match(flat, /Nothing records this choice except the plan/i);
+});
+
+// Both edges named in the requirements, so neither turns into a refusal the
+// workflow never wrote down.
+test('one lamp and every lamp are both legitimate answers', () => {
+  assert.match(flat, /One capability is a legitimate answer/i);
+  assert.match(flat, /All of them is allowed too/i);
+  assert.match(flat, /so few capabilities that there is nothing to divide, do not ask/i);
+});
+
+// Spec 34-6, criterion 2. Every counter that rationed the work is gone from the
+// workflow: the ceilings were cutting quality, not cost, and the run they were
+// meant to protect died inside them.
+test('the suite workflow states no budget, no worker ceiling and no lookup ceiling', () => {
+  assert.doesNotMatch(flat, /`budget`/);
+  assert.doesNotMatch(flat, /budget\.workers/);
+  assert.doesNotMatch(flat, /review_rounds|repair_rounds/);
+  assert.doesNotMatch(flat, /1\.5 times/);
+  assert.doesNotMatch(flat, /3–6 scenarios|more than 8 requires/i);
+  assert.doesNotMatch(flat, /no more than \*\*eight\*\* lookups/i);
+  assert.match(flat, /no ceiling on how many workers a branch gets/i);
+});
+
+// Criterion 4. The checkpoint is written by the coordinator before fan-out and
+// carries the facts it has already verified — on 2026-08-10 the same list was
+// assembled by hand halfway through the run, and the packets that received it
+// finished completely.
+test('the coordinator seeds every checkpoint with verified facts before fan-out', () => {
+  assert.match(flat, /Seed every planned slice's checkpoint before fan-out/i);
+  assert.match(flat, /source_refs/);
+  const seeding = flat.indexOf("Seed every planned slice's checkpoint");
+  const fanOut = flat.indexOf("Start a branch's workers together");
+  assert.ok(seeding >= 0 && fanOut > seeding, 'checkpoints are seeded before the fan-out');
+});
+
+// Criterion 3. The one thing left that can end a repair loop, and it stops the
+// branch rather than a worker: the set of failures belongs to the branch.
+test('the suite workflow reads a repeated failure set as the stop signal', () => {
+  assert.match(flat, /remembers each branch's set of failures between runs/i);
+  assert.match(flat, /exits non-zero/i);
+  assert.match(flat, /stops the branch, not one worker/i);
+  assert.match(flat, /never as a reason to run it again unchanged/i);
 });
 
 // Criterion 6. On autobrella the fan stood on review, where the work is
@@ -150,16 +197,13 @@ test('the suite workflow puts a bounded fan-out where the reading is', () => {
   assert.doesNotMatch(flat, /continuation of its own context/i);
 });
 
-// Spec 34-3, criterion 3. `budget.workers: 4` never said what it counted, and
-// autobrella read it as four across the build: two workers on structural and two
-// on behavioral. Those two reached contexts of 760,000 and 705,000 tokens and
-// were 62 % of the whole run between them. An agent re-reads its context every
-// turn, so only the variable half of its cost divides when you split it — which
-// means splitting never loses, and the smallest sufficient number of workers is
-// the most expensive choice available.
-test('the suite workflow counts budget.workers per branch and creates only non-empty slices', () => {
-  assert.match(flat, /ceiling is \*\*per branch\*\*/i);
-  assert.match(flat, /`1\.\.min\(budget\.workers, capability_count\)`/i);
+// Spec 34-3, criterion 3, kept and widened by 34-6. An agent re-reads its
+// context every turn, so only the variable half of its cost divides when the
+// work is split — splitting never loses. `budget.workers: 4` said the opposite
+// by existing at all, and is gone; what survives is the half that was right.
+test('the suite workflow puts no ceiling on the fan and creates only non-empty slices', () => {
+  assert.match(flat, /re-reads its context every turn/i);
+  assert.match(flat, /splitting the work never costs more/i);
   assert.match(flat, /never create an empty slice/i);
 });
 
@@ -180,21 +224,29 @@ test("the suite workflow starts a branch's workers in one go", () => {
 // the cheap 11 % was pinned; this pins the expensive part too.
 test('the suite workflow uses host-specific named workers whose definitions own model and ceiling', () => {
   assert.match(flat, /named role.*`unitbob:suite-worker`.*`suite-worker`/i);
-  assert.match(flat, /host-specific definition owns the cheaper model and mechanical ceiling/i);
+  assert.match(flat, /host-specific definition owns the cheaper model and the emergency turn fuse/i);
   assert.match(flat, /never continue/i);
 });
 
-// Criterion 1. The workers' own lookups are what turned a budget of four into 36
-// live agents. The need is real — a worker may not run anything, so it either
-// looks the factory's arguments up or invents them — so the fix is a named agent
-// with ceilings (`plugin/agents/fact-finder.md`) rather than a prohibition.
-// Naming it is the entire mechanism: the host's default agent has no ceilings at
-// all, which is how one lookup ran 109 turns on the costliest model.
-test('the suite workflow sends workers to the named fact-finder, capped at eight', () => {
+// Spec 34-3, criterion 1, with its ceiling removed by 34-6, criterion 2.1. The
+// need the named role answers is unchanged — a worker may not run anything, so
+// it either looks the factory's arguments up or invents them — and naming the
+// role is the whole mechanism, because the host's default agent has no ceilings
+// at all. What is gone is the cap of eight: a direct limit on how many facts a
+// worker was allowed to be sure of.
+test('the suite workflow sends workers to the named fact-finder, uncapped', () => {
   assert.match(flat, /`unitbob:fact-finder`/);
-  assert.match(flat, /no more than \*\*eight\*\* lookups per worker/i);
+  assert.match(flat, /as many closed lookups as the work needs/i);
   assert.match(flat, /no ceiling on model, turn count, or answer length/i);
   assert.match(flat, /Closed questions with the files to look in/i);
+});
+
+// Criterion 4.3. The old order — create the checkpoint, read the sources, then
+// write — put research before any output at all, and on 2026-08-10 seven of
+// eight workers spent their whole ceiling inside it.
+test('workers write from the seeded facts before they go looking', () => {
+  assert.match(flat, /start by writing what the seeded facts already support/i);
+  assert.doesNotMatch(flat, /create the checkpoint before source research/i);
 });
 
 // Criterion 4. 34-2 said a worker triages its own red scenarios, which quietly
@@ -227,11 +279,17 @@ test('the suite workflow mechanically gates plan before fan-out and checkpoints 
   assert.match(flat, /If validation exits non-zero.*stop before fan-out/i);
 });
 
-test('the coordinator workflow is finite', () => {
-  assert.match(flat, /one planning pass/i);
-  assert.match(flat, /at most one host-owned shared harness correction/i);
+// Still finite where finiteness is about not reusing an exhausted context. Spec
+// 34-6, criterion 2.1 removes the two counts that were about rationing work
+// instead: one planning pass (replanning after the first slice is cheap and
+// legitimate) and one shared-harness correction (the second real harness problem
+// used to kill the branch).
+test('the coordinator workflow is finite where it matters and no longer rations planning', () => {
   assert.match(flat, /one fresh repair rotation/i);
   assert.match(flat, /exactly one final run/i);
+  assert.match(flat, /Replanning after the first slice comes back is legitimate/i);
+  assert.doesNotMatch(flat, /one planning pass/i);
+  assert.doesNotMatch(flat, /at most one host-owned shared harness correction/i);
   assert.doesNotMatch(flat, /continue (?:the )?(?:coordinator|worker).*context/i);
 });
 

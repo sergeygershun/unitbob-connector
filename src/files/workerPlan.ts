@@ -12,7 +12,7 @@ export interface WorkerPlanItem {
   source_paths: string[];
   owned_paths: string[];
   harness_path: string;
-  limits: { planned_cases: number; fact_finder_lookups: number };
+  limits: { planned_cases: number };
   done_when: string;
 }
 
@@ -79,8 +79,6 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
     branch.suite_kind as string,
     assignmentIds(branch.assignment),
   ]));
-  const budget = request.budget as Record<string, unknown> | undefined;
-  const workerCeiling = typeof budget?.workers === 'number' ? budget.workers : Number.POSITIVE_INFINITY;
   const seenWorkers = new Set<string>();
   const seenPaths = new Map<string, string>();
 
@@ -118,9 +116,6 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
     if (!item?.limits || item.limits.planned_cases !== item.planned_cases?.length) {
       errors.push(`${label}: limits.planned_cases must equal planned_cases.length`);
     }
-    if (!Number.isInteger(item?.limits?.fact_finder_lookups) || item.limits.fact_finder_lookups < 0 || item.limits.fact_finder_lookups > 8) {
-      errors.push(`${label}: limits.fact_finder_lookups must be an integer from 0 to 8`);
-    }
 
     for (const ownedPath of Array.isArray(item?.owned_paths) ? item.owned_paths : []) {
       if (!isNonEmptyString(ownedPath)) {
@@ -138,24 +133,27 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
     }
   }
 
+  // Spec 34-6, criterion 1.6. What is left here catches a corrupted plan, never
+  // a small one. The gate used to also demand that every assigned capability
+  // appear — which made the plan's size a copy of the assignment's size, and the
+  // assignment is the whole product map. That is the load one worker could not
+  // finish on a2time, 2026-08-10. Scope is chosen by the coordinator with the
+  // user (workflow step 3), and the plan is the only record of it, so a plan
+  // that covers part of the assignment is now an ordinary plan.
+  //
+  // The neighbours stay for the opposite reason: naming a capability the request
+  // never assigned, or naming one twice, are ways a plan is wrong rather than
+  // ways it is narrow. So is an empty plan for a branch that was given work.
   for (const [branch, expected] of expectedByBranch) {
     const items = plan.workers.filter((item) => item && typeof item === 'object' && !Array.isArray(item) && item.branch === branch);
     if (expected.length > 0 && items.length === 0) errors.push(`${branch}: no worker slice was planned`);
-    if (items.length > Math.min(workerCeiling, expected.length)) {
-      errors.push(`${branch}: worker count ${items.length} exceeds min(budget.workers, capability count)`);
-    }
     const assigned = items.flatMap((item) => Array.isArray(item.capability_ids) ? item.capability_ids : []);
     for (const id of expected) {
-      const count = assigned.filter((candidate) => candidate === id).length;
-      if (count === 0) errors.push(`${branch}: assigned capability ${id} is missing from the plan`);
-      if (count > 1) errors.push(`${branch}: assigned capability ${id} appears more than once`);
+      if (assigned.filter((candidate) => candidate === id).length > 1) {
+        errors.push(`${branch}: assigned capability ${id} appears more than once`);
+      }
     }
     for (const id of assigned.filter((id) => !expected.includes(id))) errors.push(`${branch}: capability ${id} was not assigned by the request`);
-
-    const sizes = items.map((item) => Array.isArray(item.planned_cases) ? item.planned_cases.length : 0).filter((size) => size > 0);
-    if (sizes.length > 1 && Math.max(...sizes) / Math.min(...sizes) > 1.5) {
-      errors.push(`${branch}: planned case slice ratio exceeds 1.5`);
-    }
   }
   return errors;
 }

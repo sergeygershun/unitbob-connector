@@ -6,7 +6,7 @@ import {
   type HostBranchOutput,
   type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
-import { spend } from '../files/budget.ts';
+import { digestOf, failureSet, readRunState, rememberFailures } from '../runner/failureDigest.ts';
 import { validateStack } from '../runner/precheck.ts';
 import { runBddSuite } from '../runner/bdd.ts';
 import { runStructuralByRunner } from './run.ts';
@@ -47,7 +47,7 @@ export async function runLocal(
   config: Config,
   args: string[] = [],
   deps?: Partial<RunLocalDeps>,
-): Promise<void> {
+): Promise<number> {
   const d: RunLocalDeps = {
     runStructural: runStructuralByRunner,
     runBehavioral: runBddSuite,
@@ -59,6 +59,8 @@ export async function runLocal(
   const request = readSuiteBuildRequest(config.projectRoot);
   const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
   const wanted = selectBranches(request, args);
+  const previous = readRunState(config.projectRoot);
+  let stuck = false;
 
   for (const suiteKind of wanted) {
     d.stdout.write(`\n── ${suiteKind} ──\n`);
@@ -75,15 +77,58 @@ export async function runLocal(
 
     const ran = await runOneBranch(config, d, suiteKind, outputs.find((entry) => entry.suite_kind === suiteKind));
 
-    // Only a run that happened spends a repair round. A branch with no entry
-    // written yet, or one the stack cannot execute, produced nothing to repair
-    // against — charging it would exhaust the budget on rounds that never
-    // examined the suite.
+    // A branch with no entry written yet, or one the stack cannot execute,
+    // produced nothing to compare: it is the ordinary state halfway through a
+    // build, not a repair loop going nowhere.
     if (!ran) continue;
-    // Kept as compatibility diagnostics only. The bounded repair role owns the
-    // mechanical ceiling; this counter never stops execution or classifies reds.
-    spend(config.projectRoot, `run-local:${suiteKind}`);
+    if (compareFailures(config, d, suiteKind, ran, previous[suiteKind])) stuck = true;
   }
+
+  return stuck ? 1 : 0;
+}
+
+// Spec 34-6, criterion 3. The whole stop condition, and it stops the branch
+// rather than the worker: the set of failures belongs to the branch, and a
+// repair worker looking only at its own slice cannot see that the branch as a
+// whole has stopped moving.
+//
+// Returns true when this branch is the one that has stopped moving.
+function compareFailures(
+  config: Config,
+  d: RunLocalDeps,
+  suiteKind: string,
+  ran: BranchRun,
+  before: string | undefined,
+): boolean {
+  const failures = failureSet(ran.runner, ran.result.report);
+
+  // No comparable set: the run produced no readable report, which is a harness
+  // problem the loop never reached. Forget the branch so the next run that does
+  // produce one is a first run again, rather than a match against a set from
+  // before the harness broke.
+  if (!failures) {
+    rememberFailures(config.projectRoot, suiteKind, undefined);
+    return false;
+  }
+
+  // Green. Nothing to be stuck on, and remembering an empty set would stop a
+  // branch that passes twice in a row.
+  if (failures.length === 0) {
+    rememberFailures(config.projectRoot, suiteKind, undefined);
+    return false;
+  }
+
+  const digest = digestOf(failures);
+  rememberFailures(config.projectRoot, suiteKind, digest);
+  if (digest !== before) return false;
+
+  d.stdout.write(
+    `\nStopping ${suiteKind}: it just failed the same ${failures.length} case(s) as the previous run, ` +
+      'down to the first line of every message. The edits since then changed nothing this run can see.\n' +
+      'Look at the failures yourself, replan the slice, or record the branch as a build_error. ' +
+      'Running it again unchanged prints this same line.\n',
+  );
+  return true;
 }
 
 // Which branches to run. No argument runs every branch the request asked for —
@@ -104,14 +149,22 @@ function selectBranches(request: SuiteBuildRequest, args: string[]): string[] {
   return named;
 }
 
-// True when the runner actually executed the branch — which is what a repair
-// round is, and the only thing the caller charges the budget for.
+// What a run that actually happened hands back: the strategy that ran it, which
+// is what says how to read its report, and the report itself.
+interface BranchRun {
+  runner: string;
+  result: RunnerResult;
+}
+
+// Non-null when the runner actually executed the branch. Everything else — no
+// entry, a declared `build_error`, a stack that cannot run it — is a branch that
+// produced no result to compare against.
 async function runOneBranch(
   config: Config,
   d: RunLocalDeps,
   suiteKind: string,
   output: HostBranchOutput | undefined,
-): Promise<boolean> {
+): Promise<BranchRun | null> {
   // Nothing written for this branch yet. That is the ordinary state halfway
   // through a build, not an error — say what is missing and move to the peer.
   if (!output) {
@@ -119,12 +172,12 @@ async function runOneBranch(
       `Nothing to run: your answer has no entry for this branch yet. Write its suite under ` +
         `${branchRoot(config, suiteKind)} and add its entry to the answer, then run this again.\n`,
     );
-    return false;
+    return null;
   }
 
   if (output.build_error) {
     d.stdout.write(`Not built, by your own answer: ${output.build_error.message}\n`);
-    return false;
+    return null;
   }
 
   let runner: string;
@@ -134,13 +187,13 @@ async function runOneBranch(
     suitePath = mainPathOf(output);
   } catch (err) {
     d.stdout.write(`Cannot run this branch: ${(err as Error).message}\n`);
-    return false;
+    return null;
   }
 
   const check = d.validateStack(config.projectRoot, runner);
   if (!check.ok) {
     d.stdout.write(`Cannot run this branch: ${check.message ?? `this project does not match "${runner}".`}\n`);
-    return false;
+    return null;
   }
 
   let result: RunnerResult;
@@ -151,11 +204,11 @@ async function runOneBranch(
         : await d.runStructural(config.projectRoot, runner, suitePath);
   } catch (err) {
     d.stdout.write(`The runner could not start: ${(err as Error).message}\n`);
-    return false;
+    return null;
   }
 
   d.stdout.write(report(result));
-  return true;
+  return { runner, result };
 }
 
 // The command first, and always — including on a green run. It is the answer to

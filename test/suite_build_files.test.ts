@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -78,6 +78,24 @@ test('writes and round-trips the two-branch suite build request', () => {
   assert.equal(existsSync(requestPath(projectRoot)), true);
   assert.deepEqual(readSuiteBuildRequest(projectRoot), request);
   assert.deepEqual(request.branches.map((branch) => branch.suite_kind), ['structural', 'behavioral']);
+});
+
+// Spec 34-6, criterion 2.3, and its edge case. The request carries no `budget`
+// any more; a request an older connector wrote still carries one, and reading it
+// must not turn a stale field into a failure. There is nothing left to enforce,
+// so the field is simply not read.
+test('the request carries no run budget, and an old one carrying it still reads', () => {
+  const projectRoot = tmpProject();
+  writeSuiteBuildRequest(projectRoot, branches());
+
+  const written = JSON.parse(readFileSync(requestPath(projectRoot), 'utf8'));
+  assert.equal(written.budget, undefined);
+
+  written.budget = { workers: 4, review_rounds: 2, repair_rounds: 8 };
+  writeFileSync(requestPath(projectRoot), `${JSON.stringify(written, null, 2)}\n`);
+
+  const read = readSuiteBuildRequest(projectRoot);
+  assert.deepEqual(read.branches.map((branch) => branch.suite_kind), ['structural', 'behavioral']);
 });
 
 test('reads both branch outputs, keeping each artifact envelope', () => {

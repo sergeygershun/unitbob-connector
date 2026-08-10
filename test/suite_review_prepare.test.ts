@@ -189,10 +189,11 @@ test('suite-review-prepare warns about the forgotten files before it runs the ca
   assert.ok(warning < said.indexOf('<the candidate ran>'), 'the warning must come before the run');
 });
 
-// Spec 34-2, criterion 5. Three review rounds on a2time were expensive because
-// of the number of reviewers, not the number of rounds — 5 slices x 3 rounds =
-// 15 launches. With one reviewer, two rounds is two launches. The counter is
-// what makes the number in `budget.review_rounds` mean anything.
+// Spec 34-6, criterion 2.1. The review-round counter is gone: review is the only
+// thing in either run that caught a lost business outcome, and 34-3's "exactly
+// one reviewer" is what makes a round cheap enough not to count. What is left
+// here is that `suite-review-prepare` writes its request and says nothing about
+// ceilings at all.
 function reviewProject(): string {
   const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-review-rounds-'));
   mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
@@ -224,55 +225,16 @@ async function prepareReview(projectRoot: string): Promise<string> {
   return output;
 }
 
-test('a review round within the budget says nothing about rounds', async () => {
+test('preparing a review says nothing about rounds or ceilings, however often it runs', async () => {
   const projectRoot = reviewProject();
 
-  assert.doesNotMatch(await prepareReview(projectRoot), /last round/i);
-  assert.doesNotMatch(await prepareReview(projectRoot), /last round/i);
-});
+  for (let round = 0; round < 4; round += 1) {
+    const printed = await prepareReview(projectRoot);
+    assert.doesNotMatch(printed, /last round|budget|ceiling/i);
+    assert.match(printed, /Behavioral review request written/);
+  }
 
-// Not a refusal. A refusal here is the autobrella deadlock rebuilt on a
-// different number: the round is capped, so the branch could never publish, so
-// the work is lost again. The message says the opposite — publish what you have,
-// and record the objections as verdicts.
-test('a review round past the budget still writes the request, and says it is the last', async () => {
-  const projectRoot = reviewProject();
-  await prepareReview(projectRoot);
-  await prepareReview(projectRoot);
-
-  const third = await prepareReview(projectRoot);
-
-  assert.match(third, /last round/i);
-  assert.match(third, /publish what you have/i);
-  assert.match(third, /does_not_pass/);
   assert.equal(existsSync(reviewRequestPath(projectRoot)), true);
   const request = JSON.parse(readFileSync(reviewRequestPath(projectRoot), 'utf8'));
   assert.match(request.output_path, /behavioral_review\.json$/);
-});
-
-// The count is on disk, not in the agent's memory: the loop it bounds spans
-// separate processes, each started by a fresh `npx`.
-test('the review round count survives the process that made it', async () => {
-  const projectRoot = reviewProject();
-  await prepareReview(projectRoot);
-  await prepareReview(projectRoot);
-
-  const spent = JSON.parse(
-    readFileSync(join(projectRoot, '.unitbob', 'suite-build', 'budget-spent.json'), 'utf8'),
-  );
-  assert.equal(spent.review_rounds, 2);
-});
-
-// An old connector wrote the request; a new one is reading it. There is no
-// ceiling to enforce, so the counter has nothing to say.
-test('a request with no budget block leaves the counter silent', async () => {
-  const projectRoot = reviewProject();
-  const path = join(projectRoot, '.unitbob', 'suite-build', 'request.json');
-  const request = JSON.parse(readFileSync(path, 'utf8'));
-  delete request.budget;
-  writeFileSync(path, JSON.stringify(request));
-
-  for (let round = 0; round < 4; round += 1) {
-    assert.doesNotMatch(await prepareReview(projectRoot), /last round/i);
-  }
 });

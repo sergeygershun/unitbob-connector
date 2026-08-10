@@ -4,7 +4,6 @@ import { dirname, join, sep } from 'node:path';
 import type { Recipe, SuitePacket } from '../wire.ts';
 import type { RunnerEnvelope } from '../runner/manifest.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
-import { readBudget, RUN_BUDGET, type RunBudget } from './budget.ts';
 import { readWorkerPlan, validateWorkerPlanFiles, workerPlanDigest, workerPlanPath } from './workerPlan.ts';
 
 // The task the host reads (spec 32): the two peer assignments to build, one per
@@ -29,10 +28,6 @@ export interface SuiteBuildRequest {
   output_path: string;
   branches: SuiteBuildBranch[];
   known_defect_context: KnownDefectContext;
-  // What this run may spend (spec 34-2, criterion 5). Optional on read only:
-  // a request written by an older connector has none, and then nothing is
-  // capped. See `files/budget.ts` for where each number comes from.
-  budget?: RunBudget;
 }
 
 export type KnownDefectContext =
@@ -361,7 +356,6 @@ export function writeSuiteBuildRequest(
     output_path: outputPath(projectRoot),
     branches,
     known_defect_context: knownDefectContext,
-    budget: RUN_BUDGET,
   };
 
   const path = requestPath(projectRoot);
@@ -385,10 +379,13 @@ export function readSuiteBuildRequest(projectRoot: string): SuiteBuildRequest {
   ) {
     throw new Error(`${path} is malformed: expected project_root, output_path, and a branches array.`);
   }
+  // Spec 34-6, criterion 2.3. A request written by an older connector still
+  // carries a `budget` block; it is spread through untouched and read by nobody,
+  // which is the whole of the compatibility story — there is no ceiling left for
+  // it to name.
   return {
     ...(request as unknown as SuiteBuildRequest),
     known_defect_context: readKnownDefectContext(request.known_defect_context, path),
-    budget: readBudget(request.budget),
   };
 }
 

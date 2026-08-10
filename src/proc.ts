@@ -128,6 +128,23 @@ export const GRAPH_NOISE_PATTERNS = [
   // Type declarations — a contract for a compiler, with no runtime behaviour.
   '*.d.ts',
   '*.pyi',
+
+  // Spec 34-6, criterion 6. Unitbob's own session reports, left in the repo root
+  // by the operator, are read as source: on a2time, 2026-08-10, two of them
+  // contributed 44 and 25 nodes and pushed their community to third-largest in
+  // the whole project. The more often you run unitbob, the dirtier its map gets —
+  // a feedback loop with no floor.
+  'unitbob*.md',
+
+  // Test scaffolding and boot wiring. Factories and model specs describe the
+  // fixtures a suite builds, not a business promise a guardrail could protect;
+  // `config/initializers/` and `config/deploy/` run once at boot and at deploy.
+  // The project's own request and feature specs stay — they are evidence of what
+  // the app promises.
+  'spec/factories/',
+  'spec/models/',
+  'config/deploy/',
+  'config/initializers/',
 ];
 
 export function ensureUnitbobIgnored(projectRoot: string): void {
