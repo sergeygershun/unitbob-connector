@@ -2,6 +2,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProcess } from '../proc.ts';
 import { GUARDRAILS_DIR } from '../files/guardrails.ts';
+import { locateRunner } from './toolchain.ts';
 import { readReport, type RunnerResult } from './types.ts';
 
 export const VITEST_TIMEOUT_MS = 10 * 60 * 1000;
@@ -49,13 +50,25 @@ const PROJECT_CONFIGS = [
 export async function runVitestSuite(projectRoot: string, suitePath: string): Promise<RunnerResult> {
   const configArgs = writeMergedConfig(projectRoot, suitePath);
 
-  const command = 'npx';
-  const args = ['vitest', 'run', suitePath, ...configArgs, '--reporter=json', `--outputFile=${VITEST_RESULT_FILE}`];
+  // An installed vitest — the sidecar's, else the project's — is spawned by
+  // path. `npx` stays as the last resort it has always been: it is the only
+  // option that can conjure a runner out of nothing, which is right here at the
+  // end and wrong everywhere else (see `locateRunner`, which does not offer it).
+  const located = locateRunner(projectRoot, 'vitest');
+  const command = located?.command ?? 'npx';
+  const args = [
+    ...(located ? located.args : ['vitest']),
+    'run',
+    suitePath,
+    ...configArgs,
+    '--reporter=json',
+    `--outputFile=${VITEST_RESULT_FILE}`,
+  ];
 
   const result = await runProcess(command, args, {
     cwd: projectRoot,
     timeoutMs: VITEST_TIMEOUT_MS,
-    env: { ...process.env, UNITBOB_REPO_ROOT: projectRoot },
+    env: { ...process.env, ...located?.env, UNITBOB_REPO_ROOT: projectRoot },
   });
 
   return {

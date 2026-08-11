@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { anyStackPrecheck, validateStack, type PrecheckDeps } from '../src/runner/precheck.ts';
+import { anyStackPrecheck, runnerReadyPrecheck, validateStack, type PrecheckDeps } from '../src/runner/precheck.ts';
+import { SIDECAR_DIR } from '../src/runner/toolchain.ts';
 
 function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'unitbob-precheck-'));
@@ -155,4 +156,98 @@ test('anyStackPrecheck passes when at least one stack matches and fails when non
   const empty = anyStackPrecheck(tmpProject(), pytestPresent);
   assert.equal(empty.ok, false);
   assert.match(empty.message ?? '', /matches none of those stacks/);
+});
+
+// The bug that these three tests exist for, found on a Flask project on
+// 2026-08-11. It had a requirements.txt and no pytest installed, and the gate
+// answered "This project matches none of those stacks" — which is false: it is
+// a Python project, it simply had no runner yet. The specific, actionable
+// message was written a few lines below in `pytestPrecheck` and thrown away by
+// the caller, so the person was sent to look for a problem with their project.
+//
+// Detection now answers only "which language", and the missing runner is
+// installed under `.unitbob/` instead of being reported as a dead end. The three
+// stacks are tested together because the defect was never Python's: a Rails app
+// without rspec-rails and a package.json without vitest got the same false
+// sentence.
+test('a Python project with no pytest is still a Python project', () => {
+  const dir = tmpProject();
+  writeFileSync(join(dir, 'requirements.txt'), 'flask\n');
+
+  const check = anyStackPrecheck(dir, pytestMissing);
+  assert.equal(check.ok, true);
+  assert.equal(check.runner, 'pytest');
+});
+
+test('a Rails project with no rspec-rails is still a Rails project', () => {
+  const check = anyStackPrecheck(rubyProject("gem 'rails'\n"), pytestMissing);
+  assert.equal(check.ok, true);
+  assert.equal(check.runner, 'rspec');
+});
+
+test('a JS project with no vitest is still a JS project', () => {
+  const dir = tmpProject();
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ devDependencies: { jest: '^29.0.0' } }));
+
+  const check = anyStackPrecheck(dir, pytestMissing);
+  assert.equal(check.ok, true);
+  assert.equal(check.runner, 'vitest');
+});
+
+test('"none of those stacks" is now said only when it is true', () => {
+  const check = anyStackPrecheck(tmpProject(), pytestPresent);
+  assert.equal(check.ok, false);
+  assert.match(check.message ?? '', /matches none of those stacks/);
+});
+
+// Detection settles the language; this is the check that the runner is really
+// there, run after provisioning and before a whole generation is built on it.
+test('pytest: a sidecar interpreter satisfies the runner check', () => {
+  const dir = tmpProject();
+  writeFileSync(join(dir, 'requirements.txt'), '');
+  const venvBin = join(dir, SIDECAR_DIR, '.venv', 'bin');
+  mkdirSync(venvBin, { recursive: true });
+  writeFileSync(join(venvBin, 'python'), '', { mode: 0o755 });
+
+  // Nothing on the machine can import pytest — only the environment Unitbob
+  // built can, and the check asks it the same question it asks any other.
+  const onlyTheSidecar: PrecheckDeps = { commandSucceeds: (command) => command.startsWith(venvBin) };
+  assert.deepEqual(validateStack(dir, 'pytest', onlyTheSidecar), { ok: true });
+  assert.deepEqual(validateStack(dir, 'pytest-bdd', onlyTheSidecar), { ok: true });
+
+  // And an environment that exists but has nothing in it is not an answer: a
+  // `bin/python` with no pytest beside it used to pass this check.
+  assert.equal(validateStack(dir, 'pytest', pytestMissing).ok, false);
+});
+
+// Readiness is asked after provisioning, so it has to know about the
+// environment provisioning just built. Asking `validateStack` here refused a
+// project seconds after a working runner was installed for it — found on the
+// connector's own repository, 2026-08-12.
+test('a sidecar runner counts as ready on every stack', () => {
+  const js = tmpProject();
+  writeFileSync(join(js, 'package.json'), '{}');
+  const jsBin = join(js, SIDECAR_DIR, 'node_modules', '.bin');
+  mkdirSync(jsBin, { recursive: true });
+  writeFileSync(join(jsBin, 'vitest'), '', { mode: 0o755 });
+  assert.deepEqual(runnerReadyPrecheck(js, 'vitest', pytestMissing), { ok: true });
+  // The project itself still has no vitest — which is what `validateStack`
+  // answers, correctly, about a different question.
+  assert.equal(validateStack(js, 'vitest', pytestMissing).ok, false);
+
+  const ruby = rubyProject("gem 'rails'\n");
+  mkdirSync(join(ruby, SIDECAR_DIR), { recursive: true });
+  writeFileSync(join(ruby, SIDECAR_DIR, 'Gemfile'), 'gem "rspec-rails"\n');
+  assert.deepEqual(runnerReadyPrecheck(ruby, 'rspec', pytestMissing), { ok: true });
+});
+
+test('nothing installed anywhere is refused, naming both places we looked', () => {
+  const dir = tmpProject();
+  writeFileSync(join(dir, 'package.json'), '{}');
+
+  const check = runnerReadyPrecheck(dir, 'vitest', pytestMissing);
+  assert.equal(check.ok, false);
+  assert.match(check.message ?? '', /not installed in this project/);
+  assert.match(check.message ?? '', /could not install one for itself/);
+  assert.match(check.message ?? '', /Nothing was written/);
 });

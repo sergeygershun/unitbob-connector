@@ -1,12 +1,26 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProcess, type ProcResult } from '../proc.ts';
+import {
+  defaultToolDeps,
+  projectProvidesRunner,
+  runnerAvailable,
+  SIDECAR_DIR,
+  sidecarPath,
+  type ToolDeps,
+} from './toolchain.ts';
 
 // How long a local setup step may take before we stop waiting. Provisioning a
 // runner and loading a cold Rails test environment sit in the same ballpark —
 // tens of seconds on a large app — so `runner/bootcheck.ts` waits on this same
 // number rather than inventing a second one to keep in sync.
 export const PROVISION_TIMEOUT_MS = 120_000;
+
+// Installing an application's own dependency tree is a different order of work
+// from adding one runner gem: hundreds of packages, compiled extensions, a cold
+// package index. Two minutes is a normal figure for it, so it gets its own
+// budget instead of borrowing one sized for a single install.
+export const DEPENDENCY_INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 
 export interface ProvisionResult {
   status: 'provisioned' | 'fixable';
@@ -15,12 +29,24 @@ export interface ProvisionResult {
 }
 
 export interface ProvisionDeps {
-  runCmd: (command: string, args: string[], options: { cwd: string; env?: Record<string, string> }) => Promise<ProcResult>;
+  runCmd: (
+    command: string,
+    args: string[],
+    options: { cwd: string; env?: Record<string, string>; timeoutMs?: number },
+  ) => Promise<ProcResult>;
+  // How "can this machine run that?" is answered. Injected for the same reason
+  // `runCmd` is: a test must not pass or fail depending on whether pytest
+  // happens to be installed on the machine running it.
+  tools?: ToolDeps;
 }
 
 const defaultDeps: ProvisionDeps = {
   runCmd: (command, args, options) =>
-    runProcess(command, args, { cwd: options.cwd, timeoutMs: PROVISION_TIMEOUT_MS, env: { ...process.env, ...options.env } }),
+    runProcess(command, args, {
+      cwd: options.cwd,
+      timeoutMs: options.timeoutMs ?? PROVISION_TIMEOUT_MS,
+      env: { ...process.env, ...options.env },
+    }),
 };
 
 export async function ensureRunner(
@@ -41,6 +67,310 @@ export async function ensureRunner(
     default:
       return { status: 'fixable', message: `Unsupported BDD runner "${runner}".` };
   }
+}
+
+// Make the structural runner runnable without touching the project.
+//
+// Nothing is built when the project already supplies the runner itself: a
+// developer with a working setup should not find a second copy of their
+// toolchain appear under `.unitbob/` because they tried Unitbob once.
+//
+// When the project does not supply it, everything the runner needs is installed
+// under `.unitbob/runners/` instead — the runner and, on the two stacks where it
+// is possible, the application's own dependencies with it. The project's
+// Gemfile, requirements.txt and package.json are read and never written.
+//
+// Python and Ruby get a complete environment this way. JavaScript deliberately
+// does not: node resolves an import by walking up from the importing file, so a
+// suite sitting in `.unitbob/structural/` finds the project's `node_modules` and
+// can never be made to find a sidecar copy instead. Vitest itself is installed
+// here because we spawn that binary by path; the project's dependencies stay the
+// project's, and a missing `node_modules` comes back as a fixable notice naming
+// the one command that fixes it.
+export async function ensureStructuralRunner(
+  projectRoot: string,
+  runner: string,
+  deps: ProvisionDeps = defaultDeps,
+): Promise<ProvisionResult> {
+  const tools = deps.tools ?? defaultToolDeps;
+  if (projectProvidesRunner(projectRoot, runner, tools)) return { status: 'provisioned' };
+
+  const dir = join(projectRoot, SIDECAR_DIR);
+  mkdirSync(dir, { recursive: true });
+
+  switch (runner) {
+    case 'pytest':
+      return provisionPytest(projectRoot, deps);
+    case 'vitest':
+      return provisionVitest(projectRoot, deps);
+    case 'rspec':
+      return provisionRspec(projectRoot, deps);
+    default:
+      return { status: 'fixable', message: `Unsupported structural runner "${runner}".` };
+  }
+}
+
+// The builders we can make an environment with, in the order we try them.
+//
+// `python3 -m venv` before `uv` even though uv is faster: the standard-library
+// builder always puts pip in the environment it makes, and `uv venv`
+// deliberately does not. An environment with no pip is one nothing can be
+// installed into afterwards.
+//
+// And no `--system-site-packages`. Borrowing the machine's own packages looks
+// like a saving — the application's dependencies may already be installed
+// globally — but it makes the environment a different one on every machine,
+// which is the one thing a sidecar exists to prevent. It also lets pytest pick
+// up plugins nobody asked for: measured on a Flask app where an unrelated
+// globally-installed langsmith plugin was loaded into the run and died on a
+// pydantic/typing_extensions mismatch, so a project that imports perfectly well
+// could not be collected. This environment holds the requirements file and
+// pytest, and nothing else. Found 2026-08-12.
+const VENV_BUILDERS = [
+  { command: 'python3', args: (venvDir: string) => ['-m', 'venv', venvDir] },
+  { command: 'python', args: (venvDir: string) => ['-m', 'venv', venvDir] },
+  { command: 'uv', args: (venvDir: string) => ['venv', venvDir] },
+];
+
+// A virtual environment under `.unitbob/runners/.venv` holding pytest and, when
+// the project declares them in a requirements file, the application's own
+// packages — and deliberately nothing else. See `VENV_BUILDERS`.
+async function provisionPytest(projectRoot: string, deps: ProvisionDeps): Promise<ProvisionResult> {
+  const venvDir = sidecarPath(projectRoot, '.venv');
+  const venvPython = join(venvDir, 'bin', 'python');
+
+  // The project's own statement of what it needs. It is also the only test of
+  // whether an environment is any use: one the application's packages will not
+  // install into is the wrong environment, however well it was built.
+  const requirements = ['requirements.txt', 'requirements/base.txt', 'requirements-dev.txt']
+    .find((name) => existsSync(join(projectRoot, name)));
+
+  let created = existsSync(venvPython);
+  let failure: string | undefined;
+
+  let requirementsOk = requirements === undefined;
+
+  // An interpreter that is merely present is not an interpreter the project can
+  // run on. A machine can easily carry a Python newer than everything the
+  // project pins — measured on a Flask app whose psycopg2, greenlet and
+  // multidict have no wheels for 3.14 and do not compile against it, while the
+  // 3.11 standing beside it installs all three from wheels in seconds. So when
+  // the requirements will not go in, the environment is rebuilt with the next
+  // builder rather than handed over half-empty. Found 2026-08-12.
+  for (const [index, builder] of VENV_BUILDERS.entries()) {
+    if (!created) {
+      const result = await deps
+        .runCmd(builder.command, builder.args(venvDir), { cwd: projectRoot })
+        .catch(() => ({ code: 1, stdout: '', stderr: '' }));
+      if (result.code !== 0) continue;
+      created = true;
+    }
+
+    if (requirements === undefined) break;
+
+    const installed = await pipInstall(deps, projectRoot, venvPython, ['-r', requirements]);
+    if (installed.ok) {
+      requirementsOk = true;
+      break;
+    }
+
+    // Keep the first complaint: it comes from the interpreter the project would
+    // have been given by default, and it is the one worth reporting if no
+    // interpreter here works.
+    failure ??= installed.detail ?? '';
+
+    // Discard the environment only while there is another builder to try. The
+    // last one is kept even though the requirements did not go in: pytest still
+    // installs into it, and a suite that runs and cannot import the application
+    // says far more than no suite at all.
+    if (index === VENV_BUILDERS.length - 1) break;
+    rmSync(venvDir, { recursive: true, force: true });
+    created = false;
+  }
+
+  if (!created) {
+    return {
+      status: 'fixable',
+      message: `Failed to create a virtual environment under ${SIDECAR_DIR}/.venv.`,
+      checklist: ['Install python3-venv or uv: `python3 -m venv --help`, or `pip install uv`.'],
+    };
+  }
+
+  const notes: string[] = [];
+  if (!requirementsOk) {
+    // Not fatal on its own: pytest may still be installable, and the suite that
+    // then cannot import the application says so far more precisely than a
+    // guess made here would.
+    //
+    // The reason travels with the notice. Without it the reader is told that
+    // something did not install and has to re-run the install by hand to find
+    // out what — and the answer is usually one line ("no wheel for this
+    // Python", "pg_config not found") that decides what they do next.
+    notes.push(
+      `installing ${requirements} into ${SIDECAR_DIR}/.venv did not finish on any Python available here — ` +
+        `the suite may not be able to import the application.${failure ? ` The install said: ${failure}` : ''}`,
+    );
+  }
+
+  const pytest = await pipInstall(deps, projectRoot, venvPython, ['pytest']);
+
+  if (pytest.ok || runnerAvailable(projectRoot, 'pytest', deps.tools ?? defaultToolDeps)) {
+    return notes.length > 0 ? { status: 'provisioned', checklist: notes } : { status: 'provisioned' };
+  }
+
+  return {
+    status: 'fixable',
+    message: `Failed to install pytest into ${SIDECAR_DIR}/.venv.`,
+    checklist: [`Run \`${venvPython} -m pip install pytest\` manually to provision the runner.`, ...notes],
+  };
+}
+
+// Install into the sidecar environment, whichever tool built it.
+//
+// `python -m pip` rather than the `bin/pip` script: the script is missing from a
+// uv-built environment, and calling a path that is not there throws ENOENT,
+// which reads as "the install failed" when nothing was ever attempted. `uv pip`
+// is the second attempt for exactly that environment.
+async function pipInstall(
+  deps: ProvisionDeps,
+  projectRoot: string,
+  venvPython: string,
+  packages: string[],
+): Promise<{ ok: boolean; detail?: string }> {
+  let last: ProcResult | undefined;
+  for (const candidate of [
+    { command: venvPython, args: ['-m', 'pip', 'install', ...packages] },
+    { command: 'uv', args: ['pip', 'install', '--python', venvPython, ...packages] },
+  ]) {
+    last = await deps
+      .runCmd(candidate.command, candidate.args, { cwd: projectRoot, timeoutMs: DEPENDENCY_INSTALL_TIMEOUT_MS })
+      .catch(() => ({ code: 1, stdout: '', stderr: '' }));
+    if (last.code === 0) return { ok: true };
+  }
+  return { ok: false, detail: last ? installerComplaint(last) : undefined };
+}
+
+// The one line of an installer's output that says what went wrong. pip prints
+// hundreds of lines of compiler noise and, among the lines that do look like
+// errors, one is a verbatim dump of the compiler command — three hundred
+// characters of flags whose only readable part is the word "clang". That line
+// is dropped along with anything else too long to be a summary, which leaves
+// pip's own verdict ("Failed building wheel for psycopg2-binary").
+function installerComplaint(result: ProcResult): string | undefined {
+  const complaints = `${result.stdout}\n${result.stderr}`
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^(error|ERROR|×|note: This error|Failed to build)/.test(line))
+    .filter((line) => line.length <= 160 && !line.includes("Command '["));
+
+  return complaints[complaints.length - 1];
+}
+
+// Vitest under `.unitbob/runners/node_modules`, spawned by path. See the note on
+// `ensureStructuralRunner` for why the application's own packages are not
+// installed here.
+async function provisionVitest(projectRoot: string, deps: ProvisionDeps): Promise<ProvisionResult> {
+  writeIfChanged(
+    sidecarPath(projectRoot, 'package.json'),
+    JSON.stringify({ name: 'unitbob-structural-sidecar', private: true, devDependencies: { vitest: '^3.0.0' } }, null, 2) + '\n',
+  );
+
+  if (!runnerAvailable(projectRoot, 'vitest')) {
+    const installed = await firstSuccess(deps, projectRoot, [
+      { command: 'npm', args: ['install', '--prefix', SIDECAR_DIR] },
+      { command: 'pnpm', args: ['install', '--prefix', SIDECAR_DIR] },
+      { command: 'yarn', args: ['install', '--cwd', SIDECAR_DIR] },
+    ], DEPENDENCY_INSTALL_TIMEOUT_MS);
+
+    if (!installed && !runnerAvailable(projectRoot, 'vitest')) {
+      return {
+        status: 'fixable',
+        message: `Failed to install vitest into ${SIDECAR_DIR}.`,
+        checklist: [`Install it manually: \`npm install --prefix ${SIDECAR_DIR}\`.`],
+      };
+    }
+  }
+
+  // The suite imports the application, and on this stack that resolves through
+  // the project's own node_modules — the one thing a sidecar cannot stand in for.
+  if (existsSync(join(projectRoot, 'package.json')) && !existsSync(join(projectRoot, 'node_modules'))) {
+    return {
+      status: 'provisioned',
+      checklist: [
+        "This project's own dependencies are not installed (`node_modules` is missing), and on this stack " +
+          'they cannot be installed under `.unitbob/` — node resolves imports from the project itself. ' +
+          'Run `npm install` in the project before generating, or the suite will not be able to import it.',
+      ],
+    };
+  }
+
+  return { status: 'provisioned' };
+}
+
+// A sidecar Gemfile that inherits the project's own, plus rspec-rails. Bundler
+// resolves the two together, so the application's gems come with it — the same
+// arrangement the Cucumber sidecar has used since spec 32-1, and the reason the
+// project's Gemfile is read rather than edited.
+async function provisionRspec(projectRoot: string, deps: ProvisionDeps): Promise<ProvisionResult> {
+  const sidecarGemfile = sidecarPath(projectRoot, 'Gemfile');
+  writeIfChanged(
+    sidecarGemfile,
+    '# Sidecar Gemfile written by the unitbob connector — do not edit.\n' +
+      'eval_gemfile File.expand_path("../../../Gemfile", __FILE__)\n' +
+      'gem "rspec-rails", require: false\n',
+  );
+
+  // Start from the project's own resolution for the reason spelled out on the
+  // Cucumber sidecar below: without it bundler re-resolves the whole graph and
+  // hands the sidecar versions the project does not run.
+  copyLockIfPresent(projectRoot, sidecarPath(projectRoot, 'Gemfile.lock'));
+
+  const localBundle = join(projectRoot, 'bin', 'bundle');
+  const command = existsSync(localBundle) ? localBundle : 'bundle';
+  const result = await deps
+    .runCmd(command, ['install'], {
+      cwd: projectRoot,
+      env: { BUNDLE_GEMFILE: `${SIDECAR_DIR}/Gemfile` },
+      timeoutMs: DEPENDENCY_INSTALL_TIMEOUT_MS,
+    })
+    .catch((err) => ({ code: 1, stdout: '', stderr: String(err) }));
+
+  if (result.code === 0) return { status: 'provisioned' };
+
+  return {
+    status: 'fixable',
+    message: `Bundler failed to provision rspec-rails under ${SIDECAR_DIR}.`,
+    checklist: [
+      'Ensure bundler is installed (`gem install bundler`), then run ' +
+        `\`BUNDLE_GEMFILE=${SIDECAR_DIR}/Gemfile bundle install\` from the project root.`,
+    ],
+  };
+}
+
+// Run each candidate until one exits zero. Used for the "uv, else venv" and
+// "npm, else pnpm, else yarn" ladders, which are the same shape.
+async function firstSuccess(
+  deps: ProvisionDeps,
+  cwd: string,
+  candidates: { command: string; args: string[] }[],
+  timeoutMs?: number,
+): Promise<boolean> {
+  for (const candidate of candidates) {
+    const result = await deps
+      .runCmd(candidate.command, candidate.args, { cwd, timeoutMs })
+      .catch(() => ({ code: 1, stdout: '', stderr: '' }));
+    if (result.code === 0) return true;
+  }
+  return false;
+}
+
+function writeIfChanged(path: string, content: string): void {
+  if (!existsSync(path) || readFileSync(path, 'utf8') !== content) writeFileSync(path, content);
+}
+
+function copyLockIfPresent(projectRoot: string, destination: string): void {
+  const projectLock = join(projectRoot, 'Gemfile.lock');
+  if (existsSync(projectLock)) writeFileSync(destination, readFileSync(projectLock, 'utf8'));
 }
 
 async function provisionRuby(

@@ -1,6 +1,14 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  defaultToolDeps,
+  hasGemfileWith,
+  locateRunner,
+  projectProvidesRunner,
+  runnerAvailable,
+  SIDECAR_DIR,
+  type ToolDeps,
+} from './toolchain.ts';
 
 // Stack prechecks (spec 26, relaxed in spec 29, multi-language in spec 30).
 // The host LLM chooses one primary stack during guardrail generation; the
@@ -19,14 +27,11 @@ export interface PrecheckResult {
 }
 
 // The one seam that shells out (pytest availability). Injected so tests stay
-// deterministic regardless of what Python is installed on the machine.
-export interface PrecheckDeps {
-  commandSucceeds: (command: string, args: string[], cwd: string) => boolean;
-}
+// deterministic regardless of what Python is installed on the machine. The
+// definition itself now lives in `toolchain.ts`, with the code that spawns.
+export type PrecheckDeps = ToolDeps;
 
-const defaultDeps: PrecheckDeps = {
-  commandSucceeds: (command, args, cwd) => spawnSync(command, args, { cwd, timeout: 10_000 }).status === 0,
-};
+const defaultDeps: PrecheckDeps = defaultToolDeps;
 
 const STACKS = 'Ruby on Rails + RSpec, JavaScript/TypeScript + Vitest, or Python + pytest';
 
@@ -34,11 +39,34 @@ const STACKS = 'Ruby on Rails + RSpec, JavaScript/TypeScript + Vitest, or Python
 // resolves to the same runner on every run.
 const STRUCTURAL_RUNNERS = ['rspec', 'vitest', 'pytest'];
 
+// The file that says "this project is written in this language". Nothing here
+// asks whether the runner is installed — that is a separate question with a
+// separate answer, and merging the two is what made this gate lie.
+//
+// A project whose language is obvious but whose runner is missing used to fail
+// detection, and the caller then reported the only thing it had left: "this
+// project matches none of those stacks". That sentence was false — the project
+// was Python, it simply had no pytest — and it sent people to look for a problem
+// with their project instead of at the one command that fixes it. The runner is
+// now provisioned under `.unitbob/` (see `ensureStructuralRunner`), so the
+// question this gate answers is the one it can answer honestly: which language.
+const PYTHON_MARKERS = ['pyproject.toml', 'requirements.txt', 'Pipfile'];
+
+function looksLikePython(projectRoot: string): boolean {
+  return PYTHON_MARKERS.some((name) => existsSync(join(projectRoot, name)));
+}
+
+const STACK_MARKERS: Record<string, (projectRoot: string) => boolean> = {
+  rspec: (projectRoot) => hasGemfileWith(projectRoot, /\brails\b/),
+  vitest: (projectRoot) => existsSync(join(projectRoot, 'package.json')),
+  pytest: looksLikePython,
+};
+
 // Which structural runner this project's markers select, or null when none do.
 // The gate below walks the same list: "is any stack present" and "which one is
 // it" must never be able to disagree.
-export function detectStructuralRunner(projectRoot: string, deps: PrecheckDeps = defaultDeps): string | null {
-  return STRUCTURAL_RUNNERS.find((runner) => validateStack(projectRoot, runner, deps).ok) ?? null;
+export function detectStructuralRunner(projectRoot: string, _deps: PrecheckDeps = defaultDeps): string | null {
+  return STRUCTURAL_RUNNERS.find((runner) => STACK_MARKERS[runner]?.(projectRoot)) ?? null;
 }
 
 // The BDD runner for a structural stack. One project, one language: the
@@ -62,7 +90,10 @@ export function detectBddRunner(projectRoot: string, deps: PrecheckDeps = defaul
   return structural ? BDD_RUNNER_FOR_STACK[structural] ?? null : null;
 }
 
-// The generation-time gate: at least one supported stack must be present.
+// The generation-time gate: at least one supported stack must be present. It
+// says nothing about whether the runner is installed, because by the time that
+// matters the runner has been provisioned; `runnerReadyPrecheck` is the check
+// for that, and it runs straight after provisioning.
 export function anyStackPrecheck(projectRoot: string, deps: PrecheckDeps = defaultDeps): PrecheckResult {
   const runner = detectStructuralRunner(projectRoot, deps);
   if (runner !== null) return { ok: true, runner };
@@ -70,6 +101,41 @@ export function anyStackPrecheck(projectRoot: string, deps: PrecheckDeps = defau
   return {
     ok: false,
     message: `Unitbob guardrails support ${STACKS} only. This project matches none of those stacks.`,
+  };
+}
+
+// Is the runner startable now, after provisioning has had its turn?
+//
+// Not the same question as `validateStack`, and the difference is the sidecar.
+// `validateStack` asks whether the *project* is set up for a stack — the right
+// question when a host has chosen one and nothing has been installed yet. This
+// asks whether anything on this machine can start the runner, which includes
+// the environment Unitbob just built under `.unitbob/`.
+//
+// Asking the first question in the second's place refuses a project we have
+// only just finished preparing: a JS project with no vitest of its own was
+// told to `npm i -D vitest` seconds after a working vitest was installed for
+// it. Found on the connector's own repository, 2026-08-12.
+export function runnerReadyPrecheck(
+  projectRoot: string,
+  runner: string,
+  deps: PrecheckDeps = defaultDeps,
+): PrecheckResult {
+  // Ruby is the one stack whose lookup can never come back empty — `bundle exec
+  // rspec` is always a command one could type — so readiness is the gem being
+  // resolvable, from the sidecar Gemfile or from the project's own.
+  const ready =
+    runner === 'rspec'
+      ? locateRunner(projectRoot, 'rspec')?.source === 'sidecar' || projectProvidesRunner(projectRoot, 'rspec', deps)
+      : runnerAvailable(projectRoot, runner, deps);
+
+  if (ready) return { ok: true };
+
+  return {
+    ok: false,
+    message:
+      `The ${runner} runner is not available: it is not installed in this project, and Unitbob could ` +
+      `not install one for itself under ${SIDECAR_DIR}/. Nothing was written and nothing was uploaded.`,
   };
 }
 
@@ -134,20 +200,16 @@ function jsBehavioralPrecheck(projectRoot: string): PrecheckResult {
 // and message shape as the structural pytest precheck; pytest-bdd itself, if
 // missing, surfaces as a suite error from the run.
 function pythonBehavioralPrecheck(projectRoot: string, deps: PrecheckDeps): PrecheckResult {
-  const markers = ['pyproject.toml', 'requirements.txt', 'Pipfile'];
-  if (!markers.some((name) => existsSync(join(projectRoot, name)))) {
+  if (!looksLikePython(projectRoot)) {
     return {
       ok: false,
       message:
         'The behavioral (Gherkin) suite selected the Python stack, but this project has none of ' +
-        `${markers.join(', ')} — it does not look like a Python project.`,
+        `${PYTHON_MARKERS.join(', ')} — it does not look like a Python project.`,
     };
   }
 
-  const available = ['python3', 'python'].some((python) =>
-    deps.commandSucceeds(python, ['-m', 'pytest', '--version'], projectRoot),
-  );
-  if (!available) {
+  if (!runnerAvailable(projectRoot, 'pytest', deps)) {
     return {
       ok: false,
       message:
@@ -207,25 +269,21 @@ function vitestPrecheck(projectRoot: string): PrecheckResult {
 }
 
 function pytestPrecheck(projectRoot: string, deps: PrecheckDeps): PrecheckResult {
-  const markers = ['pyproject.toml', 'requirements.txt', 'Pipfile'];
-  const found = markers.some((name) => existsSync(join(projectRoot, name)));
-  if (!found) {
+  if (!looksLikePython(projectRoot)) {
     return {
       ok: false,
       message:
         'The Python stack was selected, but this project has none of ' +
-        `${markers.join(', ')} — it does not look like a Python project.`,
+        `${PYTHON_MARKERS.join(', ')} — it does not look like a Python project.`,
     };
   }
   // Spec 30 fails closed on runner availability: unlike marker files, pytest
-  // must actually be importable in the current interpreter, or every run would
-  // end as a "No module named pytest" suite error after files were written. We
-  // probe the same interpreters the pytest runner tries, in the same order, so
-  // the precheck and the run agree on whether pytest is runnable.
-  const available = ['python3', 'python'].some((python) =>
-    deps.commandSucceeds(python, ['-m', 'pytest', '--version'], projectRoot),
-  );
-  if (!available) {
+  // must actually be importable, or every run would end as a "No module named
+  // pytest" suite error after files were written. `runnerAvailable` asks the
+  // same question the run asks, of the same environments in the same order —
+  // the sidecar under `.unitbob/` first, then the machine's own interpreters —
+  // so the check and the run can never disagree about what is runnable.
+  if (!runnerAvailable(projectRoot, 'pytest', deps)) {
     return {
       ok: false,
       message:
@@ -236,12 +294,4 @@ function pytestPrecheck(projectRoot: string, deps: PrecheckDeps): PrecheckResult
     };
   }
   return { ok: true };
-}
-
-function hasGemfileWith(projectRoot: string, pattern: RegExp): boolean {
-  for (const name of ['Gemfile', 'gems.rb']) {
-    const path = join(projectRoot, name);
-    if (existsSync(path) && pattern.test(readFileSync(path, 'utf8'))) return true;
-  }
-  return false;
 }

@@ -26,8 +26,19 @@ const okRunner = async () => ({ status: 'provisioned' as const });
 const okWorld = async () => ({ status: 'ok' as const });
 
 type SuitePrepareDeps = NonNullable<Parameters<typeof runSuitePrepare>[2]>;
+// Provisioning the structural runner and confirming it are stubbed for the same
+// reason the boot check is: these tests are about what suite-prepare does once
+// the stack is runnable. `provision.test.ts` and `precheck.test.ts` own the two
+// steps themselves, and the tests at the end of this file own what suite-prepare
+// does when either of them says no.
+const okConfirm = () => ({ ok: true });
 const suitePrepare = (cfg: Config, args: string[], deps?: Partial<SuitePrepareDeps>) =>
-  runSuitePrepare(cfg, args, { worldProbe: okWorld, ...deps });
+  runSuitePrepare(cfg, args, {
+    worldProbe: okWorld,
+    ensureStructuralRunner: okRunner,
+    confirmRunner: okConfirm,
+    ...deps,
+  });
 
 // Spec 32-6: suite-prepare now loads the file the suite starts from before it
 // fetches or writes anything. These tests are about everything that happens
@@ -539,7 +550,11 @@ test('an environment that is not ready stops with the install named, not perform
     }),
     (err: Error) => {
       assert.match(err.message, /environment is not ready/);
-      assert.match(err.message, /does not install your project's own dependencies/);
+      // The runner and the project's declared dependencies are installed under
+      // `.unitbob/runners/`, so the wording no longer claims we install nothing.
+      // What is left for the reader is whatever their declaration does not cover.
+      assert.match(err.message, /installs the runner.*into `\.unitbob\/runners\/`/);
+      assert.match(err.message, /never writes to your project/);
       assert.match(err.message, /bundle install/);
       return true;
     },
@@ -689,4 +704,56 @@ test('suite-prepare forgets the failures the previous build ended on', async () 
   });
 
   assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'run-state.json')), false);
+});
+
+// The runner is installed before anything is fetched or written, so a vibecoder
+// who has never installed one is not turned away. These two tests pin the ends
+// of that: nothing is generated on a machine where it could not be installed,
+// and what could not be installed for them is said plainly when it can.
+test('suite-prepare stops when the structural runner cannot be installed, and writes nothing', async () => {
+  const projectRoot = tmpProject();
+  let fetched = false;
+
+  await assert.rejects(
+    () =>
+      suitePrepare(config(projectRoot), ['--no-known-defect'], {
+        precheck: okPrecheck,
+        ensureStructuralRunner: async () => ({
+          status: 'fixable' as const,
+          message: 'Failed to create a virtual environment under .unitbob/runners/.venv.',
+          checklist: ['Install python3-venv or uv.'],
+        }),
+        getRecipe: async () => { fetched = true; return { name: 'generate', version: 'v1', text: 'recipe' }; },
+        getSuitePacketsBatch: async () => { fetched = true; return packets(); },
+        stdout: { write: () => true },
+      }),
+    // The cause, the consequence, and the one command that clears it.
+    /virtual environment.*Install python3-venv or uv.*Nothing was written/s,
+  );
+
+  assert.equal(fetched, false);
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'request.json')), false);
+});
+
+test('suite-prepare passes on what provisioning could not do for them', async () => {
+  const projectRoot = tmpProject();
+  let printed = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    ensureStructuralRunner: async () => ({
+      status: 'provisioned' as const,
+      checklist: ['Run `npm install` in the project before generating.'],
+    }),
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => (printed += chunk) },
+  });
+
+  assert.match(printed, /Run `npm install` in the project before generating\./);
+  // A note, not a refusal: the request is still written and the build goes on.
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'request.json')), true);
 });

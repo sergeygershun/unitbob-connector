@@ -1,6 +1,7 @@
 import { join } from 'node:path';
-import { executable, runProcess, type ProcResult } from '../proc.ts';
+import { runProcess, type ProcResult } from '../proc.ts';
 import { GUARDRAILS_DIR, OPTIONS_FILE } from '../files/guardrails.ts';
+import { locateRunner } from './toolchain.ts';
 import { readReport, type RunnerResult } from './types.ts';
 
 export const RSPEC_TIMEOUT_MS = 10 * 60 * 1000;
@@ -44,22 +45,23 @@ export async function runRspecSuite(projectRoot: string, suitePath: string): Pro
   };
 }
 
-// Prefer the project's own `bin/rspec`; fall back to `bundle exec rspec`. Every
+// Which rspec — the sidecar Unitbob installed, the project's own `bin/rspec`
+// binstub, or `bundle exec rspec` — is decided once, in `locateRunner`, so this
+// run and the checks that predicted it always mean the same installation. Every
 // run sets RAILS_ENV=test so guardrails execute against the Rails test
 // environment the project's `rails_helper` configures.
 async function invokeRspec(
   projectRoot: string,
   rspecArgs: string[],
 ): Promise<{ result: ProcResult; command: string; args: string[] }> {
-  const localRspec = join(projectRoot, 'bin', 'rspec');
-  const hasLocalRspec = executable(localRspec);
-  const command = hasLocalRspec ? localRspec : 'bundle';
-  const args = hasLocalRspec ? rspecArgs : ['exec', 'rspec', ...rspecArgs];
+  const located = locateRunner(projectRoot, 'rspec');
+  const command = located?.command ?? 'bundle';
+  const args = [...(located?.args ?? ['exec', 'rspec']), ...rspecArgs];
 
   const result = await runProcess(command, args, {
     cwd: projectRoot,
     timeoutMs: RSPEC_TIMEOUT_MS,
-    env: { ...process.env, RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
+    env: { ...process.env, ...located?.env, RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
   });
 
   return { result, command, args };

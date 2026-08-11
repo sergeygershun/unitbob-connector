@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { executable, runProcess, type ProcResult } from '../proc.ts';
+import { locateRunner } from './toolchain.ts';
 import { GUARDRAILS_DIR, HELPER_FILE } from '../files/guardrails.ts';
 import { PYTEST_INI, PYTEST_INI_FILE } from './pytest.ts';
 import { PROVISION_TIMEOUT_MS } from './provision.ts';
@@ -152,12 +153,18 @@ async function loadRubyHelper(
   const localBundle = join(projectRoot, 'bin', 'bundle');
   const command = executable(localBundle) ? localBundle : 'bundle';
 
+  // When Unitbob installed rspec-rails for itself, the gems this helper needs
+  // are resolved by the sidecar Gemfile, not the project's. Asking bundler
+  // without that variable would load a different set of gems than the run does,
+  // which is exactly the way a check ends up predicting the wrong thing.
+  const located = locateRunner(projectRoot, 'rspec');
+
   return classify(
     projectRoot,
     'rspec',
     await attempt(deps, command, ['exec', 'ruby', '-e', `require ${JSON.stringify(helper)}`], {
       cwd: projectRoot,
-      env: { RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
+      env: { ...located?.env, RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
     }),
     // A clean load says nothing on stdout and exits 0. Anything else is the
     // suite failing to start.
@@ -182,10 +189,31 @@ async function pytestBootCheck(projectRoot: string, deps: BootCheckDeps): Promis
   mkdirSync(join(projectRoot, dirname(PYTEST_INI_FILE)), { recursive: true });
   writeFileSync(join(projectRoot, PYTEST_INI_FILE), PYTEST_INI);
 
-  for (const python of ['python3', 'python']) {
-    const result = await attempt(deps, python, ['-m', 'pytest', '-c', PYTEST_INI_FILE, '--collect-only', '-q'], {
-      cwd: projectRoot,
-    });
+  // The same pytest the run will use, resolved once in `locateRunner` — the
+  // sidecar under `.unitbob/` when Unitbob installed one, else the machine's own
+  // interpreter. Asking a different interpreter than the run uses is how a check
+  // ends up answering about something nobody is going to execute.
+  //
+  // When it resolves nothing we still try the two interpreters by name rather
+  // than reporting `no_runner` from a lookup. The lookup is a prediction; the
+  // spawn is the fact, and a check that stops at its own prediction can be
+  // wrong in the one direction that costs the most — refusing a project that
+  // would have answered perfectly well.
+  const located = locateRunner(projectRoot, 'pytest');
+  const candidates = located
+    ? [located]
+    : [
+        { command: 'python3', args: ['-m', 'pytest'], env: undefined },
+        { command: 'python', args: ['-m', 'pytest'], env: undefined },
+      ];
+
+  for (const candidate of candidates) {
+    const result = await attempt(
+      deps,
+      candidate.command,
+      [...candidate.args, '-c', PYTEST_INI_FILE, '--collect-only', '-q'],
+      { cwd: projectRoot, env: candidate.env },
+    );
     if (result === null) continue; // this interpreter is not on the machine
 
     return classify(projectRoot, 'pytest', result, (proc) => pytestVerdict(proc.code));
@@ -219,7 +247,10 @@ function pytestVerdict(code: number | null): Verdict {
 // turn away the majority. A file that is genuinely unparseable is caught here
 // anyway, since `vitest list` has to parse it.
 async function vitestBootCheck(projectRoot: string, deps: BootCheckDeps): Promise<BootCheck> {
-  const local = join(projectRoot, 'node_modules', '.bin', 'vitest');
+  // A sidecar vitest counts as installed: it is ours, it is on disk, and it is
+  // the one the run will spawn. What stays out is `npx`, for the reason below.
+  const local = locateRunner(projectRoot, 'vitest')?.command
+    ?? join(projectRoot, 'node_modules', '.bin', 'vitest');
   // Only a vitest already installed in the project is used. Reaching for `npx`
   // would install a package to answer a question, and installing into the
   // user's project is not this check's business.

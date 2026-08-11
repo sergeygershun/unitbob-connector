@@ -9,9 +9,9 @@ import {
   type SuiteBuildBranch,
 } from '../files/suiteBuild.ts';
 import { bootCheck, SIGNAL_STRENGTH, type BootCheck } from '../runner/bootcheck.ts';
-import { anyStackPrecheck, detectBddRunner, detectStructuralRunner } from '../runner/precheck.ts';
+import { anyStackPrecheck, detectBddRunner, detectStructuralRunner, runnerReadyPrecheck } from '../runner/precheck.ts';
 import { selectRunnerEnvelope, withInstalledRunnerVersion, type RunnerEnvelope } from '../runner/manifest.ts';
-import { ensureRunner, type ProvisionResult } from '../runner/provision.ts';
+import { ensureRunner, ensureStructuralRunner, type ProvisionResult } from '../runner/provision.ts';
 import { probeBehavioralWorld, type WorldProbeResult } from '../runner/worldProbe.ts';
 import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
 
@@ -19,8 +19,10 @@ interface SuitePrepareDeps {
   getRecipe: (name: string) => Promise<Recipe>;
   getSuitePacketsBatch: () => Promise<SuitePacket[]>;
   precheck: (projectRoot: string) => { ok: boolean; message?: string; runner?: string };
+  confirmRunner: (projectRoot: string, runner: string) => { ok: boolean; message?: string };
   bootCheck: (projectRoot: string, runner: string | null) => Promise<BootCheck>;
   ensureRunner: (projectRoot: string, runner: string) => Promise<ProvisionResult>;
+  ensureStructuralRunner: (projectRoot: string, runner: string) => Promise<ProvisionResult>;
   worldProbe: (projectRoot: string) => Promise<WorldProbeResult>;
   runnerEnvelope: (packet: SuitePacket, runner: string | undefined, projectRoot: string) => RunnerEnvelope | null;
   stdout: { write: (chunk: string) => unknown };
@@ -84,8 +86,10 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     getRecipe: (name) => wire.getRecipe(name),
     getSuitePacketsBatch: () => wire.getSuitePacketsBatch(),
     precheck: anyStackPrecheck,
+    confirmRunner: (projectRoot, runner) => runnerReadyPrecheck(projectRoot, runner),
     bootCheck: (projectRoot, runner) => bootCheck(projectRoot, runner),
     ensureRunner: deps?.ensureRunner ?? ensureRunner,
+    ensureStructuralRunner: deps?.ensureStructuralRunner ?? ensureStructuralRunner,
     worldProbe: deps?.worldProbe ?? probeBehavioralWorld,
     runnerEnvelope: runnerEnvelopeFor,
     stdout: process.stdout,
@@ -96,6 +100,33 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   if (!check.ok) throw new Error(check.message ?? 'Unsupported runtime.');
 
   materializeHelper(config.projectRoot);
+
+  // The stack is known; now make it runnable. A vibecoder who has never
+  // installed a test runner is the ordinary customer, not an edge case, so the
+  // runner (and, where the language allows it, the application's own
+  // dependencies) is installed under `.unitbob/` rather than reported as a
+  // reason they cannot use the product. Nothing in their project is written to.
+  //
+  // A project that already has its runner is left completely alone — see
+  // `ensureStructuralRunner` — so this costs nothing on a set-up machine.
+  const setupNotices: string[] = [];
+  if (check.runner) {
+    const provisioned = await actual.ensureStructuralRunner(config.projectRoot, check.runner);
+    if (provisioned.status === 'fixable') {
+      const steps = provisioned.checklist?.length ? `\n  - ${provisioned.checklist.join('\n  - ')}` : '';
+      throw new Error(
+        `The ${check.runner} runner could not be installed under .unitbob/, and nothing can run without it: ` +
+          `${provisioned.message ?? 'provisioning failed'}${steps}\nNothing was written and nothing was uploaded.`,
+      );
+    }
+    setupNotices.push(...(provisioned.checklist ?? []));
+
+    // Confirm rather than assume. Provisioning reporting success and the runner
+    // actually being startable are two different facts, and this is the cheap
+    // one to check before a whole generation is built on it.
+    const ready = actual.confirmRunner(config.projectRoot, check.runner);
+    if (!ready.ok) throw new Error(ready.message ?? `The ${check.runner} runner is not available.`);
+  }
 
   // Spec 32-6. Before anything is fetched or written, find out whether the suite
   // would get off the ground at all. It runs here, after the boot helper exists
@@ -209,6 +240,12 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
 
   // A fixable runner blocker is not a failure: the structural suite still builds this run. Tell the
   // vibecoder the one command that unblocks the behavioral peer, then re-run suite-prepare.
+  if (setupNotices.length > 0) {
+    actual.stdout.write(
+      '\nOne setup step is worth knowing about before you generate:\n  - ' + setupNotices.join('\n  - ') + '\n',
+    );
+  }
+
   if (fixableNotices.length > 0) {
     actual.stdout.write(
       '\nBehavioral suite skipped this run — its runner or connector-owned World profile is not ready. ' +
@@ -275,9 +312,10 @@ function bootFinding(boot: BootCheck, runner: string | null): string {
   const next =
     boot.cause === 'defect_in_code'
       ? 'Fix that, then run `unitbob suite-prepare` again.'
-      : "Unitbob does not install your project's own dependencies — that would rewrite your Gemfile.lock " +
-        'or package-lock.json. Run the install your project needs (`bundle install`, `npm install`, ' +
-        '`pip install -r requirements.txt`), then run `unitbob suite-prepare` again.';
+      : 'Unitbob installs the runner, and your declared dependencies with it, into `.unitbob/runners/` — ' +
+        'it never writes to your project. Something outside that file is still missing here. Run the ' +
+        'install your project needs (`bundle install`, `npm install`, `pip install -r requirements.txt`), ' +
+        'then run `unitbob suite-prepare` again.';
 
   return (
     `${headline}\n\n` +
