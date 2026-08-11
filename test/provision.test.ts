@@ -347,3 +347,25 @@ test('when no Python here can take the requirements, the last environment is kep
   assert.match(result.checklist?.join('\n') ?? '', /did not finish on any Python available here/);
   assert.match(result.checklist?.join('\n') ?? '', /psycopg2-binary/);
 });
+
+// The behavioral suite drives the application, so its environment needs the
+// application in it — the same requirement as the structural peer, and since
+// 2026-08-12 the same code. It used to be built with `--system-site-packages`
+// and given nothing but pytest-bdd, so on a machine without the project's
+// packages every scenario failed on `No module named flask` in an environment
+// Unitbob had just built.
+test('the behavioral Python sidecar installs the application, not just the BDD runner', async () => {
+  const projectRoot = tmpProject();
+  const deps = recorder();
+
+  const result = await ensureRunner(projectRoot, 'pytest-bdd', deps);
+
+  assert.equal(result.status, 'provisioned');
+  const venvPython = join(projectRoot, '.unitbob', 'behavioral', '.venv', 'bin', 'python');
+  assert.ok(
+    deps.calls.includes(`${venvPython} -m pip install -r requirements.txt`),
+    `expected the application's own packages to be installed, got:\n${deps.calls.join('\n')}`,
+  );
+  assert.ok(deps.calls.includes(`${venvPython} -m pip install pytest-bdd`));
+  assert.ok(!deps.calls.some((call) => call.includes('system-site-packages')), 'the environment stays hermetic');
+});

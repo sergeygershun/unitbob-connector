@@ -139,6 +139,48 @@ async function provisionPytest(projectRoot: string, deps: ProvisionDeps): Promis
   const venvDir = sidecarPath(projectRoot, '.venv');
   const venvPython = join(venvDir, 'bin', 'python');
 
+  const built = await buildPythonEnvironment(projectRoot, venvDir, deps);
+  if (!built.created) {
+    return {
+      status: 'fixable',
+      message: `Failed to create a virtual environment under ${SIDECAR_DIR}/.venv.`,
+      checklist: ['Install python3-venv or uv: `python3 -m venv --help`, or `pip install uv`.'],
+    };
+  }
+
+  const pytest = await pipInstall(deps, projectRoot, venvPython, ['pytest']);
+  const notes = built.requirementsNote ? [built.requirementsNote] : [];
+
+  if (pytest.ok || runnerAvailable(projectRoot, 'pytest', deps.tools ?? defaultToolDeps)) {
+    return notes.length > 0 ? { status: 'provisioned', checklist: notes } : { status: 'provisioned' };
+  }
+
+  return {
+    status: 'fixable',
+    message: `Failed to install pytest into ${SIDECAR_DIR}/.venv.`,
+    checklist: [`Run \`${venvPython} -m pip install pytest\` manually to provision the runner.`, ...notes],
+  };
+}
+
+// Build a Python environment holding the application's declared dependencies,
+// and say so honestly when they would not go in. Both branches call it: the
+// structural suite imports the application and the behavioral suite drives it,
+// so neither is any use in an environment the application is not installed in.
+//
+// An interpreter that is merely present is not one the project can run on. A
+// machine can easily carry a Python newer than everything the project pins —
+// measured on a Flask app whose psycopg2, greenlet and multidict have no wheels
+// for 3.14 and do not compile against it, while the 3.11 standing beside it
+// installs all three from wheels in seconds. So when the requirements will not
+// go in, the environment is rebuilt with the next builder rather than handed
+// over half-empty. Found 2026-08-12.
+async function buildPythonEnvironment(
+  projectRoot: string,
+  venvDir: string,
+  deps: ProvisionDeps,
+): Promise<{ created: boolean; requirementsNote?: string }> {
+  const venvPython = join(venvDir, 'bin', 'python');
+
   // The project's own statement of what it needs. It is also the only test of
   // whether an environment is any use: one the application's packages will not
   // install into is the wrong environment, however well it was built.
@@ -146,17 +188,9 @@ async function provisionPytest(projectRoot: string, deps: ProvisionDeps): Promis
     .find((name) => existsSync(join(projectRoot, name)));
 
   let created = existsSync(venvPython);
+  let requirementsOk = requirements === undefined;
   let failure: string | undefined;
 
-  let requirementsOk = requirements === undefined;
-
-  // An interpreter that is merely present is not an interpreter the project can
-  // run on. A machine can easily carry a Python newer than everything the
-  // project pins — measured on a Flask app whose psycopg2, greenlet and
-  // multidict have no wheels for 3.14 and do not compile against it, while the
-  // 3.11 standing beside it installs all three from wheels in seconds. So when
-  // the requirements will not go in, the environment is rebuilt with the next
-  // builder rather than handed over half-empty. Found 2026-08-12.
   for (const [index, builder] of VENV_BUILDERS.entries()) {
     if (!created) {
       const result = await deps
@@ -180,48 +214,26 @@ async function provisionPytest(projectRoot: string, deps: ProvisionDeps): Promis
     failure ??= installed.detail ?? '';
 
     // Discard the environment only while there is another builder to try. The
-    // last one is kept even though the requirements did not go in: pytest still
-    // installs into it, and a suite that runs and cannot import the application
-    // says far more than no suite at all.
+    // last one is kept even though the requirements did not go in: the runner
+    // still installs into it, and a suite that runs and cannot import the
+    // application says far more than no suite at all.
     if (index === VENV_BUILDERS.length - 1) break;
     rmSync(venvDir, { recursive: true, force: true });
     created = false;
   }
 
-  if (!created) {
-    return {
-      status: 'fixable',
-      message: `Failed to create a virtual environment under ${SIDECAR_DIR}/.venv.`,
-      checklist: ['Install python3-venv or uv: `python3 -m venv --help`, or `pip install uv`.'],
-    };
-  }
+  if (!created || requirementsOk) return { created };
 
-  const notes: string[] = [];
-  if (!requirementsOk) {
-    // Not fatal on its own: pytest may still be installable, and the suite that
-    // then cannot import the application says so far more precisely than a
-    // guess made here would.
-    //
-    // The reason travels with the notice. Without it the reader is told that
-    // something did not install and has to re-run the install by hand to find
-    // out what — and the answer is usually one line ("no wheel for this
-    // Python", "pg_config not found") that decides what they do next.
-    notes.push(
-      `installing ${requirements} into ${SIDECAR_DIR}/.venv did not finish on any Python available here — ` +
-        `the suite may not be able to import the application.${failure ? ` The install said: ${failure}` : ''}`,
-    );
-  }
-
-  const pytest = await pipInstall(deps, projectRoot, venvPython, ['pytest']);
-
-  if (pytest.ok || runnerAvailable(projectRoot, 'pytest', deps.tools ?? defaultToolDeps)) {
-    return notes.length > 0 ? { status: 'provisioned', checklist: notes } : { status: 'provisioned' };
-  }
-
+  // The reason travels with the notice. Without it the reader is told that
+  // something did not install and has to re-run the install by hand to find out
+  // what — and the answer is usually one line ("no wheel for this Python",
+  // "pg_config not found") that decides what they do next.
   return {
-    status: 'fixable',
-    message: `Failed to install pytest into ${SIDECAR_DIR}/.venv.`,
-    checklist: [`Run \`${venvPython} -m pip install pytest\` manually to provision the runner.`, ...notes],
+    created,
+    requirementsNote:
+      `installing ${requirements} into ${relativeVenv(projectRoot, venvDir)} did not finish on any Python ` +
+      `available here — the suite may not be able to import the application.` +
+      (failure ? ` The install said: ${failure}` : ''),
   };
 }
 
@@ -437,43 +449,40 @@ async function provisionPython(
   deps: ProvisionDeps,
 ): Promise<ProvisionResult> {
   const venvDir = join(behavioralDir, '.venv');
-  const venvPip = join(venvDir, 'bin', 'pip');
+  const venvPython = join(venvDir, 'bin', 'python');
   const venvPytest = join(venvDir, 'bin', 'pytest');
 
-  if (existsSync(venvPytest)) {
-    return { status: 'provisioned' };
-  }
-
-  // Ladder: uv -> python3 -m venv --system-site-packages
-  const uvResult = await deps.runCmd('uv', ['venv', venvDir, '--system-site-packages'], { cwd: projectRoot }).catch(() => ({ code: 1 }));
-  let venvCreated = uvResult.code === 0;
-
-  if (!venvCreated) {
-    const venvResult = await deps
-      .runCmd('python3', ['-m', 'venv', '--system-site-packages', venvDir], { cwd: projectRoot })
-      .catch(() => ({ code: 1 }));
-    venvCreated = venvResult.code === 0;
-  }
-
-  if (!venvCreated) {
+  // The behavioral suite drives the application, so its environment needs the
+  // application in it — the same requirement, and now the same treatment, as the
+  // structural peer. It used to be built with `--system-site-packages` and given
+  // nothing but pytest-bdd, on the assumption that the machine already had the
+  // project's packages. On a machine that did not, every scenario failed on
+  // `No module named flask` in an environment Unitbob had just built for it.
+  const built = await buildPythonEnvironment(projectRoot, venvDir, deps);
+  if (!built.created) {
     return {
       status: 'fixable',
-      message: 'Failed to create virtual environment under .unitbob/behavioral/.venv.',
+      message: `Failed to create virtual environment under ${relativeVenv(projectRoot, venvDir)}.`,
       checklist: ['Install python3-venv or uv: `python3 -m venv --help` or `pip install uv`.'],
     };
   }
 
-  // Install pytest-bdd into the sidecar venv
-  const pipResult = await deps.runCmd(venvPip, ['install', 'pytest-bdd'], { cwd: projectRoot }).catch(() => ({ code: 1 }));
-  if (pipResult.code === 0 || existsSync(venvPytest)) {
-    return { status: 'provisioned' };
+  const installed = existsSync(venvPytest) || (await pipInstall(deps, projectRoot, venvPython, ['pytest-bdd'])).ok;
+  if (!installed && !existsSync(venvPytest)) {
+    return {
+      status: 'fixable',
+      message: `Failed to install pytest-bdd into ${relativeVenv(projectRoot, venvDir)}.`,
+      checklist: [`Run \`${venvPython} -m pip install pytest-bdd\` manually to provision the runner.`],
+    };
   }
 
-  return {
-    status: 'fixable',
-    message: 'Failed to install pytest-bdd into .unitbob/behavioral/.venv.',
-    checklist: [`Run \`${venvPip} install pytest-bdd\` manually to provision the runner.`],
-  };
+  return built.requirementsNote
+    ? { status: 'provisioned', checklist: [built.requirementsNote] }
+    : { status: 'provisioned' };
+}
+
+function relativeVenv(projectRoot: string, venvDir: string): string {
+  return venvDir.startsWith(projectRoot) ? venvDir.slice(projectRoot.length + 1) : venvDir;
 }
 
 async function provisionJs(
