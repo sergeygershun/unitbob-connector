@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { validateWorkerPlan } from '../src/verbs/validateWorkerPlan.ts';
-import { workerPlanPath, workerPlanDigest } from '../src/files/workerPlan.ts';
+import { workerPlanPath, workerPlanDigest, validateWorkerPlanFiles } from '../src/files/workerPlan.ts';
 
 function project(): string {
   const root = mkdtempSync(join(tmpdir(), 'unitbob-worker-plan-'));
@@ -152,5 +152,34 @@ test('reports malformed worker items without throwing a raw TypeError', async ()
       assert.doesNotMatch(error.message, /TypeError/);
       return true;
     },
+  );
+});
+
+// Both connector-owned harness files are Ruby, and only a Ruby project has
+// them. Demanding them on every stack refused every Python and JS plan over a
+// file that does not exist and would mean nothing if it did — the same mistake
+// as the stack gate that reported a Python project as no stack at all. What is
+// required of the other stacks is what the rule was ever about: the harness is
+// connector territory, under `.unitbob/`. Found 2026-08-12.
+test('the harness path a plan must name follows the project stack', () => {
+  const root = project();
+  const plan = JSON.parse(readFileSync(workerPlanPath(root), 'utf8'));
+
+  // Python project: a Ruby World path is not required, and a path outside
+  // .unitbob/ is still refused.
+  writeFileSync(join(root, 'requirements.txt'), 'flask\n');
+  for (const worker of plan.workers) {
+    worker.harness_path = worker.branch === 'behavioral'
+      ? '.unitbob/behavioral/step_definitions/conftest.py'
+      : '.unitbob/pytest.ini';
+  }
+  writeFileSync(workerPlanPath(root), `${JSON.stringify(plan, null, 2)}\n`);
+  assert.deepEqual(validateWorkerPlanFiles(root).filter((e) => e.includes('harness_path')), []);
+
+  plan.workers[0].harness_path = 'spec/rails_helper.rb';
+  writeFileSync(workerPlanPath(root), `${JSON.stringify(plan, null, 2)}\n`);
+  assert.match(
+    validateWorkerPlanFiles(root).find((e) => e.includes('harness_path')) ?? '',
+    /connector-owned path under \.unitbob\//,
   );
 });

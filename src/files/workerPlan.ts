@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { detectStructuralRunner } from '../runner/precheck.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
 
 export interface WorkerPlanItem {
@@ -60,8 +61,14 @@ export function readWorkerPlan(projectRoot: string): WorkerPlan {
   return parsed as WorkerPlan;
 }
 
+const RUBY_HARNESS: Record<string, string> = {
+  behavioral: '.unitbob/behavioral/step_definitions/00_unitbob_world.rb',
+  structural: '.unitbob/structural/unitbob_helper.rb',
+};
+
 export function validateWorkerPlanFiles(projectRoot: string): string[] {
   const errors: string[] = [];
+  const rubyProject = detectStructuralRunner(projectRoot) === 'rspec';
   const plan = readWorkerPlan(projectRoot);
   let request: Record<string, unknown>;
   try {
@@ -107,11 +114,22 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
     }
     if (!isNonEmptyString(item?.done_when)) errors.push(`${label}: done_when must be non-empty`);
     if (!isNonEmptyString(item?.harness_path)) errors.push(`${label}: harness_path must be non-empty`);
-    const expectedHarness = item?.branch === 'behavioral'
-      ? '.unitbob/behavioral/step_definitions/00_unitbob_world.rb'
-      : item?.branch === 'structural' ? '.unitbob/structural/unitbob_helper.rb' : null;
+    // Both connector-owned harness files are Ruby, and only a Ruby project has
+    // them: `unitbob_helper.rb` boots Rails for RSpec, and the behavioral World
+    // is materialized for cucumber alone. Demanding them everywhere refused
+    // every Python and JS plan over a file that does not exist and would mean
+    // nothing if it did — the same mistake as the stack gate that reported a
+    // Python project as no stack at all. Found 2026-08-12.
+    //
+    // What is required of the other stacks is what the rule was ever about: the
+    // harness is connector territory, under `.unitbob/`, not a file in the
+    // project.
+    const expectedHarness = rubyProject ? RUBY_HARNESS[item?.branch as string] ?? null : null;
     if (expectedHarness && item.harness_path !== expectedHarness) {
       errors.push(`${label}: harness_path must name the connector-owned ${expectedHarness}`);
+    }
+    if (!expectedHarness && isNonEmptyString(item?.harness_path) && !item.harness_path.startsWith('.unitbob/')) {
+      errors.push(`${label}: harness_path must be a connector-owned path under .unitbob/ (got "${item.harness_path}")`);
     }
     if (!item?.limits || item.limits.planned_cases !== item.planned_cases?.length) {
       errors.push(`${label}: limits.planned_cases must equal planned_cases.length`);
