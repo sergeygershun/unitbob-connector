@@ -23,8 +23,13 @@ function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'unitbob-routes-'));
 }
 
+// A Gemfile naming Rails, and a route file. Spec 42, §5.2: which stack this is
+// gets one answer in this package, and `config/routes.rb` on its own was not
+// it — it said yes to any project that happens to carry that path, and no to a
+// Rails application that keeps its routes anywhere else.
 function railsProject(): string {
   const projectRoot = tmpProject();
+  write(join(projectRoot, 'Gemfile'), "gem 'rails'\ngem 'rspec-rails'\n");
   write(join(projectRoot, 'config', 'routes.rb'), 'Rails.application.routes.draw do\nend\n');
   return projectRoot;
 }
@@ -350,6 +355,22 @@ test('a stack with no router to ask says nothing and writes nothing', async () =
   assert.deepEqual(result, { status: 'silent', reason: 'unsupported_stack' });
   assert.equal(existsSync(routeInventoryPath(projectRoot)), false);
   assert.deepEqual(deps.calls, [], 'nothing is started on a stack we cannot ask');
+});
+
+// Spec 42, §5.2. `config/routes.rb` used to be the whole test, which made this
+// module a stack detector of its own — one wrong at both edges. A Node project
+// that happens to carry that path is not Rails, and nothing here should try to
+// boot it.
+test('a project that merely owns a config/routes.rb is not asked to boot Rails', async () => {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, 'package.json'), '{}');
+  write(join(projectRoot, 'config', 'routes.rb'), '// not Rails\n');
+  const deps = router({ code: 0 });
+
+  const result = await extractRouteInventory(projectRoot, deps);
+
+  assert.deepEqual(result, { status: 'silent', reason: 'unsupported_stack' });
+  assert.deepEqual(deps.calls, []);
 });
 
 test('an application that will not load says nothing, in the runner’s own words', async () => {

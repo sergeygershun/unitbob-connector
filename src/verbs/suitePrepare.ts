@@ -72,7 +72,8 @@ function runnerEnvelopeFor(
 }
 
 // Confirm at least one supported stack is present, materialize the Ruby boot
-// helper a generated RSpec suite would require, then fetch both peer assignments
+// helper an RSpec suite would need — only in a Ruby project — then fetch both
+// peer assignments
 // (spec 32) and each branch's recipe, and write the host's task to
 // `.unitbob/suite-build/request.json`. No model is called and no source is read
 // here — that is the host's job, framed by the two generation recipes. An
@@ -99,7 +100,11 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   const check = actual.precheck(config.projectRoot);
   if (!check.ok) throw new Error(check.message ?? 'Unsupported runtime.');
 
-  materializeHelper(config.projectRoot);
+  // Ruby only. This wrote `unitbob_helper.rb` and `rspec.opts` into every
+  // project it touched, so a Flask app and a NestJS app each came away with a
+  // Ruby file they never asked for and cannot run — the product leaving another
+  // stack's litter in someone's repository.
+  if (detectStructuralRunner(config.projectRoot) === 'rspec') materializeHelper(config.projectRoot);
 
   // The stack is known; now make it runnable. A vibecoder who has never
   // installed a test runner is the ordinary customer, not an edge case, so the

@@ -1,122 +1,64 @@
 import type { Config } from '../config.ts';
+import { existsSync } from 'node:fs';
 import {
   readHostSuiteOutputsPerBranch,
   readSuiteBuildRequest,
+  reviewOutputPath,
   type HostBranchOutput,
-  type SuiteBuildBranch,
   type SuiteBuildRequest,
   type UnreadableBranch,
 } from '../files/suiteBuild.ts';
+import { PUBLISHED, uploadItem, withReview, WOULD_PUBLISH } from '../files/suiteBuildUpload.ts';
+import { Wire, WireError, type SuiteBuildItem, type SuiteBuildResult } from '../wire.ts';
 
-// Spec 32-6 Phase 3. Everything checked here was already checked — by the
-// server, at the end, after the suite had been written, run and reviewed. A
-// format mistake made at 14:20 surfaced at 15:11 on the a2time run. The checks
-// themselves are cheap; only their placement was expensive.
+// Spec 42. This file used to predict the server's verdict. It now asks for it.
 //
-// This does not make the connector the authority on anything. The server stays
-// the single source of truth, and one of its four reasons to reject — whether
-// `source_digest` still matches the live map — depends on time and cannot be
-// answered here at all. There is deliberately no rule that says "if this passes,
-// the server must accept": that rule would need a list of exceptions for exactly
-// the race it could not see, and the race matters less the shorter the run.
-// What this buys is the feedback loop, in seconds instead of a full generation.
+// The prediction was a copy of the server's rules — which ids are answered and
+// how, markers, surface arithmetic, the runner manifest, the surface ceiling —
+// and a copy of a rule cannot help drifting from it. It drifted: on 2026-08-12
+// this check passed four answers out of six that the server then refused, and
+// one refusal came from the drift itself. Its marker check concatenated the main
+// file with every support file while the server read only the main file, so a
+// suite the server would reject was declared well-formed, and an a2time run
+// found out fifty minutes later.
 //
-// Naming `covered`/`unguarded` here is the narrow exception the architecture
-// guard records by file. The connector is not deciding what ought to be
-// guarded — the server issued the assignment and the host answered it, and this
-// only compares the two documents in front of it. That is the same line spec
-// 32-5 drew for `runner_manifest`: selecting and checking against a server-owned
-// envelope is transport; authoring one would not be.
+// Spec 32-6 chose the copy deliberately, to move the feedback loop from an hour
+// to seconds. That goal was right and is kept; only the means change. The server
+// now has a check that publishes nothing (`dry_run`), so the same feedback
+// arrives in seconds from the one implementation that decides. ADR 0001 asks a
+// pre-check either to run the same thing it predicts or to say what it did not
+// cover — asking is the first of those, exactly.
 //
-// The cost of that exception, stated plainly: these rules also exist in
-// `GuardrailSuiteOutputValidator`, and two copies can drift. Drift in one
-// direction is harmless — the server rejects something this passed, which is
-// the order of authority anyway. Drift in the other direction is not: a false
-// positive here refuses an answer the server would have taken. That is why
-// `put-suite-build` reports these against one branch instead of stopping the
-// command — a wrong check can cost a branch, never the batch, and the peer goes
-// up regardless. If these ever need to be more than a fast pre-read of the
-// obvious mistakes, the rules should come down the wire from the server rather
-// than be copied more thoroughly.
+// What stays here is what the server cannot see, because it has neither the
+// files nor the request: whether the files the answer names exist and sit inside
+// `.unitbob/`, and whether the answer covers the branches the request asked for.
 export interface BuildProblem {
   branch: string;
   message: string;
 }
 
-// The assignment, reduced to what a local check can compare against. Ids are
-// recovered from `contract_key`, which the server derives as `contract:<id>` and
-// both sides copy verbatim — so nothing here has to know whether this branch's
-// ids are called `interface_id` or `capability_id`.
-const CONTRACT_PREFIX = 'contract:';
-
-interface AssignedCase {
-  id: string;
-  contract_key: string;
-  case_marker: string;
-  surfaces: string[];
-  // Spec 34-3, criterion 6: the most surfaces one capability may be guarded
-  // through in this run. It sits at the branch level of the assignment and is
-  // stamped onto every case, so the coverage check needs nothing but the case in
-  // front of it. Undefined from a server older than the field — which had no
-  // ceiling to keep, so there is nothing to check.
-  surfaceBudget?: number;
-}
+// The three things a dry run does not do. The list is closed and none of them
+// can reject an artifact: deduplication needs to know whether this digest is
+// already stored, `make_current!` moves the pointer, `parent_digest` records
+// lineage. ADR 0001 asks for them to be named out loud, and one fixed line is
+// how — a field in the protocol that always carries the same sentence tells a
+// reader nothing and stays in the shape for ever.
+const DRY_RUN_DOES_NOT =
+  'A dry run skips exactly three things the publish does: deduplication by digest, moving the current ' +
+  'pointer, and recording the parent digest. None of the three can reject an artifact.';
 
 export function collectBuildProblems(
   request: SuiteBuildRequest,
   outputs: HostBranchOutput[],
   unreadable: UnreadableBranch[] = [],
 ): BuildProblem[] {
-  const problems: BuildProblem[] = [];
-  const branchFor = new Map(request.branches.map((branch) => [branch.suite_kind, branch]));
-
-  for (const output of outputs) {
-    // The host said plainly that it could not build this one. That is an answer,
-    // not a malformed answer, and the server records it as such.
-    if (output.build_error) continue;
-
-    const branch = branchFor.get(output.suite_kind);
-    if (!branch) continue; // reading the answer already refused this one
-
-    const add = (message: string): void => { problems.push({ branch: output.suite_kind, message }); };
-    checkRunnerManifest(branch, output, add);
-    checkAssignment(branch, output, add);
-    if (output.suite_kind === 'behavioral') checkDuplicateStepExpressions(output, add);
-  }
-
-  problems.push(...unansweredBranches(request, outputs, unreadable));
-  return problems;
+  return unansweredBranches(request, outputs, unreadable);
 }
 
-function checkDuplicateStepExpressions(
-  output: HostBranchOutput,
-  add: (message: string) => void,
-): void {
-  const suite = output.suite_file as { support_files?: Array<{ path?: unknown; content?: unknown }> } | undefined;
-  const definitions = new Map<string, string[]>();
-  for (const file of Array.isArray(suite?.support_files) ? suite.support_files : []) {
-    if (typeof file.path !== 'string' || typeof file.content !== 'string') continue;
-    for (const line of file.content.split('\n')) {
-      const call = line.match(/^\s*(?:Given|When|Then|And|But)\s*\(\s*(['"`])(.*?)\1/);
-      const decorator = line.match(/^\s*@(given|when|then)\s*\(\s*(['"])(.*?)\2/i);
-      const expression = call?.[2] ?? decorator?.[3];
-      if (!expression) continue;
-      definitions.set(expression, [...(definitions.get(expression) ?? []), file.path]);
-    }
-  }
-
-  for (const [expression, paths] of definitions) {
-    const uniquePaths = [...new Set(paths)];
-    if (paths.length > 1) {
-      add(`duplicate step expression "${expression}" appears in ${uniquePaths.join(', ')} — step expressions share one branch-global namespace.`);
-    }
-  }
-}
-
-// The branch that is not there at all. Every check above reads the answer and
-// asks whether it is well-formed; none of them can see a branch the answer never
-// mentions, because there is no entry to walk. So this one walks the request
-// instead — the only list that knows what was asked for.
+// The branch that is not there at all. Reading the answer tells you whether what
+// arrived is well-formed; it cannot see a branch the answer never mentions,
+// because there is no entry to walk. So this walks the request instead — the
+// only list that knows what was asked for.
 //
 // The a2time run of 2026-08-04 is the whole reason. Its behavioral branch was
 // prepared, half-built and abandoned for budget; the answer went up carrying the
@@ -125,10 +67,8 @@ function checkDuplicateStepExpressions(
 // second branch had ever been asked for, so the cost of the work already done on
 // it was not merely wasted, it was invisible.
 //
-// ADR 1 names this shape: a pre-check must not be *narrower* than the thing it
-// predicts. The server checks each branch it receives; what it cannot check is a
-// branch nobody sent it. That gap belongs here, where the request is still in
-// hand.
+// The server cannot close this gap: it checks each branch it receives, and this
+// is about a branch nobody sent it.
 //
 // `build_error` is the answer for a branch that could not be built, and it is
 // deliberately cheap to give — one line, no suite, never blocks the peer. This
@@ -162,457 +102,10 @@ function unansweredBranches(
     }));
 }
 
-// After spec 32-5 the envelope comes down from the server inside the request, so
-// there is nothing here to derive — only to confirm the host copied it. This is
-// the field most likely to be rejected after all the work is done, which is
-// exactly why it is worth a second of checking beforehand.
-function checkRunnerManifest(
-  branch: SuiteBuildBranch,
-  output: HostBranchOutput,
-  add: (message: string) => void,
-): void {
-  if (branch.runner_manifest === undefined) return;
-
-  if (!sameJson(branch.runner_manifest, output.runner_manifest)) {
-    add(
-      'runner_manifest does not match the one the request issued. Copy it verbatim — the server ' +
-        'accepts only the exact combinations it named.\n' +
-        `      issued:   ${stableJson(branch.runner_manifest)}\n` +
-        `      answered: ${stableJson(output.runner_manifest)}`,
-    );
-  }
-}
-
-// Every assigned id accounted for exactly once, and every marker the one the
-// server minted. A marker the host invented or edited severs the only join
-// between a runner's output and the map, so it cannot be allowed to travel.
-function checkAssignment(
-  branch: SuiteBuildBranch,
-  output: HostBranchOutput,
-  add: (message: string) => void,
-): void {
-  const assigned = assignedCases(branch.assignment);
-  if (assigned.length === 0) {
-    // An assignment with no cases in it is normal — a map with nothing to guard
-    // yet. An assignment that has content this walker could not read is not: the
-    // check would pass everything from then on and never say why. Fail open, but
-    // never fail open quietly.
-    if (hasContent(branch.assignment)) {
-      add('this branch\'s assignment could not be read, so its coverage was not checked here. ' +
-        'The server still checks it; if this persists the connector is older than the assignment format.');
-    }
-    return;
-  }
-
-  const metadata = output.test_metadata as Record<string, unknown> | undefined;
-  const entries = Array.isArray(metadata?.capabilities) ? metadata.capabilities : null;
-  if (!entries) {
-    add('test_metadata must carry a capabilities array, one entry per assigned id.');
-    return;
-  }
-
-  const byId = new Map(assigned.map((entry) => [entry.id, entry]));
-  const idKey = idKeyOf(branch.assignment, assigned);
-  const seen = new Map<string, number>();
-  const suiteText = suiteBytes(output);
-
-  for (const entry of entries) {
-    const row = (entry ?? {}) as Record<string, unknown>;
-    const id = String(idKey ? row[idKey] ?? '' : '');
-    const expected = byId.get(id);
-    if (!expected) {
-      add(`test_metadata names "${id || '(no id)'}", which is not in this branch's assignment.`);
-      continue;
-    }
-    seen.set(id, (seen.get(id) ?? 0) + 1);
-    checkOneCase(row, id, expected, suiteText, add);
-  }
-
-  for (const [id, count] of seen) {
-    if (count > 1) add(`${id} is answered ${count} times — every assigned id is answered exactly once.`);
-  }
-
-  const missing = assigned.filter((entry) => !seen.has(entry.id)).map((entry) => entry.id).sort();
-  if (missing.length > 0) {
-    add(`no answer for ${missing.length} assigned id(s): ${missing.join(', ')}.`);
-  }
-}
-
-function checkOneCase(
-  row: Record<string, unknown>,
-  id: string,
-  expected: AssignedCase,
-  suiteText: string,
-  add: (message: string) => void,
-): void {
-  const status = String(row.status ?? '');
-
-  if (status === 'unguarded') {
-    if (!String(row.reason ?? '').trim()) {
-      add(`${id} is unguarded but gives no business reason for it.`);
-    }
-    return;
-  }
-
-  if (status !== 'covered') {
-    add(`${id} must be answered "covered" or "unguarded" (got ${JSON.stringify(status)}).`);
-    return;
-  }
-
-  if (String(row.contract_key ?? '') !== expected.contract_key) {
-    add(`${id} carries contract_key ${JSON.stringify(row.contract_key)} — it must be copied verbatim as "${expected.contract_key}".`);
-  }
-  if (String(row.case_marker ?? '') !== expected.case_marker) {
-    add(`${id} carries case_marker ${JSON.stringify(row.case_marker)} — it must be copied verbatim as "${expected.case_marker}". Markers are never minted or edited locally.`);
-    return;
-  }
-
-  // Declared covered, but the marker never made it into a test name or a
-  // Gherkin tag. The server refuses this, and rightly: without the marker in the
-  // suite there is nothing to join a result to, so the capability would report
-  // as a mismatch rather than as the green it claims.
-  if (suiteText && !suiteText.includes(expected.case_marker)) {
-    add(`${id} is answered "covered", but its marker ${expected.case_marker} appears nowhere in the suite files.`);
-    return;
-  }
-
-  checkSurfaceCoverage(row, id, expected, suiteText, add);
-}
-
-// Which scenario reached which address. The a2time run of 2026-08-04 published
-// 97 coverage rows against 99 Scenarios: one Scenario had no row, another had a
-// row naming no address. Both mean the same thing — a Scenario that ran and
-// whose result reaches nothing on the map — and both were found by the
-// independent reviewer, hours later, doing a different job. This check was the
-// cheap place to find them and it was not looking.
-//
-// Only asked when the answer is already speaking this language: an answer with
-// no `surface_coverage` anywhere is an older map's shape, and refusing it here
-// would refuse what the server accepts. Within a branch that does declare it,
-// the rules below are the server's own, in the server's own order.
-function checkSurfaceCoverage(
-  row: Record<string, unknown>,
-  id: string,
-  expected: AssignedCase,
-  suiteText: string,
-  add: (message: string) => void,
-): void {
-  if (expected.surfaces.length === 0) return;
-  const coverage = row.surface_coverage;
-  if (coverage === undefined) return; // not this map's shape — the server decides
-
-  if (!Array.isArray(coverage)) {
-    add(`${id} is answered "covered", so its surface_coverage must be an array of {scenario, surfaces}.`);
-    return;
-  }
-
-  const named = new Set<string>();
-  const reached = new Set<string>();
-  for (const [index, item] of coverage.entries()) {
-    const entry = (item ?? {}) as Record<string, unknown>;
-    const scenario = String(entry.scenario ?? '').trim();
-    const surfaces = entry.surfaces;
-    if (!scenario || !Array.isArray(surfaces)) {
-      add(`${id} surface_coverage[${index}] must name a scenario and its surfaces.`);
-      continue;
-    }
-    if (surfaces.length === 0) {
-      add(`${id} surface_coverage names no surface for "${scenario}" — that scenario's result reaches nothing on the map.`);
-    }
-    if (suiteText && !suiteText.includes(scenario)) {
-      add(`${id} surface_coverage names "${scenario}", which appears nowhere in the suite files.`);
-    }
-    named.add(scenario);
-    surfaces.filter((s): s is string => typeof s === 'string').forEach((s) => reached.add(s));
-  }
-
-  // Spec 34, decision 15: an address the suite genuinely cannot drive — a
-  // third-party OAuth callback, a vendor webhook — is declared rather than
-  // faked, and satisfies coverage without being claimed as reached. Mirrored
-  // here in the server's own shape; refusing it locally would refuse an answer
-  // the server takes, which is the one direction of drift that costs a branch.
-  const declaredUnreachable = collectUnreachable(row, id, reached, add);
-  const deferred = collectDeferred(row, id, reached, declaredUnreachable, add);
-
-  // Spec 34-3, criterion 6. Cheap here and expensive later: over the ceiling is
-  // one of the answers the server rejects, and finding it after the suite has
-  // been written, run and reviewed costs the whole cycle.
-  //
-  // Spec 34-6, criterion 5: it names how many surfaces have to move, because
-  // that number is the edit, and it lands in the same batch as every other
-  // capability over the ceiling. On a2time, 2026-08-09 the server's version of
-  // this complaint arrived one capability at a time and cost five
-  // `validate-build` rounds for one kind of mistake.
-  const budget = expected.surfaceBudget;
-  if (budget !== undefined && reached.size > budget) {
-    add(
-      `${id} guards ${reached.size} surfaces, over the surface_budget of ${budget}` +
-        ` — move ${reached.size - budget} of them into deferred_surfaces and keep the most important ones guarded.`,
-    );
-  }
-
-  const missed = expected.surfaces.filter(
-    (surface) => !reached.has(surface) && !declaredUnreachable.has(surface) && !deferred.has(surface),
-  );
-  if (missed.length > 0) {
-    add(
-      `${id} surface_coverage accounts for no scenario at ${missed.join(', ')}` +
-        ' — drive it, declare it unreachable with a business reason, or defer it under the surface budget.',
-    );
-  }
-  // No check here for "declares everything unreachable and drives nothing": the
-  // caller already returned when the capability's marker appears in no suite
-  // file, so a capability with no Scenario never reaches this function at all.
-  // The server refuses that state for the same reason, one rule earlier.
-  const foreign = [...reached, ...declaredUnreachable, ...deferred].filter(
-    (surface) => !expected.surfaces.includes(surface),
-  );
-  if (foreign.length > 0) {
-    add(`${id} surface_coverage names ${foreign.join(', ')}, which this branch's assignment does not carry.`);
-  }
-
-  // The other direction, and the one that found nothing on a2time because
-  // nobody asked it: a Scenario that carries the marker but appears in no row.
-  //
-  // Read off the file rather than parsed: a tag line carrying this marker, then
-  // the next line that has a colon in it, whose name is whatever follows the
-  // first colon. That holds for any Gherkin dialect, because only the keyword is
-  // translated and the colon is not. When the shape is not recognised the answer
-  // is silence — the server does parse this properly, and a guess here that says
-  // "you forgot a Scenario" about a Scenario that does not exist would cost the
-  // branch its publication.
-  const unlisted = scenarioNamesTagged(suiteText, expected.case_marker).filter((name) => !named.has(name));
-  if (unlisted.length > 0) {
-    add(`${id} surface_coverage does not account for ${unlisted.map((n) => `"${n}"`).join(', ')}.`);
-  }
-}
-
-// The addresses this capability says it cannot drive, each with its own reason.
-// A blanket reason covering a list is exactly the boilerplate the rule exists to
-// stop, so the reason is per address and its absence is the whole complaint.
-function collectUnreachable(
-  row: Record<string, unknown>,
-  id: string,
-  reached: Set<string>,
-  add: (message: string) => void,
-): Set<string> {
-  const declared = row.unreachable_surfaces;
-  if (declared === undefined) return new Set();
-
-  if (!Array.isArray(declared) || declared.length === 0) {
-    add(`${id} unreachable_surfaces must be a non-empty array of {surface, reason} when it is present.`);
-    return new Set();
-  }
-
-  const surfaces = new Set<string>();
-  for (const [index, item] of declared.entries()) {
-    const entry = (item ?? {}) as Record<string, unknown>;
-    const surface = String(entry.surface ?? '').trim();
-    if (!surface) {
-      add(`${id} unreachable_surfaces[${index}] names no surface.`);
-      continue;
-    }
-    if (!String(entry.reason ?? '').trim()) {
-      add(`${id} declares ${surface} unreachable but gives no business reason for it.`);
-      continue;
-    }
-    if (reached.has(surface)) {
-      add(`${id} both drives ${surface} in a scenario and declares it unreachable — it is one or the other.`);
-      continue;
-    }
-    if (surfaces.has(surface)) {
-      add(`${id} declares ${surface} unreachable more than once.`);
-      continue;
-    }
-    surfaces.add(surface);
-  }
-  return surfaces;
-}
-
-// Spec 34-3, criterion 6. The addresses this run did not take, because the
-// capability carried more than `surface_budget` of them. Mirrored here for the
-// same reason the unreachable list is, and more urgently: refusing this answer
-// locally does not merely disagree with the server, it hands the host an error
-// message pointing at `unreachable_surfaces` — the one place these must never
-// go, because "nothing can cause this request" and "there were better ones" are
-// different sentences and only one of them is true.
-//
-// Plain surface ids, with no reason each. That asymmetry with the unreachable
-// list is deliberate: there the sentence is the guard, because an address you
-// cannot write a sentence about is not really unreachable. Here the reason is
-// the same for every entry and already known — the ceiling.
-function collectDeferred(
-  row: Record<string, unknown>,
-  id: string,
-  reached: Set<string>,
-  unreachable: Set<string>,
-  add: (message: string) => void,
-): Set<string> {
-  const declared = row.deferred_surfaces;
-  if (declared === undefined) return new Set();
-
-  if (!Array.isArray(declared) || declared.length === 0) {
-    add(`${id} deferred_surfaces must be a non-empty array of surface ids when it is present.`);
-    return new Set();
-  }
-
-  const surfaces = new Set<string>();
-  for (const [index, item] of declared.entries()) {
-    const surface = typeof item === 'string' ? item.trim() : '';
-    if (!surface) {
-      add(`${id} deferred_surfaces[${index}] names no surface.`);
-      continue;
-    }
-    if (reached.has(surface)) {
-      add(`${id} both drives ${surface} in a scenario and defers it — it is one or the other.`);
-      continue;
-    }
-    if (unreachable.has(surface)) {
-      add(`${id} declares ${surface} both unreachable and deferred — cannot be reached and was not taken this time are different answers.`);
-      continue;
-    }
-    if (surfaces.has(surface)) {
-      add(`${id} defers ${surface} more than once.`);
-      continue;
-    }
-    surfaces.add(surface);
-  }
-  return surfaces;
-}
-
-// Scenario names carrying one marker, by shape rather than by grammar. See the
-// caller for why this stays deliberately timid.
-function scenarioNamesTagged(suiteText: string, marker: string): string[] {
-  if (!suiteText) return [];
-
-  const lines = suiteText.split('\n');
-  const names: string[] = [];
-  for (const [index, line] of lines.entries()) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('@') || !trimmed.split(/\s+/).includes(`@${marker}`)) continue;
-
-    const next = lines.slice(index + 1).find((candidate) => candidate.trim().length > 0) ?? '';
-    const colon = next.indexOf(':');
-    if (colon === -1) continue;
-
-    const name = next.slice(colon + 1).trim();
-    if (name) names.push(name);
-  }
-  return names;
-}
-
-// Which field names the id. Read off the *assignment*, where the answer is
-// exact: the id is already known (it is `contract_key` minus its prefix), so the
-// field holding it can be identified rather than guessed.
-//
-// An earlier version searched the host's answer for any string field whose value
-// happened to be an assigned id. That usually landed on the right key and could
-// just as well have landed on a `headline` that echoed the id. Neither branch's
-// key name is written down here either way — `interface_id` and `capability_id`
-// stay the server's business.
-function idKeyOf(assignment: unknown, cases: AssignedCase[]): string | null {
-  const ids = new Set(cases.map((entry) => entry.id));
-  let found: string | null = null;
-
-  const walk = (value: unknown): void => {
-    if (found) return;
-    if (Array.isArray(value)) { value.forEach(walk); return; }
-    if (!value || typeof value !== 'object') return;
-
-    const row = value as Record<string, unknown>;
-    if (typeof row.contract_key === 'string') {
-      const id = row.contract_key.slice(CONTRACT_PREFIX.length);
-      for (const [key, candidate] of Object.entries(row)) {
-        if (key !== 'contract_key' && candidate === id && ids.has(id)) { found = key; return; }
-      }
-    }
-    Object.values(row).forEach(walk);
-  };
-
-  walk(assignment);
-  return found;
-}
-
-// Does the assignment carry anything at all? Distinguishes "nothing to guard"
-// from "we could not read what was there".
-function hasContent(assignment: unknown): boolean {
-  if (Array.isArray(assignment)) return assignment.length > 0;
-  if (!assignment || typeof assignment !== 'object') return false;
-  return Object.values(assignment as Record<string, unknown>).some(hasContent);
-}
-
-// The assignment is an opaque body the server composed, so it is walked rather
-// than destructured: every object carrying a `contract_key` is one assigned
-// case, wherever the shape happens to nest it.
-function assignedCases(assignment: unknown): AssignedCase[] {
-  const found: AssignedCase[] = [];
-  let surfaceBudget: number | undefined;
-
-  const walk = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      value.forEach(walk);
-      return;
-    }
-    if (!value || typeof value !== 'object') return;
-
-    const row = value as Record<string, unknown>;
-    // Found by the same walk rather than by knowing where the server put it, for
-    // the same reason the cases are: the assignment body is opaque here.
-    if (typeof row.surface_budget === 'number' && Number.isFinite(row.surface_budget)) {
-      surfaceBudget = row.surface_budget;
-    }
-    const key = row.contract_key;
-    const marker = row.case_marker;
-    if (typeof key === 'string' && key.startsWith(CONTRACT_PREFIX) && typeof marker === 'string') {
-      found.push({
-        id: key.slice(CONTRACT_PREFIX.length),
-        contract_key: key,
-        case_marker: marker,
-        // Only the behavioral assignment carries addresses. Its absence is what
-        // tells the coverage check below there is nothing of that kind here.
-        surfaces: Array.isArray(row.surfaces) ? row.surfaces.filter((s): s is string => typeof s === 'string') : [],
-      });
-    }
-    Object.values(row).forEach(walk);
-  };
-
-  walk(assignment);
-  // Stamped after the walk, never during it: nothing promises the ceiling is
-  // visited before the cases that answer to it.
-  return found.map((entry) => ({ ...entry, surfaceBudget }));
-}
-
-// Every byte of the branch's suite, main file and support files together, for
-// the "is the marker actually in there" check.
-function suiteBytes(output: HostBranchOutput): string {
-  const file = output.suite_file as
-    | { content?: unknown; support_files?: { content?: unknown }[] }
-    | undefined;
-  if (!file) return '';
-
-  return [file.content, ...(Array.isArray(file.support_files) ? file.support_files.map((f) => f.content) : [])]
-    .filter((content): content is string => typeof content === 'string')
-    .join('\n');
-}
-
-function sameJson(a: unknown, b: unknown): boolean {
-  return stableJson(a) === stableJson(b);
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    const object = value as Record<string, unknown>;
-    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
-}
-
-// Reads the task and the answer and reports every problem it can see. Reading
-// the answer is itself a check — safe paths, files that exist, a parseable
-// envelope — and it is done branch by branch, so a bad entry in one contributes
-// its problem and the other is still examined. Only the answer file as a whole
-// can stop the pass, because then there is no document left to read.
+// Reads the task and the answer and reports every local problem it can see.
+// Reading the answer is itself a check — safe paths, files that exist, a
+// parseable envelope — and it is done branch by branch, so a bad entry in one
+// contributes its problem and the other is still examined.
 export function validateBuildProblems(config: Config): BuildProblem[] {
   const request = readSuiteBuildRequest(config.projectRoot);
   const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
@@ -623,14 +116,6 @@ export function validateBuildProblems(config: Config): BuildProblem[] {
   ];
 }
 
-// One branch's problems, for the line that reports it unpublished alongside its
-// peer. `put-suite-build` blocks per branch, so its message is per branch too.
-export function formatBranchProblems(messages: string[]): string {
-  if (messages.length === 1) return messages[0];
-
-  return `${messages.length} problems in this branch's answer:\n${messages.map((m) => `      - ${m}`).join('\n')}`;
-}
-
 // One report, not a queue of one-at-a-time discoveries. Fixing one thing to be
 // told the next costs a full round trip each time, and the round trip is the
 // expensive part.
@@ -639,23 +124,159 @@ export function formatProblems(problems: BuildProblem[]): string {
   return (
     `Your suite answer has ${problems.length} problem${problems.length === 1 ? '' : 's'}:\n` +
     `${lines.join('\n')}\n` +
-    'Fix all of them, then answer again. The Unitbob server has the last word on ' +
-    'what it accepts; this check just finds the common problems in seconds instead ' +
-    'of after the whole build.\n'
+    'Fix all of them, then answer again. These are the checks the server cannot make — it has ' +
+    'neither your files nor the request it issued.\n'
   );
+}
+
+interface ValidateBuildDeps {
+  dryRun: (items: SuiteBuildItem[]) => Promise<SuiteBuildResult[]>;
+  stdout: { write: (chunk: string) => unknown };
+}
+
+// The exact batch `put-suite-build` would send, plus the two things that can go
+// wrong on the way there.
+//
+// `validate-build` runs before the run and before the review, so the behavioral
+// review usually does not exist yet. That is not a fault in the answer — it is a
+// question this check cannot ask yet — so the branch still goes to the server
+// without it and the gap is named out loud (ADR 0001).
+//
+// A review that *does* exist and will not bind is the opposite: a review of a
+// different candidate, a missing `bdd_quality_review`, a `selection_review` that
+// does not match the plan. `put-suite-build` refuses the branch for each of
+// those, so calling any of them "not written yet" would hand back a green
+// verdict for a branch that is about to be blocked — and the second run of this
+// command, the one after the review, is precisely where that must not happen.
+function dryRunBatch(
+  config: Config,
+  request: SuiteBuildRequest,
+  outputs: HostBranchOutput[],
+): { items: SuiteBuildItem[]; unchecked: string[]; problems: BuildProblem[] } {
+  const items: SuiteBuildItem[] = [];
+  const unchecked: string[] = [];
+  const problems: BuildProblem[] = [];
+
+  for (const output of outputs) {
+    if (output.build_error) {
+      items.push(uploadItem(request, output, undefined));
+      continue;
+    }
+
+    let testMetadata = output.test_metadata;
+    if (output.suite_kind === 'behavioral') {
+      try {
+        testMetadata = withReview(config, request, output);
+      } catch (error) {
+        if (existsSync(reviewOutputPath(config.projectRoot))) {
+          problems.push({ branch: output.suite_kind, message: (error as Error).message });
+          continue;
+        }
+        unchecked.push(
+          `${output.suite_kind}: the independent review has not been written yet, so the server judged ` +
+            'this branch without it. Anything it says about bdd_quality_review, known_defect_probe or ' +
+            'candidate_run is answered later, by `suite-review-prepare` and the reviewer — run this ' +
+            'command again afterwards for a verdict on the whole branch.',
+        );
+      }
+    }
+    items.push(uploadItem(request, output, testMetadata));
+  }
+
+  return { items, unchecked, problems };
+}
+
+function describe(result: SuiteBuildResult): string {
+  const tallies = result.counts
+    ? Object.entries(result.counts)
+        .map(([name, value]) => `${value} ${name}`)
+        .join(', ')
+    : '';
+  return `  ${result.suite_kind}: ${result.status}${tallies ? ` — ${tallies}` : ''}`;
+}
+
+// The server's own words, never a paraphrase. Rewording a rejection here is how
+// a third implementation of a rule starts: the reader then acts on this file's
+// idea of what the server meant, and the two drift the moment either changes.
+function rejection(result: SuiteBuildResult): string {
+  return `  ${result.suite_kind}: ${result.error ?? `the server answered "${result.status}"`}`;
 }
 
 export async function validateBuild(
   config: Config,
   _args: string[] = [],
-  deps?: { stdout?: { write: (chunk: string) => unknown } },
+  deps?: Partial<ValidateBuildDeps>,
 ): Promise<void> {
-  const stdout = deps?.stdout ?? process.stdout;
-  const problems = validateBuildProblems(config);
+  const d: ValidateBuildDeps = {
+    dryRun: (items) => new Wire(config).putSuiteBuilds(items, { dryRun: true }),
+    stdout: process.stdout,
+    ...deps,
+  };
 
-  if (problems.length === 0) {
-    stdout.write('Your suite answer looks well-formed. Run `unitbob put-suite-build` to publish it.\n');
+  const request = readSuiteBuildRequest(config.projectRoot);
+  const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
+  const { items, unchecked, problems } = dryRunBatch(config, request, outputs);
+
+  const local = [
+    ...unreadable.map((entry) => ({ branch: entry.suite_kind, message: entry.message })),
+    ...collectBuildProblems(request, outputs, unreadable),
+    ...problems,
+  ];
+  if (local.length > 0) throw new Error(formatProblems(local));
+
+  for (const line of unchecked) d.stdout.write(`Not checked — ${line}\n`);
+
+  if (items.length === 0) {
+    d.stdout.write('There is nothing to check with the server: the answer builds no branch.\n');
     return;
   }
-  throw new Error(formatProblems(problems));
+
+  let results: SuiteBuildResult[];
+  try {
+    results = await d.dryRun(items);
+  } catch (error) {
+    if (error instanceof WireError && error.unreachable) {
+      d.stdout.write(
+        `The Unitbob server was not asked for a verdict: ${error.message}\n` +
+          'Unchecked, therefore: how the assignment was answered, case markers, surface arithmetic and the ' +
+          'surface ceiling, the runner manifest, and the review binding — every rule the server owns. What ' +
+          'passed here is only that the files exist, sit under .unitbob/, and that every branch the request ' +
+          'asked for has an entry.\n',
+      );
+      return;
+    }
+    throw error;
+  }
+
+  // A server older than `dry_run` ignores the flag and publishes. Saying "the
+  // check passed" then would be the worst possible answer: the suite is live and
+  // the one publication the recipe allows has been spent.
+  const published = results.filter((result) => PUBLISHED.has(result.status));
+  if (published.length > 0) {
+    throw new Error(
+      `This Unitbob server does not know dry runs: it published ${published.map((r) => r.suite_kind).join(', ')} ` +
+        'instead of checking. Upgrade the server before running validate-build again — and note that this ' +
+        'branch is now live.\n',
+    );
+  }
+
+  const refused = results.filter((result) => result.status !== WOULD_PUBLISH && result.status !== 'build_error');
+  if (refused.length > 0) {
+    throw new Error(
+      `The Unitbob server would refuse this answer:\n${refused.map(rejection).join('\n')}\n` +
+        'Those are the server\'s own words. Fix them, then run `unitbob validate-build` again — this round ' +
+        'costs one request, not another run and review.\n',
+    );
+  }
+
+  // "Would publish it" is only true of the branches it would actually publish. An
+  // answer whose every branch is a declared `build_error` is accepted and stores
+  // nothing, and reporting that as a suite about to go up would be the one
+  // sentence in this output that is not true of what happened.
+  const accepted = results.filter((result) => result.status === WOULD_PUBLISH);
+  const headline = accepted.length === 0
+    ? 'The Unitbob server accepted this answer, and it publishes no suite:'
+    : 'The Unitbob server checked this answer and would publish it:';
+
+  d.stdout.write(`${headline}\n${results.map(describe).join('\n')}\n${DRY_RUN_DOES_NOT}\n`);
 }

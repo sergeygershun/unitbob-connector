@@ -139,6 +139,27 @@ export function runnerReadyPrecheck(
   };
 }
 
+// Has Unitbob built this runner for this project already? One question, asked
+// the same way by every precheck that would otherwise advise the user to install
+// something they now have.
+//
+// Ruby needs the second half. Its sidecar is a Gemfile, and `provisionRspec`
+// writes that file *before* it runs bundler and leaves it in place when bundler
+// fails — so its mere existence says "we tried", not "it is there", and taking
+// it as proof would silence the rspec-rails advice exactly when the install
+// failed and the advice is what the user needs. Bundler rewrites the sidecar
+// lock on success, and the project's own lock cannot name a gem its Gemfile
+// lacks, so the gem appearing there is the first artefact that means it
+// resolves. The vitest side needs nothing extra: `locateVitest` tests the actual
+// `.bin/vitest` executable.
+function sidecarProvides(projectRoot: string, runner: string, deps: PrecheckDeps = defaultDeps): boolean {
+  if (locateRunner(projectRoot, runner, deps)?.source !== 'sidecar') return false;
+  if (runner !== 'rspec') return true;
+
+  const lock = join(projectRoot, SIDECAR_DIR, 'Gemfile.lock');
+  return existsSync(lock) && /\brspec-rails\s+\(/.test(readFileSync(lock, 'utf8'));
+}
+
 // Confirm the host-selected runner against local markers. A mismatch fails
 // closed: the caller writes no files and uploads nothing.
 //
@@ -152,9 +173,9 @@ export function runnerReadyPrecheck(
 export function validateStack(projectRoot: string, runner: string, deps: PrecheckDeps = defaultDeps): PrecheckResult {
   switch (runner) {
     case 'rspec':
-      return rubyPrecheck(projectRoot);
+      return rubyPrecheck(projectRoot, deps);
     case 'vitest':
-      return vitestPrecheck(projectRoot);
+      return vitestPrecheck(projectRoot, deps);
     case 'pytest':
       return pytestPrecheck(projectRoot, deps);
     case 'cucumber':
@@ -221,7 +242,7 @@ function pythonBehavioralPrecheck(projectRoot: string, deps: PrecheckDeps): Prec
   return { ok: true };
 }
 
-function rubyPrecheck(projectRoot: string): PrecheckResult {
+function rubyPrecheck(projectRoot: string, deps: PrecheckDeps): PrecheckResult {
   if (!hasGemfileWith(projectRoot, /\brails\b/)) {
     return {
       ok: false,
@@ -232,7 +253,13 @@ function rubyPrecheck(projectRoot: string): PrecheckResult {
   }
   // Specifically rspec-rails: the boot helper requires `rspec/rails`, so a
   // bare `rspec` gem passes nothing downstream — stop with the honest offer.
-  if (!hasGemfileWith(projectRoot, /\brspec-rails\b/)) {
+  //
+  // Unless Unitbob already installed one for itself. The advice below asks the
+  // user to change their Gemfile, and that is the wrong sentence seconds after a
+  // working runner was provisioned under `.unitbob/`. `runnerReadyPrecheck`
+  // already knows this; this function used to send the reader back to the old
+  // answer regardless.
+  if (!sidecarProvides(projectRoot, 'rspec', deps) && !hasGemfileWith(projectRoot, /\brspec-rails\b/)) {
     return {
       ok: false,
       message:
@@ -244,7 +271,7 @@ function rubyPrecheck(projectRoot: string): PrecheckResult {
   return { ok: true };
 }
 
-function vitestPrecheck(projectRoot: string): PrecheckResult {
+function vitestPrecheck(projectRoot: string, deps: PrecheckDeps): PrecheckResult {
   const packageJson = join(projectRoot, 'package.json');
   if (!existsSync(packageJson)) {
     return {
@@ -253,7 +280,12 @@ function vitestPrecheck(projectRoot: string): PrecheckResult {
     };
   }
 
+  // Same rule as the Ruby precheck above: a runner Unitbob installed for this
+  // project is a runner this project has. Without this the connector's own
+  // repository was told to `npm i -D vitest` seconds after a working vitest had
+  // been put under `.unitbob/` for it.
   const hasVitest =
+    sidecarProvides(projectRoot, 'vitest', deps) ||
     /"vitest"/.test(readFileSync(packageJson, 'utf8')) ||
     existsSync(join(projectRoot, 'node_modules', '.bin', 'vitest'));
   if (!hasVitest) {

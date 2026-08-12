@@ -35,28 +35,32 @@ const FORBIDDEN = [
 // the authoring still on the server side. It may not author an entry, which is
 // why no table of languages or result formats appears in either file.
 const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
-  'wire.ts': [/manifest/i],
+  // `wire.ts` types the response shape it relays, `unguarded_by_review` and all
+  // (spec 42, §7). Typing a field is transport; the connector never computes one.
+  'wire.ts': [/manifest/i, /\bunguarded\b/i],
   [join('files', 'guardrails.ts')]: [/manifest/i],
   [join('files', 'suiteBuild.ts')]: [/manifest/i],
   [join('runner', 'manifest.ts')]: [/manifest/i],
+  [join('files', 'suiteBuildUpload.ts')]: [/manifest/i],
   [join('verbs', 'run.ts')]: [/manifest/i],
-  [join('verbs', 'putSuiteBuild.ts')]: [/manifest/i],
   [join('verbs', 'suitePrepare.ts')]: [/manifest/i],
+  [join('verbs', 'validateBuild.ts')]: [/manifest/i],
 
-  // Spec 32-6 Phase 3. `validate-build` compares the host's answer against the
-  // request the server issued, locally, before uploading — so it necessarily
-  // names the two answers a capability may carry.
-  //
-  // The line is the one 32-5 drew for `runner_manifest`, read the same way: the
-  // connector authors nothing here. It does not decide what ought to be
-  // guarded, does not mint a marker, and never looks at a result. The
-  // assignment came down from the server and the host answered it; this
-  // compares two documents already sitting on disk and reports where they
-  // disagree. The server keeps the last word — the module says so in its own
-  // error text, and the spec deliberately refuses any rule that would make a
-  // local pass binding on it.
-  [join('verbs', 'validateBuild.ts')]: [/manifest/i, /\bcovered\b/i, /\bunguarded\b/i, /\bcoverage\b/i],
+  // Spec 42, §7. `put-suite-build` prints the server's own `unguarded_by_review`
+  // list: capabilities the publish stored unguarded because the review objected
+  // to every Scenario guarding them. Relaying the server's words is what this
+  // command is for, and the alternative — silence, because the word is
+  // reserved — leaves the run to find it on the map instead.
+  [join('verbs', 'putSuiteBuild.ts')]: [/manifest/i, /\bunguarded\b/i],
 };
+
+// Spec 32-6 Phase 3 gave `validateBuild.ts` a standing exemption for `covered`,
+// `unguarded` and `coverage`: it held a local copy of the server's rules and had
+// to name what it was comparing. Spec 42 deleted that copy — the command asks
+// the server for a dry run instead of predicting its verdict — so the exemption
+// went with it, and its absence above is now the guard. Those words reappearing
+// in that file mean a second implementation of a server rule has started growing
+// back.
 
 // Spec 34-6, criterion 3 widened what a connector file may read, and this is the
 // written line, in the same place 32-5 and 32-6 wrote theirs.

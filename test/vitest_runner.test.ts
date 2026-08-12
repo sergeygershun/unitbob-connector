@@ -31,15 +31,32 @@ test('with a project vitest config, writes a merge config and passes --config', 
   const projectRoot = tmpProject();
   writeFileSync(join(projectRoot, 'vitest.config.ts'), 'export default {};\n');
 
-  const result = await withFakeNpx(() => runVitestSuite(projectRoot, suitePath));
+  const result = await withFakeNpx(() => runVitestSuite(projectRoot, [suitePath]));
 
   assert.ok(result.args.includes('--config'), 'passes --config');
   assert.ok(result.args.includes(VITEST_CONFIG_FILE), 'points at the connector config');
 
   const written = readFileSync(join(projectRoot, VITEST_CONFIG_FILE), 'utf8');
-  assert.match(written, /mergeConfig/);
   assert.ok(written.includes('"../vitest.config.ts"'), 'inherits the project config');
-  assert.ok(written.includes(suitePath), 'adds the guardrail file to include');
+  assert.ok(written.includes(suitePath), 'names the guardrail file in include');
+});
+
+// The generated config is re-imported by Vite from a temporary module beside
+// it, so a bare import resolves by walking up from `.unitbob/` — and a project
+// whose only vitest is the one Unitbob installed keeps it under
+// `.unitbob/runners/node_modules`, which is not on that path. Importing
+// `vitest/config` there dies with ERR_MODULE_NOT_FOUND before a test is
+// collected, on exactly the projects the sidecar exists for.
+test('the generated config imports nothing from vitest itself', async () => {
+  const withConfig = tmpProject();
+  writeFileSync(join(withConfig, 'vitest.config.ts'), 'export default {};\n');
+  const without = tmpProject();
+
+  for (const projectRoot of [withConfig, without]) {
+    await withFakeNpx(() => runVitestSuite(projectRoot, [suitePath]));
+    const written = readFileSync(join(projectRoot, VITEST_CONFIG_FILE), 'utf8');
+    assert.doesNotMatch(written, /from ['"]vitest/, `${projectRoot} imports vitest`);
+  }
 });
 
 test('prefers vitest.config over vite.config when both exist', async () => {
@@ -47,17 +64,37 @@ test('prefers vitest.config over vite.config when both exist', async () => {
   writeFileSync(join(projectRoot, 'vite.config.ts'), 'export default {};\n');
   writeFileSync(join(projectRoot, 'vitest.config.ts'), 'export default {};\n');
 
-  await withFakeNpx(() => runVitestSuite(projectRoot, suitePath));
+  await withFakeNpx(() => runVitestSuite(projectRoot, [suitePath]));
 
   const written = readFileSync(join(projectRoot, VITEST_CONFIG_FILE), 'utf8');
   assert.ok(written.includes('"../vitest.config.ts"'), 'the more specific config wins');
 });
 
-test('with no project config, runs the bare command and writes nothing', async () => {
+// Spec 42, §6.5. Vitest's default `include` only reaches a `.unitbob/` file that
+// happens to be named `*.test.ts`, so leaning on it was a trap set for whoever
+// names a slice after the capability it guards: the run collects zero tests and
+// reports that as if the suite were empty. The branch's files are now always
+// named in `include`, project config or none.
+test('with no project config, writes a config that still names the branch files', async () => {
   const projectRoot = tmpProject();
 
-  const result = await withFakeNpx(() => runVitestSuite(projectRoot, suitePath));
+  const result = await withFakeNpx(() => runVitestSuite(projectRoot, [suitePath]));
 
-  assert.ok(!result.args.includes('--config'), 'no --config when defaults already cover .unitbob/');
-  assert.equal(existsSync(join(projectRoot, VITEST_CONFIG_FILE)), false);
+  assert.ok(result.args.includes('--config'), 'points at the connector config');
+  const written = readFileSync(join(projectRoot, VITEST_CONFIG_FILE), 'utf8');
+  assert.doesNotMatch(written, /^import /m, 'there is nothing to inherit');
+  assert.ok(written.includes(suitePath), 'the branch file is in include');
+});
+
+// Spec 42, §6. One file per assignment, all of them running as one suite.
+test('every file of the branch is filtered for and included', async () => {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, 'vitest.config.ts'), 'export default {};\n');
+  const second = '.unitbob/structural/reporting.ts';
+
+  const result = await withFakeNpx(() => runVitestSuite(projectRoot, [suitePath, second]));
+
+  assert.ok(result.args.includes(suitePath) && result.args.includes(second), 'both are positional filters');
+  const written = readFileSync(join(projectRoot, VITEST_CONFIG_FILE), 'utf8');
+  assert.ok(written.includes(suitePath) && written.includes(second), 'both are in include');
 });

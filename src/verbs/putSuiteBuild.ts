@@ -1,13 +1,11 @@
 import type { Config } from '../config.ts';
 import {
-  readBehavioralReview,
   readHostSuiteOutputsPerBranch,
   readSuiteBuildRequest,
-  type HostBranchOutput,
   type SuiteBuildBranch,
-  type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
-import { collectBuildProblems, formatBranchProblems } from './validateBuild.ts';
+import { collectBuildProblems } from './validateBuild.ts';
+import { PUBLISHED, uploadItem, withReview } from '../files/suiteBuildUpload.ts';
 import { Wire, type SuiteBuildItem, type SuiteBuildResult } from '../wire.ts';
 
 interface PutSuiteBuildDeps {
@@ -47,8 +45,6 @@ export async function putSuiteBuild(
     ...deps,
   };
 
-  const digestFor = new Map(request.branches.map((branch) => [branch.suite_kind, branch.source_digest]));
-
   const items: SuiteBuildItem[] = [];
   const blocked: SuiteBuildResult[] = unreadable.map((entry) => ({
     suite_kind: entry.suite_kind,
@@ -60,28 +56,19 @@ export async function putSuiteBuild(
   // skipped by going straight to the upload — but reported the way every other
   // local failure here is reported: against the branch it belongs to.
   //
+  // Since spec 42 that check is exactly one question, and it is about a branch
+  // the answer has *no* entry for: everything else it used to ask is now asked
+  // of the server, by a dry run, before this command runs at all. So its
+  // problems can never land on a branch this loop visits, and they are reported
+  // below rather than inside it.
+  //
   // An earlier draft threw and stopped the command, which quietly undid spec
-  // 32-5 Phase 4: one missing marker in the behavioral answer would have left a
-  // finished structural suite unpublished. Every problem this check raises is
-  // already named against a branch, so it blocks that branch and never the
-  // batch. That also bounds what a false positive in a local check can cost —
-  // one branch, with the peer still going up and the server still the authority.
-  const problemsFor = new Map<string, string[]>();
-  for (const problem of collectBuildProblems(request, outputs, unreadable)) {
-    problemsFor.set(problem.branch, [...(problemsFor.get(problem.branch) ?? []), problem.message]);
-  }
-
+  // 32-5 Phase 4: one behavioral problem would have left a finished structural
+  // suite unpublished. Every problem here is named against a branch, so it
+  // blocks that branch and never the batch.
   for (const output of outputs) {
-    const failed = problemsFor.get(output.suite_kind);
-    problemsFor.delete(output.suite_kind);
-    if (failed) {
-      blocked.push({ suite_kind: output.suite_kind, status: BLOCKED_STATUS, error: formatBranchProblems(failed) });
-      continue;
-    }
-
-    const sourceDigest = digestFor.get(output.suite_kind) ?? '';
     if (output.build_error) {
-      items.push({ suite_kind: output.suite_kind, source_digest: sourceDigest, build_error: output.build_error });
+      items.push(uploadItem(request, output, undefined));
       continue;
     }
     let testMetadata = output.test_metadata;
@@ -93,24 +80,15 @@ export async function putSuiteBuild(
         continue;
       }
     }
-    items.push({
-      suite_kind: output.suite_kind,
-      source_digest: sourceDigest,
-      artifacts: {
-        suite_file: output.suite_file,
-        runner_manifest: output.runner_manifest,
-        test_metadata: testMetadata,
-      },
-    });
+    items.push(uploadItem(request, output, testMetadata));
   }
 
-  // What is left in `problemsFor` belongs to a branch the loop above never
-  // reached, because the answer has no entry for it at all. It has nothing to
-  // upload and nothing to roll back, so it costs its peer nothing — but it is
+  // A branch the request asked for and the answer never mentions. It has nothing
+  // to upload and nothing to roll back, so it costs its peer nothing — but it is
   // exactly the branch that used to leave no trace anywhere, and the one line it
   // prints here is the whole point of noticing it (spec 32-6, a2time 2026-08-04).
-  for (const [suiteKind, messages] of problemsFor) {
-    blocked.push({ suite_kind: suiteKind, status: BLOCKED_STATUS, error: formatBranchProblems(messages) });
+  for (const problem of collectBuildProblems(request, outputs, unreadable)) {
+    blocked.push({ suite_kind: problem.branch, status: BLOCKED_STATUS, error: problem.message });
   }
 
   // Every branch is blocked, so there is nothing to upload. Asking the server to
@@ -128,48 +106,6 @@ export async function putSuiteBuild(
 // malformed. Not a server status — it never reaches the server — but it travels
 // as one so a single rule decides what counts as published (see `PUBLISHED`).
 const BLOCKED_STATUS = 'not_ready';
-
-// The behavioral branch's uploaded metadata, with the independent review and the
-// connector's own run evidence folded in.
-//
-// Throws for anything that leaves this branch unpublishable — a missing review,
-// one bound to a different candidate, a defect the review called not_supplied.
-// The caller turns that into one unpublished branch rather than a failed
-// command: a blocked review is a fact about the behavioral suite, and the
-// structural peer next to it is finished and correct. Sinking the whole upload
-// with it forced the one workaround this contract exists to prevent — hand-editing
-// the answer down to a single branch, which loses the peer candidate for real.
-function withReview(config: Config, request: SuiteBuildRequest, output: HostBranchOutput): unknown {
-  const review = readBehavioralReview(config.projectRoot, output);
-  const probe = review.known_defect_probe as Record<string, unknown> | null;
-  const qualityReview = review.bdd_quality_review as Record<string, unknown> | null;
-  if (!qualityReview || typeof qualityReview !== 'object') {
-    throw new Error('The separate behavioral review must contain a bdd_quality_review object.');
-  }
-  if (request.known_defect_context.status === 'supplied' && probe?.status === 'not_supplied') {
-    throw new Error('A known defect was supplied to suite-prepare, but the behavioral review marked it not_supplied.');
-  }
-  return {
-    ...(output.test_metadata as Record<string, unknown>),
-    bdd_quality_review: {
-      ...qualityReview,
-      candidate_digest: review.candidate_digest,
-    },
-    ...(review.selection_review ? { selection_review: review.selection_review } : {}),
-    known_defect_probe: review.known_defect_probe,
-    known_defect_context: request.known_defect_context,
-    candidate_run: review.candidate_run,
-    ...(review.fixed_candidate_run ? { fixed_candidate_run: review.fixed_candidate_run } : {}),
-  };
-}
-
-// The three outcomes that leave a branch published and current: a new version, an
-// identical version already stored, or a reactivated one. Each returns the
-// identity to run. Everything else — a rejected branch, a branch the host could
-// not build, or a status this connector has never seen — fails closed and is
-// never run, so a newer server can never trick an older connector into running
-// something it does not understand.
-const PUBLISHED = new Set(['created', 'unchanged', 'restored']);
 
 // Both halves of the answer come from one pass, because both are the same rule
 // read in opposite directions: `digests` is what the first run may execute, and
@@ -219,7 +155,25 @@ function printResult(result: SuiteBuildResult): string {
         .join(', ')
     : '';
   const digest = result.suite_digest ? ` (${result.suite_digest})` : '';
-  return `${result.suite_kind}: ${result.status}${digest}${tallies ? ` — ${tallies}` : ''}.`;
+  return (
+    `${result.suite_kind}: ${result.status}${digest}${tallies ? ` — ${tallies}` : ''}.` + printDowngrades(result)
+  );
+}
+
+// Spec 42, §7. A capability every one of whose Scenarios the review objected to
+// is stored `unguarded` by the publish. The run is standing right here when that
+// is decided, so it is told here, in the server's own words — finding it on the
+// map afterwards is how a run finishes believing it published a guarantee it did
+// not.
+function printDowngrades(result: SuiteBuildResult): string {
+  const downgraded = result.unguarded_by_review ?? [];
+  if (downgraded.length === 0) return '';
+
+  return (
+    `\n  ${downgraded.length} capability(ies) published unguarded, because the review objected to every ` +
+    'Scenario guarding them:\n' +
+    downgraded.map((entry) => `    - ${entry.capability_id}: ${entry.reason}`).join('\n')
+  );
 }
 
 // The server's own words when it sent any; otherwise the best true thing that can

@@ -13,17 +13,23 @@ export const RSPEC_SEED = '1';
 
 export const RSPEC_RESULT_FILE = join(GUARDRAILS_DIR, 'rspec_result.json');
 
-// Run the materialised Unitbob guardrail suite (spec 26). Only this file runs —
+// Run the materialised Unitbob guardrail suite (spec 26). Only these files run —
 // never the project's full suite — under RAILS_ENV=test with a fixed order/seed.
 // --options points at the materialized empty file so the project's own .rspec
 // (a --require of a helper we replaced, an extra stdout formatter) can neither
 // break the boot nor corrupt the JSON output. The JSON report goes to `--out`
 // (a file), not stdout, so the app's own stdout writes during the run can never
-// corrupt it. `suitePath` is the suite blob's own project-relative path.
-export async function runRspecSuite(projectRoot: string, suitePath: string): Promise<RunnerResult> {
+// corrupt it.
+//
+// `suitePaths` is every file of the branch in the suite blob's own
+// project-relative form (spec 42, §6.5). Named one by one rather than as a
+// directory: the artifact already says exactly which files it is, while a
+// directory would also collect whatever else happens to be sitting under the
+// root.
+export async function runRspecSuite(projectRoot: string, suitePaths: string[]): Promise<RunnerResult> {
   const optionsPath = join(GUARDRAILS_DIR, OPTIONS_FILE);
   const { result, command, args } = await invokeRspec(projectRoot, [
-    suitePath,
+    ...suitePaths,
     '--options',
     optionsPath,
     '--order',

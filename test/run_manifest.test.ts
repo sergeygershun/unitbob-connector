@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { runVitestSuite, VITEST_RESULT_FILE } from '../src/runner/vitest.ts';
+import { runVitestSuite, VITEST_CONFIG_FILE, VITEST_RESULT_FILE } from '../src/runner/vitest.ts';
 import { runPytestSuite, PYTEST_INI, PYTEST_INI_FILE, PYTEST_RESULT_FILE } from '../src/runner/pytest.ts';
 
 function tmpProject(): string {
@@ -33,19 +33,21 @@ async function withPath(dir: string, fn: () => Promise<void>): Promise<void> {
   }
 }
 
-test('vitest strategy: npx vitest run <suite> --reporter=json --outputFile=<result>', async () => {
+test('vitest strategy: npx vitest run <suite> --config <ours> --reporter=json --outputFile=<result>', async () => {
   const projectRoot = tmpProject();
   const fakeBin = fakeBinDir('npx', 'printf \'{"args":"%s","pwd":"%s"}\' "$*" "$(pwd)"');
   const suitePath = '.unitbob/structural/architecture_map_contracts.test.ts';
 
   await withPath(fakeBin, async () => {
-    const result = await runVitestSuite(projectRoot, suitePath);
+    const result = await runVitestSuite(projectRoot, [suitePath]);
 
     assert.equal(result.command, 'npx');
     assert.deepEqual(result.args, [
       'vitest',
       'run',
       suitePath,
+      '--config',
+      VITEST_CONFIG_FILE,
       '--reporter=json',
       `--outputFile=${VITEST_RESULT_FILE}`,
     ]);
@@ -61,7 +63,7 @@ test('vitest strategy: reads the JSON report from the output file', async () => 
   );
 
   await withPath(fakeBin, async () => {
-    const result = await runVitestSuite(projectRoot, '.unitbob/structural/x.test.ts');
+    const result = await runVitestSuite(projectRoot, ['.unitbob/structural/x.test.ts']);
     assert.deepEqual(JSON.parse(result.report), { testResults: [] });
     assert.match(result.stdout, /app noise/);
   });
@@ -73,7 +75,7 @@ test('pytest strategy: python -m pytest -c .unitbob/pytest.ini <suite> --junit-x
   const suitePath = '.unitbob/structural/test_architecture_map_contracts.py';
 
   await withPath(fakeBin, async () => {
-    const result = await runPytestSuite(projectRoot, suitePath);
+    const result = await runPytestSuite(projectRoot, [suitePath]);
 
     assert.equal(result.command, 'python3');
     assert.deepEqual(result.args, [
@@ -94,7 +96,7 @@ test('pytest strategy: creates the runtime .unitbob/pytest.ini before each run, 
   const fakeBin = fakeBinDir('python3', 'true');
 
   await withPath(fakeBin, async () => {
-    await runPytestSuite(projectRoot, '.unitbob/structural/test_x.py');
+    await runPytestSuite(projectRoot, ['.unitbob/structural/test_x.py']);
   });
 
   assert.equal(readFileSync(join(projectRoot, PYTEST_INI_FILE), 'utf8'), PYTEST_INI);
@@ -106,7 +108,7 @@ test('pytest strategy: reads the JUnit XML report from the result file', async (
   const fakeBin = fakeBinDir('python3', `mkdir -p .unitbob/structural; printf '${xml}' > ${PYTEST_RESULT_FILE}`);
 
   await withPath(fakeBin, async () => {
-    const result = await runPytestSuite(projectRoot, '.unitbob/structural/test_x.py');
+    const result = await runPytestSuite(projectRoot, ['.unitbob/structural/test_x.py']);
     assert.equal(result.report, xml);
   });
 });

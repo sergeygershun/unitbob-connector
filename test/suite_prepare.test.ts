@@ -172,9 +172,7 @@ test('suite-prepare prints a next-step naming both kinds, the output_path, and s
   assert.doesNotMatch(output, /run each locally to green/i);
 });
 
-test('suite-prepare materializes the boot helper right after the precheck', async () => {
-  const projectRoot = tmpProject();
-
+async function prepareIn(projectRoot: string): Promise<void> {
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
     precheck: okPrecheck,
     bootCheck: okBoot,
@@ -184,10 +182,37 @@ test('suite-prepare materializes the boot helper right after the precheck', asyn
     getSuitePacketsBatch: async () => packets(),
     stdout: { write: () => true },
   });
+}
+
+test('suite-prepare materializes the boot helper right after the precheck, in a Ruby project', async () => {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, 'Gemfile'), "gem 'rails'\ngem 'rspec-rails'\n");
+
+  await prepareIn(projectRoot);
 
   const helperPath = join(projectRoot, '.unitbob', 'structural', 'unitbob_helper.rb');
   assert.equal(readFileSync(helperPath, 'utf8'), UNITBOB_HELPER_RB);
 });
+
+// Spec 42, §5.1. This step was unconditional, so a Flask app and a NestJS app
+// each came away with a Ruby boot helper and an `rspec.opts` they cannot run and
+// never asked for — the product leaving another stack's litter in someone's
+// repository.
+for (const [stack, marker, contents] of [
+  ['Python', 'requirements.txt', 'flask\n'],
+  ['JavaScript', 'package.json', '{}'],
+] as const) {
+  test(`suite-prepare writes no Ruby file into a ${stack} project`, async () => {
+    const projectRoot = tmpProject();
+    writeFileSync(join(projectRoot, marker), contents);
+
+    await prepareIn(projectRoot);
+
+    const structural = join(projectRoot, '.unitbob', 'structural');
+    assert.equal(existsSync(join(structural, 'unitbob_helper.rb')), false);
+    assert.equal(existsSync(join(structural, 'rspec.opts')), false);
+  });
+}
 
 test('suite-prepare stops on an unsupported runtime and writes nothing', async () => {
   const projectRoot = tmpProject();

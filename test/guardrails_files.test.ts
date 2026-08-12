@@ -51,6 +51,50 @@ test('materializes a vitest suite without the Ruby boot kit', () => {
   assert.equal(existsSync(join(dir, 'rspec.opts')), false);
 });
 
+// Spec 42, §6.4. A branch is one file per assignment now. This step wiped the
+// directory and wrote only the main file back, so a published four-file suite
+// came back as one — and the run that followed it protected a quarter of what
+// the map claimed, without a word.
+test('materializes every file of a multi-file branch', () => {
+  const projectRoot = tmpProject();
+  const suite: SuiteBlob = {
+    suite_digest: 'd1',
+    suite_file: {
+      path: '.unitbob/structural/billing_spec.rb',
+      content: "it 'charges' do\nend\n",
+      support_files: [
+        { path: '.unitbob/structural/reporting_spec.rb', content: "it 'reports' do\nend\n" },
+        { path: '.unitbob/structural/access/access_spec.rb', content: "it 'admits' do\nend\n" },
+      ],
+    },
+    runner_manifest: { language: 'ruby', framework: 'rspec', result_format: 'rspec_json', runner: 'rspec' },
+  };
+
+  const written = materializeGuardrails(projectRoot, suite);
+
+  const dir = join(projectRoot, '.unitbob', 'structural');
+  assert.equal(readFileSync(join(dir, 'billing_spec.rb'), 'utf8'), "it 'charges' do\nend\n");
+  assert.equal(readFileSync(join(dir, 'reporting_spec.rb'), 'utf8'), "it 'reports' do\nend\n");
+  assert.equal(readFileSync(join(dir, 'access', 'access_spec.rb'), 'utf8'), "it 'admits' do\nend\n");
+  assert.equal(written.supportPaths.length, 2);
+});
+
+test('refuses an unsafe path anywhere in the branch, and writes nothing', () => {
+  const projectRoot = tmpProject();
+  const suite: SuiteBlob = {
+    suite_digest: 'd1',
+    suite_file: {
+      path: '.unitbob/structural/billing_spec.rb',
+      content: 'x\n',
+      support_files: [{ path: 'spec/pwned_spec.rb', content: 'x\n' }],
+    },
+    runner_manifest: { language: 'ruby', framework: 'rspec', result_format: 'rspec_json', runner: 'rspec' },
+  };
+
+  assert.throws(() => materializeGuardrails(projectRoot, suite), /relative path under/);
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'structural', 'billing_spec.rb')), false);
+});
+
 test('refuses unsafe suite paths and writes nothing', () => {
   const projectRoot = tmpProject();
   const unsafe = [

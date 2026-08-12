@@ -15,9 +15,15 @@ branch and worker id, your promises in `unresolved_promises`, and the facts it
 had already verified. Never initialize it again — not on the first incarnation,
 and not on an explicitly approved fresh incarnation after a native budget stop,
 where you preserve the supplied checkpoint and completed files and continue only
-its `unresolved_promises`. Update it after every completed promise. Also keep
-`known_problems` as a compact array of precise unresolved harness problems
-(empty when none are known). Facts are short statements with source references.
+its `unresolved_promises`. Update it after every completed promise.
+
+Three arrays besides the promises must always be present, empty when you have
+nothing to put in them: `written_paths` (only your own `owned_paths`),
+`decisions` (short statements of what you chose), and `known_problems` (precise
+unresolved harness problems). A missing array is not an empty one — the gate
+that reads this checkpoint refuses it either way.
+
+Facts are short statements with source references.
 The normative JSON shape of one facts entry is:
 ```json
 {"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}

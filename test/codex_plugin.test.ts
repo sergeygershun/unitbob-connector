@@ -21,7 +21,7 @@ const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.ur
 
 test('the co-located Unitbob bundle is a Codex plugin using the shared skill', () => {
   assert.equal(manifest.name, 'unitbob');
-  assert.equal(manifest.version, '0.4.5');
+  assert.equal(manifest.version, '0.5.0');
   assert.equal(manifest.skills, './skills/');
   assert.equal(manifest.description, 'Unitbob business maps and executable guardrails for Codex.');
   for (const name of ['map', 'suite', 'check', 'show', 'fix']) {

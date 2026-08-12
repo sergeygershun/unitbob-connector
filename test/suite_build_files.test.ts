@@ -278,9 +278,35 @@ test('readSuiteBuildRequest errors with guidance when the task is missing', () =
   assert.throws(() => readSuiteBuildRequest(projectRoot), /run `npx unitbob suite-prepare` first/);
 });
 
+// The same fixture and the same value as `spec/models/suite_version_spec.rb` on
+// the server. Two serializers that sort object keys and do nothing else — no
+// path ordering, no line-ending normalization — which is exactly why they agree.
+// A normalization added on one side alone breaks every behavioral upload, and
+// this pair of pinned values is the only thing that would catch it.
 test('shares a golden behavioral review candidate digest with the server', () => {
   assert.equal(
     suiteCandidateDigest(behavioralBranch()),
-    '21190d11f9124c4d64f6373dcc40abcc03f0c1aec872ebf9ef5dd682ca8836ee',
+    '37de05cb0fb0f2ca404814a353b8d45e2f5610a60efdc5a902f575c8f5add81c',
   );
+});
+
+// Spec 42, §4. The digest names what the reviewer read. Editing metadata — the
+// very fix the server had demanded, on a run where the reviewer was right — used
+// to declare the review stale and cost a re-binding plus a second reviewer pass
+// while the suite files stood untouched.
+test('a metadata edit leaves the candidate digest where it was', () => {
+  const before = suiteCandidateDigest(behavioralBranch());
+  const edited = behavioralBranch();
+  edited.test_metadata = {
+    capabilities: [{ capability_id: 'billing', deferred_surfaces: ['PUT /orders/:id'] }],
+  };
+
+  assert.equal(suiteCandidateDigest(edited), before);
+});
+
+test('a suite file edit moves it', () => {
+  const edited = behavioralBranch();
+  (edited.suite_file as Record<string, unknown>).content = 'Feature: something else\n';
+
+  assert.notEqual(suiteCandidateDigest(edited), suiteCandidateDigest(behavioralBranch()));
 });

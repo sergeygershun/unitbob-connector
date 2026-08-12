@@ -37,7 +37,7 @@ const OUTPUT_TAIL_CHARS = 4000;
 // process said. Joining results to the map stays the server's job — this exists
 // so that when the recipe says "iterate", there is something to iterate on.
 export interface RunLocalDeps {
-  runStructural: (projectRoot: string, runner: string, suitePath: string) => Promise<RunnerResult>;
+  runStructural: (projectRoot: string, runner: string, suitePaths: string[]) => Promise<RunnerResult>;
   runBehavioral: (projectRoot: string, runner: string, mainPath: string) => Promise<RunnerResult>;
   validateStack: typeof validateStack;
   stdout: { write: (chunk: string) => unknown };
@@ -181,10 +181,10 @@ async function runOneBranch(
   }
 
   let runner: string;
-  let suitePath: string;
+  let suitePaths: string[];
   try {
     runner = branchRunner(output);
-    suitePath = mainPathOf(output);
+    suitePaths = artifactPathsOf(output);
   } catch (err) {
     d.stdout.write(`Cannot run this branch: ${(err as Error).message}\n`);
     return null;
@@ -200,8 +200,8 @@ async function runOneBranch(
   try {
     result =
       suiteKind === 'behavioral'
-        ? await d.runBehavioral(config.projectRoot, runner, suitePath)
-        : await d.runStructural(config.projectRoot, runner, suitePath);
+        ? await d.runBehavioral(config.projectRoot, runner, suitePaths[0])
+        : await d.runStructural(config.projectRoot, runner, suitePaths);
   } catch (err) {
     d.stdout.write(`The runner could not start: ${(err as Error).message}\n`);
     return null;
@@ -246,14 +246,28 @@ function outputTail(result: RunnerResult): string {
   return joined.length > OUTPUT_TAIL_CHARS ? joined.slice(-OUTPUT_TAIL_CHARS) : joined;
 }
 
-// The suite blob's own project-relative path, exactly as the runners expect it.
-function mainPathOf(output: HostBranchOutput): string {
+// The suite blob's own project-relative paths, exactly as the runners expect
+// them: the main file first, then every other file of the branch. The main file
+// stopped being the whole suite in spec 42, §6 — a branch is one file per
+// assignment now — and running it alone would exercise a fraction of what the
+// answer claims to guard.
+//
+// The behavioral runners are given the main `.feature` and find the rest
+// themselves: all three are pointed at the directory (`bdd.ts`), which is why a
+// multi-file behavioral branch already worked before this spec.
+function artifactPathsOf(output: HostBranchOutput): string[] {
   const file = output.suite_file as Record<string, unknown> | undefined;
   const path = file?.path;
   if (typeof path !== 'string' || !path) {
     throw new Error('this branch names no suite file to run.');
   }
-  return path;
+
+  const support = Array.isArray(file?.support_files) ? file.support_files : [];
+  const rest = support
+    .map((entry) => (entry as Record<string, unknown> | null)?.path)
+    .filter((candidate): candidate is string => typeof candidate === 'string' && candidate.length > 0);
+
+  return [path, ...rest];
 }
 
 function branchRoot(config: Config, suiteKind: string): string {

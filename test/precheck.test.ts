@@ -231,14 +231,43 @@ test('a sidecar runner counts as ready on every stack', () => {
   mkdirSync(jsBin, { recursive: true });
   writeFileSync(join(jsBin, 'vitest'), '', { mode: 0o755 });
   assert.deepEqual(runnerReadyPrecheck(js, 'vitest', pytestMissing), { ok: true });
-  // The project itself still has no vitest — which is what `validateStack`
-  // answers, correctly, about a different question.
-  assert.equal(validateStack(js, 'vitest', pytestMissing).ok, false);
 
   const ruby = rubyProject("gem 'rails'\n");
   mkdirSync(join(ruby, SIDECAR_DIR), { recursive: true });
   writeFileSync(join(ruby, SIDECAR_DIR, 'Gemfile'), 'gem "rspec-rails"\n');
   assert.deepEqual(runnerReadyPrecheck(ruby, 'rspec', pytestMissing), { ok: true });
+});
+
+// Spec 42, §5.3. `validateStack` runs on every `run` and `run-local`, long after
+// provisioning, and it used to answer the earlier question: does the *project*
+// carry this runner. So a project Unitbob had just equipped was told to edit its
+// Gemfile or to `npm i -D vitest` — advice for something it now has. The stack
+// checks themselves are untouched: a Sinatra project is still not Rails.
+test('advice to install a runner is not given to a project that already has one in the sidecar', () => {
+  const js = tmpProject();
+  writeFileSync(join(js, 'package.json'), '{}');
+  assert.equal(validateStack(js, 'vitest', pytestMissing).ok, false);
+  const jsBin = join(js, SIDECAR_DIR, 'node_modules', '.bin');
+  mkdirSync(jsBin, { recursive: true });
+  writeFileSync(join(jsBin, 'vitest'), '', { mode: 0o755 });
+  assert.deepEqual(validateStack(js, 'vitest', pytestMissing), { ok: true });
+
+  const ruby = rubyProject("gem 'rails'\n");
+  assert.match(validateStack(ruby, 'rspec', pytestMissing).message ?? '', /rspec-rails/);
+  mkdirSync(join(ruby, SIDECAR_DIR), { recursive: true });
+  writeFileSync(join(ruby, SIDECAR_DIR, 'Gemfile'), 'gem "rspec-rails"\n');
+
+  // The Gemfile alone is not the gem. `provisionRspec` writes it before it runs
+  // bundler and leaves it behind when bundler fails, so treating its existence
+  // as proof would silence this advice in exactly the case that needs it.
+  assert.match(validateStack(ruby, 'rspec', pytestMissing).message ?? '', /rspec-rails/);
+
+  writeFileSync(join(ruby, SIDECAR_DIR, 'Gemfile.lock'), "GEM\n  specs:\n    rspec-rails (6.1.1)\n");
+  assert.deepEqual(validateStack(ruby, 'rspec', pytestMissing), { ok: true });
+
+  // A project that is not the stack at all is still refused — the sidecar
+  // answers "is the runner here", never "is this the right kind of project".
+  assert.equal(validateStack(rubyProject("gem 'sinatra'\n"), 'rspec', pytestMissing).ok, false);
 });
 
 test('nothing installed anywhere is refused, naming both places we looked', () => {

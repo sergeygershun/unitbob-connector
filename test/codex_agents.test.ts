@@ -33,13 +33,41 @@ test('Codex suite agents use the accepted cheaper models and an emergency rollou
   assert.match(repair, /^limit_tokens = 100000$/m);
 });
 
-test('only the three risky Codex roles are installed and budgeted', () => {
+test('every bounded Codex role is installed and budgeted', () => {
   const names = readdirSync(`${root}/plugin/codex/agents`).sort();
 
-  assert.deepEqual(names, ['fact-finder.toml', 'suite-repair-worker.toml', 'suite-worker.toml']);
+  assert.deepEqual(names, [
+    'fact-finder.toml',
+    'suite-repair-worker.toml',
+    'suite-reviewer.toml',
+    'suite-worker.toml',
+  ]);
   for (const name of names) {
     assert.match(codexAgent(name.replace(/\.toml$/, '')), /^\[features\.rollout_budget\]$/m);
   }
+});
+
+// Spec 42, §7.8. The review schema was written from memory on every run, and
+// three runs out of four lost their publish to it: an invented `outcome_kind`
+// vocabulary, `candidate_digest` nested one level too deep, and a coordinator's
+// "no other top-level keys" that dropped the digest altogether. The schema now
+// travels with the role.
+test('the reviewer role carries the review schema the upload actually requires', () => {
+  const claude = readFileSync(`${root}/plugin/agents/suite-reviewer.md`, 'utf8');
+
+  assert.match(claude, /^model: sonnet$/m);
+  assert.match(claude, /^disallowedTools: Edit, NotebookEdit$/m);
+  assert.match(claude, /at the top level/i);
+  assert.match(claude, /"outcome_kind": "specific"/);
+  assert.match(claude, /`specific` or `availability`, and nothing else/);
+  for (const verdict of ['pass_with_reservation', 'does_not_pass', 'reviewer_objection_text', 'selection_review']) {
+    assert.ok(claude.includes(verdict), `the schema names ${verdict}`);
+  }
+  // And what its own verdict does, or `does_not_pass` reads as a note filed
+  // somewhere rather than the one thing standing between an empty Scenario and
+  // a green light.
+  assert.match(claude, /stored\s+`unguarded` at publish/i);
+  assert.match(claude, /never\s+downgrades anything/i);
 });
 
 test('Codex fact finder is cheap, read-only, and bounded', () => {
@@ -53,7 +81,7 @@ test('Codex fact finder is cheap, read-only, and bounded', () => {
 });
 
 test('Codex and Claude definitions carry the same behavioral instructions with host role names', () => {
-  for (const name of ['suite-worker', 'suite-repair-worker', 'fact-finder']) {
+  for (const name of ['suite-worker', 'suite-repair-worker', 'fact-finder', 'suite-reviewer']) {
     const claude = readFileSync(`${root}/plugin/agents/${name}.md`, 'utf8');
     const body = claude.slice(claude.indexOf('\n---\n', 3) + 5).trim();
     const codex = codexAgent(name);
@@ -82,7 +110,7 @@ test('codex-install places all definitions in the Codex user agent directory', (
 
   installCodexAgents([], { home, stdout: { write: (chunk) => output.push(chunk) } });
 
-  for (const name of ['suite-worker', 'suite-repair-worker', 'fact-finder']) {
+  for (const name of ['suite-worker', 'suite-repair-worker', 'fact-finder', 'suite-reviewer']) {
     const installed = join(home, '.codex', 'agents', `${name}.toml`);
     assert.ok(existsSync(installed), `${name} was not installed`);
     assert.equal(readFileSync(installed, 'utf8'), codexAgent(name));

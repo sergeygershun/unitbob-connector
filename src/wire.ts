@@ -78,6 +78,11 @@ export interface SuiteBuildResult {
   suite_digest?: string;
   error?: string;
   counts?: Record<string, number>;
+  // Capabilities the publish stored `unguarded` because the review objected to
+  // every Scenario guarding them (spec 42, §7). Present only when it happened —
+  // the run is standing here when the decision is made, and should not first
+  // meet it as a grey lamp on the map.
+  unguarded_by_review?: Array<{ capability_id: string; reason: string }>;
 }
 
 export interface SuiteBuildUploadResult {
@@ -150,7 +155,20 @@ export interface FixPacket {
 
 // Raised when the server cannot be reached or answers with an error status.
 // Verbs surface its message and exit non-zero; they never fabricate a result.
-export class WireError extends Error {}
+//
+// `unreachable` separates the two cases. "The server said no" is a verdict and
+// must stop the caller; "there was no server to ask" is an absence, and a check
+// that reads an absence as a verdict either invents a rejection or invents an
+// approval. `validate-build` is the caller that needs the difference: with no
+// server it succeeds, and says out loud which questions went unasked.
+export class WireError extends Error {
+  readonly unreachable: boolean;
+
+  constructor(message: string, options: { unreachable?: boolean } = {}) {
+    super(message);
+    this.unreachable = options.unreachable ?? false;
+  }
+}
 
 // The pair a new project is born with (spec 33): the brain's internal id, and
 // the token that is the only proof of ownership there is.
@@ -244,8 +262,15 @@ export class Wire {
   // PUT /repos/:id/suite_builds — upload both peer branches in one batch (spec
   // 32). Each item is validated and published independently; the response
   // carries one result per suite_kind.
-  async putSuiteBuilds(items: SuiteBuildItem[]): Promise<SuiteBuildResult[]> {
-    const res = await this.send('PUT', this.repoPath('suite_builds'), { suite_builds: items });
+  //
+  // `dryRun` is the same route, the same body and the same server-side
+  // validation, stopped before the first write (spec 42, §1). It answers
+  // `would_publish` instead of `created`, and it is deliberately not a route of
+  // its own: a second route would grow a second implementation, which is the
+  // defect this whole spec removes.
+  async putSuiteBuilds(items: SuiteBuildItem[], options: { dryRun?: boolean } = {}): Promise<SuiteBuildResult[]> {
+    const payload = options.dryRun ? { suite_builds: items, dry_run: true } : { suite_builds: items };
+    const res = await this.send('PUT', this.repoPath('suite_builds'), payload);
     await this.ensureOk(res, `PUT ${this.repoPath('suite_builds')}`);
     const body = (await res.json()) as { results?: unknown };
     if (!Array.isArray(body.results)) {
@@ -408,6 +433,7 @@ export class Wire {
         `Cannot reach the Unitbob server at ${this.config.server} ` +
           `(${(err as Error).message}). Check that the server is running and that ` +
           `"server" in .unitbob.json is correct.`,
+        { unreachable: true },
       );
     }
   }

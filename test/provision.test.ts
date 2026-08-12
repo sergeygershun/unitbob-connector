@@ -200,6 +200,24 @@ test('ensureStructuralRunner installs the application\'s packages and pytest int
   assert.equal(deps.calls[2], `${venvPython} -m pip install pytest`);
 });
 
+// Spec 42, §5.4. Detection accepts `pyproject.toml` and `Pipfile`; this builder
+// only ever read `requirements*.txt`, and finding nothing to install counted as
+// nothing needing installation. So a sidecar holding pytest and not one line of
+// the application was reported as a success, and the failure surfaced much
+// later, as a suite that could not import what it was written to guard.
+test('a Python project with no requirements file says so instead of reporting an empty environment', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-provision-pyproject-'));
+  writeFileSync(join(projectRoot, 'pyproject.toml'), '[project]\nname = "shop"\ndependencies = ["flask"]\n');
+  const deps: ProvisionDeps = { tools: noTools, runCmd: async () => ({ code: 0, stdout: '', stderr: '' }) };
+
+  const result = await ensureStructuralRunner(projectRoot, 'pytest', deps);
+
+  assert.equal(result.status, 'provisioned');
+  const notes = result.checklist?.join('\n') ?? '';
+  assert.match(notes, /packages are not installed/);
+  assert.match(notes, /pyproject\.toml/);
+});
+
 test('a requirements file that will not install is a note, not a refusal', async () => {
   const projectRoot = tmpProject();
   const deps: ProvisionDeps = {

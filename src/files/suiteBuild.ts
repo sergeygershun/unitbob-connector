@@ -184,12 +184,27 @@ export function branchRunner(output: HostBranchOutput): string {
   return runner;
 }
 
+// What the reviewer actually read: the suite files, and the manifest that runs
+// them. Nothing else (spec 42, §4).
+//
+// `test_metadata` used to be in here, and the server's copy of this formula
+// stripped the review's own keys back out to match — two lists that had to stay
+// identical for ever or every upload would break. The real cost was elsewhere,
+// though: editing metadata declared the review stale. On noahsat-web,
+// 2026-08-12 the reviewer was right that the steps drive only `PATCH`, the fix
+// moved three `PUT` aliases into a deferred list, not one byte of the suite
+// moved — and the run still paid for re-binding the candidate and a second
+// reviewer pass, the most expensive step of the whole recipe, to satisfy the
+// reviewer's own finding.
+//
+// `stableJson` sorts object keys and does nothing else. The server's
+// `canonical_json` does the same, which is the only reason the two sides agree;
+// a normalization added on one side alone would break every upload.
 export function suiteCandidateDigest(output: HostBranchOutput): string {
   return createHash('sha256')
     .update(stableJson({
       suite_file: output.suite_file,
       runner_manifest: output.runner_manifest,
-      test_metadata: output.test_metadata,
     }))
     .digest('hex');
 }

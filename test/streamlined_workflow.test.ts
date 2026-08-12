@@ -314,7 +314,11 @@ test('the coordinator workflow is finite where it matters and no longer rations 
 
 test('repair packets run sequentially and validate owned cases before one final run', () => {
   assert.match(flat, /repair packets sequentially/i);
-  assert.match(flat, /repeat.*edit.*run-local <branch>.*inspect/i);
+  // Anchored on the loop itself, then on the permission to repeat it. The
+  // earlier form asked for `repeat` first and was satisfied by an unrelated
+  // "workers do not repeat it locally" several steps above — passing, but never
+  // for its own reason.
+  assert.match(flat, /edit → run-local <branch> → inspect.*may repeat that loop/i);
   assert.match(flat, /only.*owned paths.*case markers/i);
   assert.match(flat, /does not require.*green.*whole branch/i);
   assert.match(flat, /after all.*repair packets.*exactly once as the final run/i);

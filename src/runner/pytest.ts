@@ -17,16 +17,19 @@ export const PYTEST_INI_FILE = join('.unitbob', 'pytest.ini');
 export const PYTEST_INI = '[pytest]\naddopts =\n';
 
 // Run the materialised Unitbob guardrail suite with pytest (spec 30) — no
-// guessing at Poetry/uv/virtualenv wrappers. Only the guardrail file runs; the
+// guessing at Poetry/uv/virtualenv wrappers. Only the guardrail files run; the
 // JUnit XML report goes to --junit-xml, not stdout. The command is
 // connector-owned: the suite artifact never carries a command string.
+//
+// Every file of the branch is named positionally (spec 42, §6.5) — a branch is
+// one file per assignment now, and pytest takes as many paths as it is given.
 //
 // Which pytest is a single question answered in one place (`locateRunner`), so
 // the precheck, the boot check and this run can never end up talking about
 // different interpreters. `python` is the last resort when nothing was found:
 // spawning it produces the honest "No module named pytest" rather than a silent
 // no-op, and the checks upstream have already had their chance to say so first.
-export async function runPytestSuite(projectRoot: string, suitePath: string): Promise<RunnerResult> {
+export async function runPytestSuite(projectRoot: string, suitePaths: string[]): Promise<RunnerResult> {
   writeFileSync(join(projectRoot, PYTEST_INI_FILE), PYTEST_INI);
 
   const located = locateRunner(projectRoot, 'pytest');
@@ -35,7 +38,7 @@ export async function runPytestSuite(projectRoot: string, suitePath: string): Pr
     ...(located?.args ?? ['-m', 'pytest']),
     '-c',
     PYTEST_INI_FILE,
-    suitePath,
+    ...suitePaths,
     `--junit-xml=${PYTEST_RESULT_FILE}`,
   ];
 

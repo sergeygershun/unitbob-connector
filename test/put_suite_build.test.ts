@@ -475,37 +475,27 @@ test('put-suite-build asks the server for nothing when every branch is blocked',
   assert.deepEqual(classifyPublication(results), { digests: [], unpublished: ['behavioral', 'structural'] });
 });
 
-// Spec 32-6 Phase 3. The same check as `unitbob validate-build`, run here too
-// so going straight to the upload cannot skip it — and reported against the
-// branch it belongs to, like every other local failure in this command.
+// Spec 32-6 Phase 3, narrowed by spec 42: the local checks are now only the ones
+// the server cannot make, so a branch fails locally when its files or its review
+// will not come together. The rule under test is the same one, and it is why
+// these exist — one branch's local failure never sinks the peer beside it.
 //
-// The first draft threw and stopped everything. That quietly undid the rule
-// above: one missing marker in the behavioral answer would have left a finished
-// structural suite unpublished. These tests are what stops it coming back.
-test('a branch whose answer fails the local check is blocked, and its peer still publishes', async () => {
+// The first draft threw and stopped everything. That quietly undid the rule: a
+// behavioral problem would have left a finished structural suite unpublished.
+test('a branch whose review names another candidate is blocked, and its peer still publishes', async () => {
   const projectRoot = tmpProject();
-  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
-
-  // A real assignment on the behavioral branch only, so the structural peer has
-  // nothing to account for and is unaffected.
-  const task = branches();
-  task[1].assignment = {
-    capabilities: [{ capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ubc_0123456789ab' }],
-  };
-  writeSuiteBuildRequest(projectRoot, task);
+  writeTask(projectRoot);
 
   const behavioral = behavioralBranch();
-  // Answered "covered" with a marker the server never minted.
-  behavioral.test_metadata = {
-    capabilities: [{
-      capability_id: 'checkout', status: 'covered',
-      contract_key: 'contract:checkout', case_marker: 'ubc_ffffffffffff',
-    }],
-  };
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
   writeReview(projectRoot, behavioral);
+  writeFileSync(reviewOutputPath(projectRoot), JSON.stringify({
+    candidate_digest: 'f'.repeat(64),
+    bdd_quality_review: { reviewer: 'independent', scenario_reviews: [] },
+    known_defect_probe: { status: 'not_supplied' },
+  }));
 
-  await assertBehavioralBlocked(projectRoot, /must be copied verbatim as "ubc_0123456789ab"/);
+  await assertBehavioralBlocked(projectRoot, /candidate/i);
 });
 
 // Reading the answer is itself a check, and it is done branch by branch for the
@@ -526,26 +516,13 @@ test('a branch whose entry cannot even be read is blocked, and its peer still pu
 // there is nothing left to upload, not because the command gave up early.
 test('every branch failing the local check uploads nothing and still reports both', async () => {
   const projectRoot = tmpProject();
-  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
-
-  const task = branches();
-  task[0].assignment = {
-    blocks: [{
-      block_id: 'billing',
-      interfaces: [{ interface_id: 'billing_charge', contract_key: 'contract:billing_charge', case_marker: 'ubc_0123456789ab' }],
-    }],
-  };
-  task[1].assignment = {
-    capabilities: [{ capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ubc_ba9876543210' }],
-  };
-  writeSuiteBuildRequest(projectRoot, task);
+  writeTask(projectRoot);
 
   const structural = structuralBranch();
-  structural.test_metadata = { capabilities: [{ interface_id: 'billing_charge', status: 'sort-of' }] };
   const behavioral = behavioralBranch();
-  behavioral.test_metadata = { capabilities: [{ capability_id: 'checkout', status: 'sort-of' }] };
+  delete structural.runner_manifest;
+  delete behavioral.runner_manifest;
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structural, behavioral] }));
-  writeReview(projectRoot, behavioral);
 
   let uploaded = false;
   const results = await putSuiteBuild(config(projectRoot), [], {
@@ -555,40 +532,15 @@ test('every branch failing the local check uploads nothing and still reports bot
 
   assert.equal(uploaded, false, 'an empty batch is never sent to the server');
   assert.deepEqual(results.map((r) => r.status), ['not_ready', 'not_ready']);
-  for (const result of results) assert.match(result.error ?? '', /must be answered "covered" or "unguarded"/);
+  for (const result of results) assert.match(result.error ?? '', /missing runner_manifest/);
 });
 
-// Several problems in one branch arrive together, not one per attempt.
-test('a branch reports all of its problems in one line, not the first one', async () => {
-  const projectRoot = tmpProject();
-  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
-
-  const task = branches();
-  task[1].assignment = {
-    capabilities: [
-      { capability_id: 'checkout', contract_key: 'contract:checkout', case_marker: 'ubc_0123456789ab' },
-      { capability_id: 'refunds', contract_key: 'contract:refunds', case_marker: 'ubc_ba9876543210' },
-    ],
-  };
-  writeSuiteBuildRequest(projectRoot, task);
-
-  const behavioral = behavioralBranch();
-  behavioral.test_metadata = {
-    capabilities: [{ capability_id: 'checkout', status: 'unguarded', reason: '' }],
-  };
-  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
-  writeReview(projectRoot, behavioral);
-
-  const results = await putSuiteBuild(config(projectRoot), [], {
-    putSuiteBuilds: async (items) => okResults.filter((r) => items.some((i) => i.suite_kind === r.suite_kind)),
-    stdout: { write: () => true },
-  });
-
-  const behavioralResult = results.find((r) => r.suite_kind === 'behavioral');
-  // The empty reason and the unanswered id, in one report.
-  assert.match(behavioralResult?.error ?? '', /gives no business reason/);
-  assert.match(behavioralResult?.error ?? '', /no answer for 1 assigned id\(s\): refunds/);
-});
+// "Several problems in one branch arrive together, not one per attempt" was
+// pinned here while this command held a copy of the server's rules. Since spec
+// 42 those rules are asked of the server by `validate-build`, which reports its
+// whole batch at once (`formatProblems`), and exactly one local problem per
+// branch is reachable here. The batching rule did not go away; it moved to
+// where the batch now is.
 
 // The exact shape of the a2time run of 2026-08-04: the behavioral branch was
 // prepared, half-built and abandoned, and the answer went up carrying only the

@@ -9,7 +9,7 @@ import { runBddSuite } from '../runner/bdd.ts';
 import type { RunnerResult } from '../runner/types.ts';
 import { enterUrl } from '../links.ts';
 import { boundReport } from '../runner/boundReport.ts';
-import { Wire, type RunResultItem, type SuiteListItem } from '../wire.ts';
+import { Wire, type RunResultItem, type SuiteArtifact, type SuiteListItem } from '../wire.ts';
 
 const OUTPUT_TAIL_CHARS = 2000;
 
@@ -28,7 +28,7 @@ interface Deps {
   postRunsBatch: (runs: unknown[]) => Promise<{ results: RunResultItem[]; map_url: string }>;
   materializeStructural: (projectRoot: string, item: SuiteListItem) => void;
   materializeBehavioral: (projectRoot: string, item: SuiteListItem) => string;
-  runStructural: (projectRoot: string, runner: string, suitePath: string) => Promise<RunnerResult>;
+  runStructural: (projectRoot: string, runner: string, suitePaths: string[]) => Promise<RunnerResult>;
   runBehavioral: (projectRoot: string, runner: string, mainPath: string) => Promise<RunnerResult>;
   validateStack: (projectRoot: string, runner: string) => PrecheckResult;
   stdout: { write: (chunk: string) => unknown };
@@ -54,10 +54,13 @@ function resolve(config: Config, deps?: Partial<Deps>): Deps {
   return {
     getSuites: () => wire.getSuites(),
     postRunsBatch: (runs) => wire.postRunsBatch(runs),
+    // The whole envelope, support files and all: a branch is a set of files
+    // since spec 42, §6, and picking `path` and `content` out of it here was
+    // where the rest of them used to be lost.
     materializeStructural: (projectRoot, item) =>
       materializeGuardrails(projectRoot, {
         suite_digest: item.suite_digest!,
-        suite_file: { path: item.suite_file!.path, content: item.suite_file!.content },
+        suite_file: item.suite_file!,
         runner_manifest: item.runner_manifest!,
       }),
     materializeBehavioral: (projectRoot, item) =>
@@ -135,7 +138,7 @@ async function buildRunPayload(config: Config, d: Deps, item: SuiteListItem): Pr
       result = await d.runBehavioral(config.projectRoot, runner, mainPath);
     } else {
       d.materializeStructural(config.projectRoot, item);
-      result = await d.runStructural(config.projectRoot, runner, item.suite_file!.path);
+      result = await d.runStructural(config.projectRoot, runner, artifactPaths(item.suite_file!));
     }
   } catch (err) {
     return suiteError(item.suite_digest!, (err as Error).message);
@@ -159,17 +162,28 @@ async function buildRunPayload(config: Config, d: Deps, item: SuiteListItem): Pr
 // Exported for `run-local`, which runs these same strategies against the files
 // the host just wrote rather than against a published suite. One dispatch table,
 // so the command the loop iterates on is the command that runs after publishing.
-export function runStructuralByRunner(projectRoot: string, runner: string, suitePath: string): Promise<RunnerResult> {
+export function runStructuralByRunner(
+  projectRoot: string,
+  runner: string,
+  suitePaths: string[],
+): Promise<RunnerResult> {
   switch (runner) {
     case 'rspec':
-      return runRspecSuite(projectRoot, suitePath);
+      return runRspecSuite(projectRoot, suitePaths);
     case 'vitest':
-      return runVitestSuite(projectRoot, suitePath);
+      return runVitestSuite(projectRoot, suitePaths);
     case 'pytest':
-      return runPytestSuite(projectRoot, suitePath);
+      return runPytestSuite(projectRoot, suitePaths);
     default:
       return Promise.reject(new Error(`Unsupported runner "${runner}" — rebuild the suite.`));
   }
+}
+
+// Every file of the branch, in the order the envelope carries them. A structural
+// branch is one file per assignment since spec 42, §6, and running only the main
+// one would execute a fraction of what the map says is guarded.
+function artifactPaths(file: SuiteArtifact): string[] {
+  return [file.path, ...(file.support_files ?? []).map((entry) => entry.path)];
 }
 
 function suiteError(suiteDigest: string, message: string): unknown {

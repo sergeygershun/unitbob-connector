@@ -10,6 +10,11 @@ import { dirname, isAbsolute, join } from 'node:path';
 export interface SuiteFile {
   path: string;
   content: string;
+  // The rest of the branch's files. Since spec 42, §6 a structural branch is
+  // one file per assignment rather than one file for the whole branch, and all
+  // of them are the suite. Dropping them here meant a published multi-file suite
+  // could not be reproduced on the machine it came from.
+  support_files?: SuiteFile[];
 }
 
 export interface RunnerManifest {
@@ -89,23 +94,35 @@ end
 abort 'unitbob_helper: refusing to run against a non-test environment' unless Rails.env.test?
 `;
 
-// Write the suite blob's guardrail file at its own (validated) relative path.
-// The Ruby boot kit is materialized only for the rspec runner — Vitest and
-// pytest runs need no connector-written support files here (the runtime
-// pytest.ini lives outside this directory and is written by the pytest runner).
-export function materializeGuardrails(projectRoot: string, suite: SuiteBlob): { suitePath: string } {
-  assertGuardrailPath(suite.suite_file.path);
+// Write every file of the suite blob at its own (validated) relative path. The
+// Ruby boot kit is materialized only for the rspec runner — Vitest and pytest
+// runs need no connector-written support files here (the runtime pytest.ini
+// lives outside this directory and is written by the pytest runner).
+//
+// Every file, not just the main one (spec 42, §6.4). The directory is wiped
+// first and only the main file was written back, so a published suite of four
+// files came back as one and the run that followed it silently protected a
+// quarter of what the map claimed.
+export function materializeGuardrails(
+  projectRoot: string,
+  suite: SuiteBlob,
+): { suitePath: string; supportPaths: string[] } {
+  const files = [suite.suite_file, ...(suite.suite_file.support_files ?? [])];
+  for (const file of files) assertGuardrailPath(file.path);
 
   const dir = join(projectRoot, GUARDRAILS_DIR);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
 
-  const suitePath = join(projectRoot, suite.suite_file.path);
-  mkdirSync(dirname(suitePath), { recursive: true });
-  writeFileSync(suitePath, suite.suite_file.content);
+  const written = files.map((file) => {
+    const path = join(projectRoot, file.path);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, file.content);
+    return path;
+  });
   if (suite.runner_manifest.runner === 'rspec') materializeHelper(projectRoot);
 
-  return { suitePath };
+  return { suitePath: written[0], supportPaths: written.slice(1) };
 }
 
 // Both Ruby flows boot the same way: the check flow writes the boot kit next to

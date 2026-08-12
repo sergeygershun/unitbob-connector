@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const AGENT_NAMES = ['suite-worker', 'suite-repair-worker', 'fact-finder'] as const;
+const AGENT_NAMES = ['suite-worker', 'suite-repair-worker', 'fact-finder', 'suite-reviewer'] as const;
 const bundledAgentsDir = fileURLToPath(new URL('../../plugin/codex/agents/', import.meta.url));
 
 interface CodexInstallDeps {

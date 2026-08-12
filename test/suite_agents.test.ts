@@ -32,6 +32,29 @@ test('suite-worker has an emergency 150-turn Sonnet fuse and one plan-item contr
   assert.match(body, /final read.*confirm every `facts` entry.*object/i);
 });
 
+// Spec 42, Task 0.3. The rule "a checkpoint owes `decisions` and
+// `known_problems`" lived in one line of `validateWorkerCheckpoints.ts` and
+// nowhere a worker or a coordinator can read it. Three runs paid for that in
+// rejected checkpoints — about thirty on one of them, plus a hand-written
+// normalizer to get past the gate. The rule now sits where the checkpoint is
+// written: on both hosts, and in the workflow that seeds it.
+test('every place a checkpoint is written names the keys the gate requires', () => {
+  const workflow = readFileSync(
+    fileURLToPath(new URL('../plugin/skills/unitbob/workflows/suite.md', import.meta.url)),
+    'utf8',
+  );
+  const codexWorker = readFileSync(
+    fileURLToPath(new URL('../plugin/codex/agents/suite-worker.toml', import.meta.url)),
+    'utf8',
+  );
+
+  for (const text of [agent('suite-worker').body, workflow, codexWorker]) {
+    assert.match(text, /`decisions`/);
+    assert.match(text, /`known_problems`/);
+  }
+  assert.match(workflow, /"decisions": \[\], "known_problems": \[\]/);
+});
+
 test('suite-repair-worker validates its owned slice within a 150-turn fuse', () => {
   const { frontmatter, body } = agent('suite-repair-worker');
   assert.match(frontmatter, /^name: suite-repair-worker$/m);
@@ -43,7 +66,11 @@ test('suite-repair-worker validates its owned slice within a 150-turn fuse', () 
   assert.match(body, /exits non-zero when the branch comes back with exactly the failures/i);
   assert.match(body, /unresolved_promises.*first/i);
   assert.match(body, /do not expand/i);
-  assert.match(body, /npx -y --loglevel=error unitbob@0\.4\.5 run-local <branch>/i);
+  // Version-agnostic on purpose: `plugin_pins.test.ts` already guards that every
+  // pinned version in this repository is the same one, and repeating the number
+  // here only meant a release bump had to remember to visit a test about turn
+  // fuses.
+  assert.match(body, /npx -y --loglevel=error unitbob@\d+\.\d+\.\d+ run-local <branch>/i);
   assert.match(body, /repeat.*edit.*run-local.*inspect/i);
   assert.match(body, /owned paths.*case markers/i);
   assert.match(body, /do not require.*green.*branch/i);

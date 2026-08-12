@@ -11,7 +11,7 @@ the first slice comes back is legitimate and cheap; do it rather than force a
 plan you already know is wrong. Never continue a coordinator or worker context
 after its bounded phase.
 
-1. Run `npx -y --loglevel=error unitbob@0.4.5 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.5.0 suite-prepare` with exactly one
    defect-context option. Use `--known-defect='<exact description>'` (and
    `--fixed-revision='<revision>'` when supplied), otherwise use
    `--no-known-defect`. This command checks the supported stack, provisions the
@@ -101,7 +101,7 @@ after its bounded phase.
    a different business outcome. `surface_budget` is a ceiling, never a quota;
    unselected assigned surfaces are `deferred_surfaces`, not `unreachable`.
 
-5. Run `npx -y --loglevel=error unitbob@0.4.5 validate-worker-plan`. If
+5. Run `npx -y --loglevel=error unitbob@0.5.0 validate-worker-plan`. If
    validation exits non-zero, fix the whole reported batch and run the gate
    again. If it remains non-zero, stop before fan-out. The gate checks that the
    plan is intact — digests, ids, paths, capabilities that were actually
@@ -110,14 +110,27 @@ after its bounded phase.
    receipt, hook, or home-grown orchestrator.
 
 6. Seed every planned slice's checkpoint before fan-out. Write
-   `.unitbob/suite-build/checkpoints/<branch>-<worker-id>.json` yourself: the
-   exact request and plan digests, branch and worker id, every assigned promise
-   in `unresolved_promises`, empty `completed_promises` and `written_paths` —
-   and the facts you have already verified, each with its source references:
+   `.unitbob/suite-build/checkpoints/<branch>-<worker-id>.json` yourself, with
+   every key the gate in step 8 checks — all of them, the two empty arrays
+   included, or the gate rejects the checkpoint you have just written:
 
    ```json
-   {"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}
+   {
+     "request_digest": "<exact>", "plan_digest": "<exact>",
+     "branch": "structural", "worker_id": "w1",
+     "unresolved_promises": ["<every assigned promise>"],
+     "completed_promises": [], "written_paths": [],
+     "decisions": [], "known_problems": [],
+     "facts": [{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}]
+   }
    ```
+
+   `decisions` and `known_problems` are arrays of short strings: what a worker
+   chose, and what it knows is still wrong. Empty is a fine answer; absent is
+   not. They are named here, where the checkpoint is actually written, on
+   purpose — while the rule lived only inside the gate's own source, three runs
+   in a row spent themselves on rejected checkpoints, about thirty of them on
+   one run, which then got a hand-written normalizer to work around it.
 
    Everything every worker on the branch would otherwise discover alone belongs
    here: how a session is opened, which factory builds a paying customer, what
@@ -135,7 +148,7 @@ after its bounded phase.
 
    On Codex, the Unitbob definitions must already be discoverable in
    `~/.codex/agents/`; if they are missing, stop and run
-   `npx -y --loglevel=error unitbob@0.4.5 codex-install`, then tell the user to
+   `npx -y --loglevel=error unitbob@0.5.0 codex-install`, then tell the user to
    start a new Codex thread. No Codex version is currently qualified by Unitbob
    for a per-named-agent rollout budget. Before the first bounded role, ask:
    `This Codex version cannot enforce the Unitbob worker token limit. Run this
@@ -172,33 +185,48 @@ after its bounded phase.
    incarnation. Stop follows the existing incomplete/checkpoint path. Never
    auto-resume or report the incomplete slice as successful after a budget stop.
 
-8. Run `npx -y --loglevel=error unitbob@0.4.5 validate-worker-checkpoints` after
+8. Run `npx -y --loglevel=error unitbob@0.5.0 validate-worker-checkpoints` after
    fan-out and before assembly or repair. It verifies one compact checkpoint per
    plan item against the exact request and plan digests, worker id, promises,
    and owned paths. A stale or invalid checkpoint never goes to repair: record a
    `build_error` for that branch and continue its peer.
 
-9. Assemble each valid branch without rereading the whole source tree. Follow
-   each server recipe and preserve every opaque id, `contract_key`, and
-   `case_marker`. Structural examples exercise production code and assert an
-   observable outcome. Behavioral Given/When/Then steps drive real public
-   behavior. Workers do not edit
-   `.unitbob/behavioral/step_definitions/00_unitbob_world.rb`, copy its contents,
-   or use `render_template`; use only the World's status and redirect API.
-   Application and FactoryBot-specific login/domain setup belongs in host-owned
-   shared steps.
+9. List each valid branch's files and write its answer. **Do not merge files.**
+   The suite is the set of files the workers wrote: name every one of them and
+   let the bytes stand. Concatenating slices into one file, staging them outside
+   the branch root for later collection, or writing a script that glues them
+   together are all the same mistake — on 2026-08-12 that path produced a
+   `parts/` directory placed deliberately out of the runner's reach and an
+   `assemble.sh` that then needed protecting from step 13 of this very workflow.
+   The server stores exact bytes and never assembles; neither do you.
+
+   Do this without rereading the whole source tree. Follow each server recipe and
+   preserve every opaque id, `contract_key`, and `case_marker`. Structural
+   examples exercise production code and assert an observable outcome.
+   Behavioral Given/When/Then steps drive real public behavior. Workers do not
+   edit `.unitbob/behavioral/step_definitions/00_unitbob_world.rb`, copy its
+   contents, or use `render_template`; use only the World's status and redirect
+   API. Application and FactoryBot-specific login/domain setup belongs in
+   host-owned shared steps.
 
    Write strict JSON only to the request's `output_path`, one entry for every
-   requested branch:
+   requested branch. Each branch names one main file and every other file it
+   owns in `support_files` — several `.feature` files, several structural slices,
+   step definitions and helpers alike:
 
    ```json
    { "branches": [
-     { "suite_kind": "structural", "suite_file": { "path": ".unitbob/structural/..." },
+     { "suite_kind": "structural",
+       "suite_file": { "path": ".unitbob/structural/billing_spec.rb",
+         "support_files": [{ "path": ".unitbob/structural/reporting_spec.rb" }] },
        "runner_manifest": "<verbatim request object>",
        "test_metadata": { "capabilities": [] } },
      { "suite_kind": "behavioral",
-       "suite_file": { "path": ".unitbob/behavioral/features/...",
-         "support_files": [{ "path": ".unitbob/behavioral/step_definitions/business_steps.rb" }] },
+       "suite_file": { "path": ".unitbob/behavioral/features/billing.feature",
+         "support_files": [
+           { "path": ".unitbob/behavioral/features/reporting.feature" },
+           { "path": ".unitbob/behavioral/step_definitions/business_steps.rb" }
+         ] },
        "runner_manifest": "<verbatim request object>",
        "test_metadata": { "worker_plan_digest": "<exact plan digest>", "capabilities": [] } }
    ] }
@@ -211,12 +239,24 @@ after its bounded phase.
    `known_defect_probe`, `known_defect_context`, or runner reports in generator
    `test_metadata`.
 
-10. Run `npx -y --loglevel=error unitbob@0.4.5 validate-build` once after merge.
-    It batch-checks duplicate step expressions, markers, metadata, assigned ids,
-    surface arithmetic, paths, and files. Correct that mechanical batch during
-    assembly; workers do not repeat it locally.
+10. Run `npx -y --loglevel=error unitbob@0.5.0 validate-build` after assembly. It
+    checks locally only what the server cannot see — that the files the answer
+    names exist under `.unitbob/`, and that every branch the request asked for
+    has an entry — and then sends the exact batch the publish would send as a
+    **dry run**: the same server, the same validation, nothing stored. What it
+    prints back is the server's own verdict, word for word, so there is nothing
+    to interpret and nothing that can disagree with the real publish later.
 
-11. Run `npx -y --loglevel=error unitbob@0.4.5 run-local` once for the assembled
+    It costs one request, so correct a whole reported batch and ask again —
+    seconds, not another run and review. Workers do not repeat any of this
+    locally. With no network it still succeeds, and names what went unchecked.
+
+    Run it again after step 14. Until the review exists this command sends the
+    behavioral branch without it and says so; the second run is the one that gets
+    a verdict on the whole branch, and it is the cheapest possible insurance for
+    the single publication step 15 allows.
+
+11. Run `npx -y --loglevel=error unitbob@0.5.0 run-local` once for the assembled
     branches. The connector owns the exact runner commands. A runner that never
     starts is a harness failure, not a red test. If the runner never started, it
     died before the first test or scenario; report its exact error, upload nothing
@@ -273,15 +313,20 @@ after its bounded phase.
 
 13. If behavioral is a `build_error`, skip review and keep the structural peer.
     Otherwise run
-    `npx -y --loglevel=error unitbob@0.4.5 suite-review-prepare`. It runs and binds
+    `npx -y --loglevel=error unitbob@0.5.0 suite-review-prepare`. It runs and binds
     the exact candidate, then writes
     `.unitbob/suite-build/review-request.json`. That request includes the
     original behavioral assignment, its worker-plan items, and exact
     `plan_digest`, as well as the existing candidate and optional known-defect
     evidence.
 
-14. There is always exactly one reviewer. Give that request and referenced suite
-    to one independent reviewer in a fresh context. If one is unavailable, do not upload the behavioral branch.
+14. There is always exactly one reviewer, and it is a named role, like the other
+    three: `unitbob:suite-reviewer` on Claude Code and `suite-reviewer` on Codex.
+    Launch that independent reviewer in a fresh context with the review request
+    and the suite it references. If one is unavailable, do not upload the
+    behavioral branch. The role carries the review schema, so nothing here has to
+    recite it from memory — a schema written from memory is what cost three runs
+    out of four their publish.
     Keep the existing BDD quality review: one
     `scenario_reviews` entry per Scenario, with exact scenario, marker, verified
     `public_surfaces`, Given→Then evidence, outcome, outcome kind, and one of
@@ -298,7 +343,19 @@ after its bounded phase.
     required. Write strict JSON only to
     `.unitbob/suite-build/behavioral_review.json`.
 
-15. Run `npx -y --loglevel=error unitbob@0.4.5 put-suite-build` exactly once. It
+    **What a Scenario objection does, so that nobody goes looking for a way
+    around it.** A capability whose Scenarios were *all* objected to is stored
+    `unguarded` at publish, with the objection as the reason its owner reads. One
+    objection among sound siblings changes nothing, and a
+    `pass_with_reservation` never downgrades anything. The publish still goes
+    through, no repair round opens, and the single upload in step 15 is
+    unaffected — so an objection costs this run nothing. Never edit a verdict to
+    avoid it: an objection recorded is the only thing standing between a Scenario
+    that checks nothing and a green light telling the owner their feature is
+    protected. Run `validate-build` once more after this step to get the server's
+    verdict on the whole branch, review included.
+
+15. Run `npx -y --loglevel=error unitbob@0.5.0 put-suite-build` exactly once. It
     validates and publishes each branch independently, runs every branch it published,
     and prints the server summaries and map URL. Never ask the user
     to run the checks to finish generating.

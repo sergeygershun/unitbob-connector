@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join } from 'node:path';
 import { runProcess, type ProcResult } from '../proc.ts';
 import { firstErrorLine } from '../runner/bootcheck.ts';
+import { detectStructuralRunner } from '../runner/precheck.ts';
 import { graphPath } from '../files/mapBuild.ts';
 
 // Spec 32-7. An address is a fact the application declares about itself. The
@@ -99,7 +100,7 @@ export async function extractRouteInventory(
   projectRoot: string,
   deps: RouteInventoryDeps = defaultDeps,
 ): Promise<RouteInventory> {
-  if (!looksLikeRails(projectRoot)) return silent(projectRoot, 'unsupported_stack');
+  if (!canAskTheRouter(projectRoot)) return silent(projectRoot, 'unsupported_stack');
 
   const asked = await askTheRouter(projectRoot, deps);
   if ('reason' in asked) return silent(projectRoot, asked.reason, asked.detail);
@@ -244,8 +245,21 @@ function plural(count: number, one: string, many: string): string {
   return count === 1 ? one : many;
 }
 
-function looksLikeRails(projectRoot: string): boolean {
-  return existsSync(join(projectRoot, 'config', 'routes.rb'));
+// Which stack this is, is not this module's question — one answer to it already
+// exists and this file now asks it. `config/routes.rb` stays as a second-level
+// condition inside the Ruby branch, because a Rails application without a route
+// file has no router to ask.
+//
+// It used to be the whole test, which made it a fourth independent way of
+// deciding "is this Rails?" — and one that was wrong at both edges: a Rails app
+// that keeps its routes elsewhere was refused, and any project that happens to
+// carry a `config/routes.rb` was asked to boot Rails. There are still several
+// stack detectors in this package; this removes the one that had a single caller
+// and no excuse.
+function canAskTheRouter(projectRoot: string): boolean {
+  return (
+    detectStructuralRunner(projectRoot) === 'rspec' && existsSync(join(projectRoot, 'config', 'routes.rb'))
+  );
 }
 
 // The question, asked of the router object rather than of the `rails routes`

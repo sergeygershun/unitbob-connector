@@ -396,8 +396,10 @@ function hasProjectFrame(output: string, projectRoot: string, runner: string): b
   // asked of that file. Judging the whole output at once let `.venv/lib/...`
   // answer yes on the strength of its `lib/`, which is how a `TypeError` deep
   // inside a dependency came back as a defect in the user's code.
-  const ownDirs = runner === 'vitest' ? ['src'] : ['app', 'lib'];
-  const conventional = new RegExp(`(^|[\\s"'(\\[/])(${ownDirs.join('|')})/`);
+  const ownDirs = CONVENTIONAL_SOURCE_DIRS[runner] ?? [];
+  const conventional = ownDirs.length
+    ? new RegExp(`(^|[\\s"'(\\[/])(${ownDirs.join('|')})/`)
+    : null;
 
   for (const line of output.split('\n')) {
     // Wherever a dependency is installed, it is not this project's code — and
@@ -405,7 +407,7 @@ function hasProjectFrame(output: string, projectRoot: string, runner: string): b
     if (INSTALLED_DEPENDENCY.test(line)) continue;
 
     // The conventional homes of business code, relative or absolute.
-    if (conventional.test(line)) return true;
+    if (conventional?.test(line)) return true;
     if (line.includes(projectRoot)) return true;
 
     // Python names no fixed layout the way Rails does, and pytest prints frames
@@ -424,6 +426,19 @@ function hasProjectFrame(output: string, projectRoot: string, runner: string): b
 
   return false;
 }
+
+// Where each stack conventionally keeps its business code. Only a stack that
+// really has such a convention gets an entry: `app/` and `lib/` are Rails, and
+// they used to be the fallback for everything that was not vitest, which meant a
+// Python project got Rails's layout applied to its stack traces. Python names no
+// fixed layout at all, so it is deliberately absent — the repository-file test
+// below is the answer there, and it is the more reliable one anyway.
+const CONVENTIONAL_SOURCE_DIRS: Record<string, string[]> = {
+  rspec: ['app', 'lib'],
+  cucumber: ['app', 'lib'],
+  vitest: ['src'],
+  'cucumber-js': ['src'],
+};
 
 // Where a dependency lives once installed — never the project's own code, in
 // any of the three languages. The last two are the languages' own installed

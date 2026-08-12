@@ -222,7 +222,11 @@ async function buildPythonEnvironment(
     created = false;
   }
 
-  if (!created || requirementsOk) return { created };
+  if (!created) return { created };
+  if (requirements === undefined) {
+    return { created, requirementsNote: noDependencySourceNote(projectRoot, venvDir) };
+  }
+  if (requirementsOk) return { created };
 
   // The reason travels with the notice. Without it the reader is told that
   // something did not install and has to re-run the install by hand to find out
@@ -235,6 +239,30 @@ async function buildPythonEnvironment(
       `available here — the suite may not be able to import the application.` +
       (failure ? ` The install said: ${failure}` : ''),
   };
+}
+
+// A Python project that states its dependencies somewhere other than a
+// requirements file was the quietest failure in here: nothing found to install
+// was read as nothing to install, the environment was declared a success, and
+// the suite then met the application it could not import. Detection accepts
+// `pyproject.toml` and `Pipfile` (see `precheck.ts`) while this function only
+// ever read `requirements*.txt`, so the two disagreed about what a Python
+// project is.
+//
+// Installing from those two sources is not attempted here yet. Saying so is not
+// optional: "we did not install your application's packages, and here is why"
+// is a sentence the reader can act on, and an empty environment reported as
+// built is not.
+function noDependencySourceNote(projectRoot: string, venvDir: string): string {
+  const declared = ['pyproject.toml', 'Pipfile'].filter((name) => existsSync(join(projectRoot, name)));
+  const where = declared.length
+    ? `this project declares its dependencies in ${declared.join(' and ')}, which Unitbob does not install from yet`
+    : 'no requirements.txt, pyproject.toml or Pipfile was found';
+
+  return (
+    `the application's own packages are not installed into ${relativeVenv(projectRoot, venvDir)} — ${where}. ` +
+    'The suite can start, but it may not be able to import the application.'
+  );
 }
 
 // Install into the sidecar environment, whichever tool built it.
