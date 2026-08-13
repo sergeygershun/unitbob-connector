@@ -6,6 +6,28 @@ built locally and uploaded as one atomic bundle:
 - **Internal structure** (the decompose map) — the code's own subsystems.
 
 Do this:
+0. **Check that this session can see the Unitbob roles, before you build
+   anything.** Launch `unitbob:suite-reviewer` (Claude Code) or `suite-reviewer`
+   (Codex) with one instruction: *answer with the single word READY; read
+   nothing, write nothing, run nothing.* It takes seconds and touches no file.
+
+   One role is checked, not four, and it is the reviewer on purpose: the other
+   three you can stand in for — slower and worse, but the run finishes — and the
+   reviewer you can never stand in for. Checking one proves the thing actually in
+   doubt, that this session's registry sees the installed package. Do not
+   "improve" this into four checks: it is the same answer, bought four times.
+
+   If the host replies that there is no such agent type — `Agent type
+   'unitbob:suite-reviewer' not found`, usually followed by the agents it does
+   have — **stop here and say this**: the role definitions are on disk, but this
+   session read its list of agents before they were installed, so it cannot see
+   them. Restart the session (Claude Code) or open a new task (Codex), then run
+   this again. Nothing on disk is lost and nothing has to be rebuilt.
+
+   Any other failure means the role itself failed, not that the registry is
+   missing it. Report that error as it stands and **do not** advise a restart: it
+   will not help, and it costs the user everything else in the session.
+
 1. Run `npx -y --loglevel=error unitbob@0.5.0 map-prepare`. It refreshes the code
    graph and writes the build request.
 2. Read `.unitbob/map-build/request.json`. It gives you `project_root`,

@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+function workflow(name: string): string {
+  return readFileSync(fileURLToPath(new URL(`../plugin/skills/unitbob/workflows/${name}.md`, import.meta.url)), 'utf8');
+}
+
 function agent(name: string): { frontmatter: string; body: string } {
   const text = readFileSync(fileURLToPath(new URL(`../plugin/agents/${name}.md`, import.meta.url)), 'utf8');
   const frontmatter = text.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
@@ -53,6 +57,73 @@ test('every place a checkpoint is written names the keys the gate requires', () 
     assert.match(text, /`known_problems`/);
   }
   assert.match(workflow, /"decisions": \[\], "known_problems": \[\]/);
+});
+
+// Spec 43, §1.1–1.5. Two runs out of four lost an hour each to roles the session
+// could not see, and both found out only at fan-out: a2time after the map, the
+// plan and 18 seeded checkpoints; noahsat-web after a full behavioral branch it
+// then had to throw away. The check costs seconds, so it stands at the top of
+// both workflows — `map` because that is where the hour went, `suite` because a
+// project whose map already exists starts there and never passes through `map`.
+//
+// Asserted against the text before step 1, in both files, so that "it is checked
+// somewhere" cannot pass for "it is checked before anything is spent".
+test('both workflows ask the reviewer role for a word before they spend anything', () => {
+  for (const name of ['map', 'suite']) {
+    const text = workflow(name);
+    const beforeFirstStep = text.slice(0, text.indexOf('\n1. '));
+    assert.ok(beforeFirstStep.length > 0, `${name}.md has no step 1 to stand in front of`);
+
+    assert.match(beforeFirstStep, /`unitbob:suite-reviewer` \(Claude Code\) or `suite-reviewer`\s+\(Codex\)/);
+    assert.match(beforeFirstStep, /single word READY/);
+    assert.match(beforeFirstStep, /read\s+nothing, write nothing, run nothing/);
+    // One role, with the reason in the step itself — otherwise the next reader
+    // "completes" it to four and pays four times for one answer.
+    assert.match(beforeFirstStep, /One role is checked, not four/);
+    assert.match(beforeFirstStep, /reviewer you can never stand in for/);
+
+    // The registry-missed-it diagnosis, and the one action that fixes it.
+    assert.match(beforeFirstStep, /no such agent type/);
+    assert.match(beforeFirstStep, /Restart the session \(Claude Code\) or open a new task \(Codex\)/);
+    assert.match(beforeFirstStep, /Nothing on disk is lost/);
+    // And the other branch of the diagnosis: a role that is found and fails is
+    // not a stale session, and sending the user to restart costs them the rest
+    // of it for nothing.
+    assert.match(beforeFirstStep, /means the role itself failed/);
+    assert.match(beforeFirstStep, /\*\*do not\*\* advise a restart/i);
+  }
+});
+
+// §1.5. The check is repeated immediately before fan-out, because a run need not
+// stay in one session and step 7 launches every worker at once.
+//
+// The Codex disk check that already lived there is kept, and kept *distinct*:
+// it looks at `~/.codex/agents/`, and files sitting on disk are exactly what
+// both lost runs had. Calling it the third role check — which this file did for
+// a draft — would have pinned that confusion in a test.
+test('suite asks the role again immediately before fan-out, and keeps the disk check apart from it', () => {
+  const fanOut = workflow('suite').slice(workflow('suite').indexOf('\n7. '));
+
+  assert.match(fanOut, /repeat step 0.s check/i);
+  assert.match(fanOut, /`unitbob:suite-reviewer` on\s+Claude Code, `suite-reviewer` on Codex/);
+  assert.match(fanOut, /must also be discoverable on disk in\s+`~\/\.codex\/agents\/`/);
+  assert.match(fanOut, /different question from the one above/);
+  assert.match(fanOut, /unitbob@\d+\.\d+\.\d+ codex-install/);
+});
+
+// §3.2. The step that tells the coordinator what to read out of `request.json`
+// has to name `step_loading`, or nothing does: the recipe stopped retelling the
+// runner's rule, and `suite-prepare`'s notice scrolls past several steps before
+// the first step file is written.
+test('the step that reads request.json names the rule for step filenames', () => {
+  const text = workflow('suite');
+  const stepTwo = text.slice(text.indexOf('\n2. '), text.indexOf('\n3. '));
+
+  assert.match(stepTwo, /`step_loading`/);
+  assert.match(stepTwo, /`step_files`/);
+  assert.match(stepTwo, /`requirements`/);
+  assert.match(stepTwo, /capability_id.{0,40}where the `\*` is/s);
+  assert.match(stepTwo, /Do not look this up in the\s+connector.s source/);
 });
 
 test('suite-repair-worker validates its owned slice within a 150-turn fuse', () => {

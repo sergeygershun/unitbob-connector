@@ -8,6 +8,7 @@ import {
   type KnownDefectContext,
   type SuiteBuildBranch,
 } from '../files/suiteBuild.ts';
+import { bddStepLoading, type BddStepLoading } from '../runner/bdd.ts';
 import { bootCheck, SIGNAL_STRENGTH, type BootCheck } from '../runner/bootcheck.ts';
 import { anyStackPrecheck, detectBddRunner, detectStructuralRunner, runnerReadyPrecheck } from '../runner/precheck.ts';
 import { selectRunnerEnvelope, withInstalledRunnerVersion, type RunnerEnvelope } from '../runner/manifest.ts';
@@ -189,6 +190,12 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
       const manifest = actual.runnerEnvelope(packet, runner, config.projectRoot);
       if (!manifest) return { packet, runner, branch: null };
 
+      // Spec 43, §3.2. The rule for which step files this runner loads travels
+      // with the branch that will be written against it, so nobody has to read
+      // the connector's own source to find it out — which is exactly what two
+      // coordinators did.
+      const stepLoading = packet.suite_kind === 'behavioral' && runner ? bddStepLoading(runner) : null;
+
       return {
         packet,
         runner,
@@ -199,6 +206,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
           recipe: await actual.getRecipe(recipeNameFor(packet)),
           assignment: packet.assignment,
           runner_manifest: manifest,
+          ...(stepLoading ? { step_loading: stepLoading } : {}),
         },
       };
     }),
@@ -243,6 +251,24 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
       `then run ${nextCommand}.\n`,
   );
 
+  // Printed as well as written, because a rule nobody reads is a rule nobody
+  // follows — and this one is silent when broken: a step file the runner does
+  // not collect produces no error, only a green run over no scenarios.
+  for (const { packet, runner, branch } of prepared) {
+    if (!branch || packet.suite_kind !== 'behavioral' || !runner) continue;
+    actual.stdout.write(
+      branch.step_loading
+        ? stepLoadingNotice(runner, branch.step_loading)
+        // Said rather than left blank. This connector has no strategy for that
+        // runner, so it does not know which files it loads — and silence here
+        // reads as "any name will do", which is the failure this whole notice
+        // exists to prevent.
+        : `\nBehavioral steps run under "${runner}", and this connector does not know how that runner ` +
+          'finds its step files — it has no strategy of that name. Nothing here tells you what to call ' +
+          'them, and this connector will not be able to run the branch either.\n',
+    );
+  }
+
   // A fixable runner blocker is not a failure: the structural suite still builds this run. Tell the
   // vibecoder the one command that unblocks the behavioral peer, then re-run suite-prepare.
   if (setupNotices.length > 0) {
@@ -271,6 +297,28 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
         '\n',
     );
   }
+}
+
+// The runner's own rule for which step files it will load, in the words of the
+// side that loads them (spec 43, §3.2). The same object is in `request.json`, on
+// the behavioral branch; this is the copy the coordinator sees without opening a
+// file.
+//
+// A null pattern is printed as a null pattern. A runner whose rule is not one
+// pattern says what it does know and admits the rest — inventing a pattern here
+// would recreate, in the connector this time, exactly the retelling this
+// replaced.
+function stepLoadingNotice(runner: string, loading: BddStepLoading): string {
+  const rule = loading.step_files
+    ? `it loads \`${loading.step_files}\` from \`.unitbob/behavioral/step_definitions/\` — put the capability id ` +
+      'where the `*` is, and a file named anything else is not loaded at all'
+    : 'its rule for which files it loads is not one pattern, and this connector will not state one for it';
+
+  return (
+    `\nBehavioral steps run under "${runner}", and ${rule}. What else has to be true of a step file there:\n  - ` +
+    loading.requirements.join('\n  - ') +
+    '\nThis is also in `request.json`, on the behavioral branch, as `step_loading`.\n'
+  );
 }
 
 // What the boot check found, in the vibecoder's terms. Printed on every run,

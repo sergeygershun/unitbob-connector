@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { dirname, join, sep } from 'node:path';
 import type { Recipe, SuitePacket } from '../wire.ts';
 import type { RunnerEnvelope } from '../runner/manifest.ts';
+import type { BddStepLoading } from '../runner/bdd.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
 import { readWorkerPlan, validateWorkerPlanFiles, workerPlanDigest, workerPlanPath } from './workerPlan.ts';
 
@@ -21,6 +22,13 @@ export interface SuiteBuildBranch {
   // server offered. Absent only when this machine's stack matched none of them —
   // the host then composes it from the recipe, as it always used to.
   runner_manifest?: RunnerEnvelope;
+  // Which files this branch's runner will load, and what a step file has to be
+  // for it to execute (spec 43, §3.2). It rides on the branch because that is
+  // where the host already reads its assignment — the alternative was the recipe
+  // retelling it, which is what put a name pytest does not collect into the
+  // recipe for several releases. Behavioral only, and absent when the runner is
+  // unknown at prepare time.
+  step_loading?: BddStepLoading;
 }
 
 export interface SuiteBuildRequest {

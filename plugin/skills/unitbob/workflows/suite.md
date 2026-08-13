@@ -11,6 +11,42 @@ the first slice comes back is legitimate and cheap; do it rather than force a
 plan you already know is wrong. Never continue a coordinator or worker context
 after its bounded phase.
 
+0. **Check that this session can see the Unitbob roles, before you prepare
+   anything.** Launch `unitbob:suite-reviewer` (Claude Code) or `suite-reviewer`
+   (Codex) with one instruction: *answer with the single word READY; read
+   nothing, write nothing, run nothing.* It takes seconds and touches no file.
+
+   One role is checked, not four, and it is the reviewer on purpose: the other
+   three you can stand in for — slower and worse, but the run finishes — and the
+   reviewer you can never stand in for, so a session without it cannot publish
+   the behavioral branch at all. Do not "improve" this into four checks: it is
+   the same answer, bought four times.
+
+   This check stands here as well as in `map.md`, because the map is often
+   already built and the run then starts right here. On a2time, 2026-08-11, nine
+   minutes fit between "generate the tests" and the first role launch — the
+   preparation, the environment survey, the question to the user about scope, a
+   plan of 18 workers and 18 seeded checkpoints — and all of it was spent before
+   anyone found out the roles were not there.
+
+   Ask again at step 7, immediately before fan-out, in the same one-word form.
+   Not because this answer expires on its own, but because a run does not have to
+   stay in one session: what step 7 launches is eighteen roles at once, and the
+   check that guards it costs seconds. The Codex disk check at step 7 does not
+   cover this — it looks at `~/.codex/agents/`, and files on disk are exactly
+   what both lost runs had.
+
+   If the host replies that there is no such agent type — `Agent type
+   'unitbob:suite-reviewer' not found`, usually followed by the agents it does
+   have — **stop here and say this**: the role definitions are on disk, but this
+   session read its list of agents before they were installed, so it cannot see
+   them. Restart the session (Claude Code) or open a new task (Codex), then run
+   this again. Nothing on disk is lost and nothing has to be rebuilt.
+
+   Any other failure means the role itself failed, not that the registry is
+   missing it. Report that error as it stands and **do not** advise a restart: it
+   will not help, and it costs the user everything else in the session.
+
 1. Run `npx -y --loglevel=error unitbob@0.5.0 suite-prepare` with exactly one
    defect-context option. Use `--known-defect='<exact description>'` (and
    `--fixed-revision='<revision>'` when supplied), otherwise use
@@ -25,6 +61,14 @@ after its bounded phase.
    `output_path`, and the requested `branches`. Copy each branch's
    `runner_manifest` verbatim. Never invent or edit one and never add a branch
    absent from the request.
+
+   The behavioral branch also carries `step_loading`, and it is the one thing a
+   step file must get right to exist at all: `step_files` is the name pattern its
+   runner will load — put the `capability_id` where the `*` is — and
+   `requirements` is everything else that has to be true of a step file on this
+   stack. Read it here and hand it to the workers. Do not look this up in the
+   connector's source, and do not take it from memory: a step file the runner
+   does not load raises nothing, contributes no scenarios, and comes back green.
 
 3. Choose which lamps this build guards, before you plan anything. The
    behavioral assignment lists every capability of the product map. A build that
@@ -146,10 +190,18 @@ after its bounded phase.
    workers together, in one go.
    Sequential slices save nothing and finish later.
 
-   On Codex, the Unitbob definitions must already be discoverable in
+   Before you launch them, repeat step 0's check — `unitbob:suite-reviewer` on
+   Claude Code, `suite-reviewer` on Codex, one word back. This is the last point
+   at which it is cheap: past it, eighteen roles start at once, and a session
+   that has changed since step 0 loses all of their work. Same two answers as
+   before: not found in the registry means restart the session or open a new
+   task; anything else means the role itself broke, and a restart will not help.
+
+   On Codex, the Unitbob definitions must also be discoverable on disk in
    `~/.codex/agents/`; if they are missing, stop and run
    `npx -y --loglevel=error unitbob@0.5.0 codex-install`, then tell the user to
-   start a new Codex thread. No Codex version is currently qualified by Unitbob
+   start a new Codex thread. That is a different question from the one above —
+   files on disk are exactly what both lost runs already had — so ask both. No Codex version is currently qualified by Unitbob
    for a per-named-agent rollout budget. Before the first bounded role, ask:
    `This Codex version cannot enforce the Unitbob worker token limit. Run this
    invocation without the limit? [Continue once / Stop]`. Stop declines before

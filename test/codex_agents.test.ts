@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { installCodexAgents } from '../src/verbs/codexInstall.ts';
+import { AGENT_NAMES, installCodexAgents } from '../src/verbs/codexInstall.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
@@ -110,27 +110,77 @@ test('codex-install places all definitions in the Codex user agent directory', (
 
   installCodexAgents([], { home, stdout: { write: (chunk) => output.push(chunk) } });
 
-  for (const name of ['suite-worker', 'suite-repair-worker', 'fact-finder', 'suite-reviewer']) {
+  for (const name of AGENT_NAMES) {
     const installed = join(home, '.codex', 'agents', `${name}.toml`);
     assert.ok(existsSync(installed), `${name} was not installed`);
     assert.equal(readFileSync(installed, 'utf8'), codexAgent(name));
   }
-  assert.match(output.join(''), /Installed 3 Unitbob Codex agent definitions/);
+  assert.match(output.join(''), /Start a new Codex thread before running Unitbob/);
 });
 
-test('codex-install is idempotent and never overwrites a user-owned definition', () => {
+// Spec 43, §1.7. The message said "Installed 3" while the list beside it held
+// four names, for a whole release, because the count was a literal living
+// somewhere the list could not reach it. Both halves are asserted here so that a
+// fifth role changes the message without anybody editing the message.
+test('codex-install counts the definitions from the list it installs, not from a literal', () => {
+  const home = mkdtempSync(join(tmpdir(), 'unitbob-codex-home-'));
+  const output: string[] = [];
+
+  installCodexAgents([], { home, stdout: { write: (chunk) => output.push(chunk) } });
+
+  assert.deepEqual(
+    [...AGENT_NAMES].map((name) => `${name}.toml`).sort(),
+    // `.toml` only: a `.DS_Store` this repository grows on macOS is not a role,
+    // and reddening this over one would teach the next reader to stop believing it.
+    readdirSync(`${root}/plugin/codex/agents`).filter((name) => name.endsWith('.toml')).sort(),
+    'the bundled definitions and the names codex-install installs are one list',
+  );
+  assert.match(output.join(''), new RegExp(`\\b${AGENT_NAMES.length} Unitbob Codex agent definitions\\b`));
+});
+
+// Spec 43, §1.6. Refusing to overwrite protected a definition the user had
+// edited — and stopped every upgrade from an older release, which is the case
+// that actually happens. Worse for the check that now stands at the top of both
+// workflows: a stale role answers READY, so a refused update reads as a session
+// that is fully equipped.
+test('codex-install refreshes a definition left over from an older release', () => {
   const home = mkdtempSync(join(tmpdir(), 'unitbob-codex-home-'));
   const targetDir = join(home, '.codex', 'agents');
+  mkdirSync(targetDir, { recursive: true });
+  writeFileSync(join(targetDir, 'suite-worker.toml'), 'model = "from an older release"\n');
+  const output: string[] = [];
 
+  installCodexAgents([], { home, stdout: { write: (chunk) => output.push(chunk) } });
+
+  assert.equal(readFileSync(join(targetDir, 'suite-worker.toml'), 'utf8'), codexAgent('suite-worker'));
+  const text = output.join('');
+  assert.match(text, /updated:\s+suite-worker\.toml/);
+  assert.match(text, /created:\s+.*fact-finder\.toml/);
+  assert.match(text, /Start a new Codex thread before running Unitbob/);
+});
+
+// Overwriting is not the same as overwriting silently. A run that changed
+// nothing has to look different from one that replaced the role about to be
+// launched.
+test('a second codex-install rewrites nothing and says every definition is current', () => {
+  const home = mkdtempSync(join(tmpdir(), 'unitbob-codex-home-'));
+  const targetDir = join(home, '.codex', 'agents');
   installCodexAgents([], { home, stdout: { write: () => undefined } });
-  assert.doesNotThrow(() =>
-    installCodexAgents([], { home, stdout: { write: () => undefined } }),
-  );
 
-  writeFileSync(join(targetDir, 'suite-worker.toml'), 'user owned\n');
-  assert.throws(
-    () => installCodexAgents([], { home, stdout: { write: () => undefined } }),
-    /Refusing to overwrite.*suite-worker\.toml/,
-  );
-  assert.equal(readFileSync(join(targetDir, 'suite-worker.toml'), 'utf8'), 'user owned\n');
+  const long_ago = new Date('2001-01-01T00:00:00Z');
+  for (const name of AGENT_NAMES) utimesSync(join(targetDir, `${name}.toml`), long_ago, long_ago);
+  const output: string[] = [];
+  installCodexAgents([], { home, stdout: { write: (chunk) => output.push(chunk) } });
+
+  for (const name of AGENT_NAMES) {
+    assert.equal(
+      statSync(join(targetDir, `${name}.toml`)).mtimeMs,
+      long_ago.getTime(),
+      `${name}.toml was rewritten although it already matched`,
+    );
+  }
+  const text = output.join('');
+  assert.match(text, /already current:/);
+  assert.doesNotMatch(text, /updated:/);
+  assert.doesNotMatch(text, /created:/);
 });

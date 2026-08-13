@@ -107,6 +107,68 @@ test('suite-prepare fetches both peer assignments and each branch recipe, then w
   assert.equal(behavioral.recipe.name, 'generate_behavioral');
 });
 
+// Spec 43, §3.2. The one thing a step file must get right to exist at all — its
+// name — was known only inside `src/runner/bdd.ts`, and the recipe's retelling of
+// it was wrong for pytest. It now travels on the branch that will be written
+// against that runner, and is printed where the coordinator is already reading.
+test('the behavioral branch carries the runner\'s own rule for which step files it loads', async () => {
+  const projectRoot = tmpProject();
+  const output: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => {
+      const [structural, behavioral] = packets();
+      return [structural, { ...behavioral, runner: 'pytest-bdd' } as SuitePacket];
+    },
+    stdout: { write: (chunk) => { output.push(chunk); return true; } },
+  });
+
+  const request = readSuiteBuildRequest(projectRoot);
+  const behavioral = request.branches.find((branch) => branch.suite_kind === 'behavioral')!;
+  assert.equal(behavioral.step_loading?.step_files, 'test_*.py');
+  assert.ok((behavioral.step_loading?.requirements.length ?? 0) > 0);
+  // The structural peer loads nothing through a BDD strategy and states no rule
+  // — an empty one would read as "any name will do".
+  assert.equal(request.branches.find((branch) => branch.suite_kind === 'structural')!.step_loading, undefined);
+
+  const text = output.join('');
+  assert.match(text, /Behavioral steps run under "pytest-bdd"/);
+  assert.match(text, /`test_\*\.py`/);
+  assert.match(text, /`step_loading`/);
+});
+
+// The Edge Case §43 names: a runner whose loading rule this connector does not
+// hold. It says what it does not know rather than printing nothing — silence
+// beside a runner name reads as "any name will do", which is the exact belief
+// that put a pattern pytest does not collect into the recipe.
+test('a behavioral runner with no strategy is admitted to, not passed over in silence', async () => {
+  const projectRoot = tmpProject();
+  const output: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => {
+      const [structural, behavioral] = packets();
+      return [structural, { ...behavioral, runner: 'behave' } as SuitePacket];
+    },
+    stdout: { write: (chunk) => { output.push(chunk); return true; } },
+  });
+
+  const behavioral = readSuiteBuildRequest(projectRoot).branches
+    .find((branch) => branch.suite_kind === 'behavioral')!;
+  assert.equal(behavioral.step_loading, undefined, 'no rule is invented for a runner we do not run');
+  assert.match(output.join(''), /does not know how that runner finds its step files/);
+});
+
 test('suite-prepare records a user-supplied known defect outside host-authored metadata', async () => {
   const projectRoot = tmpProject();
 
