@@ -18,6 +18,26 @@ export function sidecarPath(projectRoot: string, ...segments: string[]): string 
   return join(projectRoot, SIDECAR_DIR, ...segments);
 }
 
+// The stop that means "nothing here can start this project's test runner"
+// (spec 36, §7.1).
+//
+// It carries no new wording — the four places that throw it say exactly what
+// they said before. All it adds is a name, so that one place at the top can tell
+// this stop apart from "the server did not answer" and "your token was refused",
+// and offer the one piece of advice that only fits this one. Hanging that advice
+// on the individual failure sites instead would have given it to Ruby alone: a
+// pytest project in a container stops somewhere else, with different words, and
+// a vitest one somewhere else again.
+export class ToolchainUnavailableError extends Error {
+  readonly projectRoot: string;
+
+  constructor(message: string, projectRoot: string) {
+    super(message);
+    this.name = 'ToolchainUnavailableError';
+    this.projectRoot = projectRoot;
+  }
+}
+
 // The file a command names, on the host's own filesystem.
 //
 // A command that names a file we own is written relative to the project root, so

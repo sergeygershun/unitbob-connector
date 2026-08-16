@@ -95,3 +95,40 @@ self-contained — that is what they are designed for.
 - **Red lamp** — something the structure relied on broke. Copy its `id` and run
   step 3.
 - The project links itself by folder name — nothing to set up by hand.
+
+---
+
+## If your tests only run inside Docker
+
+Some projects keep the code on this machine and everything that runs it — the
+interpreter, the packages, the database — inside a container. Name that
+container in `.unitbob.json` and Unitbob starts the project's own commands in
+there:
+
+```json
+{ "server": "…", "repo_id": 3, "token": "…",
+  "exec": { "docker": { "container": "myapp-web-1" } } }
+```
+
+Nothing else changes. Files are still read and written here, and the path inside
+the container is worked out from the container's own mounts, so there is nothing
+else to configure. Leave the field out and everything runs on this machine,
+exactly as before.
+
+The project folder has to be **mounted** into the container rather than copied
+into the image — which it already is in any setup where you can edit a file and
+see the change. If it is not, Unitbob says so and stops before writing anything.
+
+Known limits of running in a container, all of them deliberate for now:
+
+- **A run that times out can leave a process alive inside the container.** The
+  timeout stops the `docker exec`, not necessarily what it started. A report
+  such a process writes afterwards is never counted as a later run's result.
+- **On a Linux host, files the container writes belong to `root`.** Unitbob does
+  not map users: guessing there breaks images that installed their packages as a
+  user of their own.
+- **Only a container that is already running.** A project whose tests go through
+  `docker compose run --rm` is not supported yet.
+- **Review at a fixed revision is not supported with a container.** It works in
+  a git worktree under the system's temporary directory, which is outside the
+  mount. Ordinary review works in the project itself and is unaffected.

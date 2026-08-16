@@ -49,6 +49,25 @@ export function readLocalToken(cwd: string): string | null {
   return typeof token === 'string' && token.length > 0 ? token : null;
 }
 
+// The container this project's own processes run in, or null when they run on
+// this machine (spec 36). One field, one word: the path inside the container is
+// never asked for — it is read off the container's own mounts.
+//
+//     "exec": { "docker": { "container": "source_code-web-1" } }
+//
+// Absent means local, and local means byte-for-byte the behaviour this connector
+// has always had: no docker call, no new question, no new line of output.
+export function readLocalExecContainer(cwd: string): string | null {
+  const exec = readConfigField(cwd, 'exec');
+  const docker = record(exec)?.['docker'];
+  const container = record(docker)?.['container'];
+  return typeof container === 'string' && container.trim().length > 0 ? container.trim() : null;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
 function readConfigField(cwd: string, field: string): unknown {
   const path = join(cwd, CONFIG_FILE);
   if (!existsSync(path)) return undefined;
@@ -85,9 +104,27 @@ export function locateLinkedRoot(cwd: string): string | null {
   }
 }
 
+// Write the link, and leave everything else in the file alone.
+//
+// It used to write exactly these three keys and nothing else, which quietly made
+// every other key disposable — and this function runs on ordinary events, a
+// re-link among them. Somebody who had written `exec` by hand would lose it
+// while fixing something unrelated, and the loss says nothing about itself: the
+// next run simply goes back to running on this machine.
 export function writeConfigFile(
   cwd: string,
   config: { server: string; repo_id: number; token: string },
 ): void {
-  writeFileSync(join(cwd, CONFIG_FILE), `${JSON.stringify(config, null, 2)}\n`);
+  const path = join(cwd, CONFIG_FILE);
+  let existing: Record<string, unknown> = {};
+  try {
+    const parsed = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) existing = parsed as Record<string, unknown>;
+  } catch {
+    // Unparseable, so there is nothing to keep. Writing the link is still the
+    // right thing to do — it is what the caller came here for, and the file was
+    // no use to anybody in the state it was in.
+  }
+
+  writeFileSync(path, `${JSON.stringify({ ...existing, ...config }, null, 2)}\n`);
 }

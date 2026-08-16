@@ -9,6 +9,11 @@ export interface ProcResult {
   stdout: string;
   stderr: string;
   code: number | null;
+  // Set only when the *place* failed to carry the command out — the container
+  // stopped between the check and the spawn, the image has no such executable
+  // (spec 36, criterion 8). It is never a result about the project's code, and
+  // nothing downstream may read it as one.
+  placeFailure?: string;
 }
 
 // Can this path actually be spawned? A binstub that exists but has lost its

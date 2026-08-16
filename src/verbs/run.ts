@@ -1,6 +1,7 @@
 import type { Config } from '../config.ts';
 import { materializeGuardrails } from '../files/guardrails.ts';
 import { materializeBehavioral } from '../files/behavioral.ts';
+import { placeProblem } from '../runner/place.ts';
 import { validateStack, type PrecheckResult } from '../runner/precheck.ts';
 import { runRspecSuite } from '../runner/rspec.ts';
 import { runVitestSuite } from '../runner/vitest.ts';
@@ -74,6 +75,12 @@ function resolve(config: Config, deps?: Partial<Deps>): Deps {
 }
 
 async function execute(config: Config, d: Deps, only: string[] | null): Promise<void> {
+  // Spec 36, criterion 7. Before the first suite is fetched: a run that cannot
+  // happen where this project's dependencies live has nothing honest to file,
+  // and the whole batch would go up as suite errors describing the wrong thing.
+  const unusable = placeProblem(config.projectRoot);
+  if (unusable) throw new Error(`${unusable}\nNothing was run and no results were filed.`);
+
   const suites = await d.getSuites();
   const ready = suites.filter((item) => item.status === 'ready');
   const selected = only === null ? ready : select(ready, only);

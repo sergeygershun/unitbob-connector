@@ -18,7 +18,10 @@ import {
   runnerReadyPrecheck,
 } from '../runner/precheck.ts';
 import { selectRunnerEnvelope, withInstalledRunnerVersion, type RunnerEnvelope } from '../runner/manifest.ts';
+import { placeProblem } from '../runner/place.ts';
+import { alignRunnerEnvironmentWithPlace } from '../runner/placeEnvironment.ts';
 import { ensureRunner, ensureStructuralRunner, type ProvisionResult } from '../runner/provision.ts';
+import { ToolchainUnavailableError } from '../runner/toolchain.ts';
 import { probeBehavioralWorld, type WorldProbeResult } from '../runner/worldProbe.ts';
 import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
 
@@ -104,8 +107,29 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     ...deps,
   };
 
+  // Spec 36, criterion 7. Before the first byte is written and long before the
+  // first call to the server: a place that cannot be used is a fact we can learn
+  // now, and learning it after a suite has been generated and run means the
+  // evidence disappeared with the container.
+  //
+  // Not a `ToolchainUnavailableError`: the place is named in the config and the
+  // message below already says what to do about it. Suggesting a container to
+  // somebody whose container is the problem is noise.
+  const unusable = placeProblem(config.projectRoot);
+  if (unusable) throw new Error(`${unusable}\nNothing was written and nothing was uploaded.`);
+
   const check = actual.precheck(config.projectRoot);
+  // Deliberately a plain stop. This one says "none of the three stacks is here",
+  // which is read off files — a Gemfile, a package.json, a requirements.txt —
+  // and those are on this machine whatever place the run happens in. A container
+  // is never the answer to it.
   if (!check.ok) throw new Error(check.message ?? 'Unsupported runtime.');
+
+  // An environment installed somewhere else is not an environment (spec 36, §6).
+  // Here, where it can be built again, and before anything asks whether a runner
+  // is ready.
+  const replaced = alignRunnerEnvironmentWithPlace(config.projectRoot);
+  if (replaced) actual.stdout.write(`${replaced}\n`);
 
   // Ruby only. This wrote `unitbob_helper.rb` and `rspec.opts` into every
   // project it touched, so a Flask app and a NestJS app each came away with a
@@ -126,9 +150,10 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     const provisioned = await actual.ensureStructuralRunner(config.projectRoot, check.runner);
     if (provisioned.status === 'fixable') {
       const steps = provisioned.checklist?.length ? `\n  - ${provisioned.checklist.join('\n  - ')}` : '';
-      throw new Error(
+      throw new ToolchainUnavailableError(
         `The ${check.runner} runner could not be installed under .unitbob/, and nothing can run without it: ` +
           `${provisioned.message ?? 'provisioning failed'}${steps}\nNothing was written and nothing was uploaded.`,
+        config.projectRoot,
       );
     }
     setupNotices.push(...(provisioned.checklist ?? []));
@@ -137,7 +162,12 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     // actually being startable are two different facts, and this is the cheap
     // one to check before a whole generation is built on it.
     const ready = actual.confirmRunner(config.projectRoot, check.runner);
-    if (!ready.ok) throw new Error(ready.message ?? `The ${check.runner} runner is not available.`);
+    if (!ready.ok) {
+      throw new ToolchainUnavailableError(
+        ready.message ?? `The ${check.runner} runner is not available.`,
+        config.projectRoot,
+      );
+    }
   }
 
   // Spec 32-6. Before anything is fetched or written, find out whether the suite
@@ -154,7 +184,15 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   // the same thing: on Python that would shell out to pytest all over again.
   const structuralRunner = check.runner ?? null;
   const boot = await actual.bootCheck(config.projectRoot, structuralRunner);
-  if (boot.status === 'broken') throw new Error(bootFinding(boot, structuralRunner));
+  if (boot.status === 'broken') {
+    // "Your environment is not ready" is the one of the two that a container can
+    // answer — the toolchain is missing here and may be sitting in one. A defect
+    // found in the code is a defect wherever it runs, and offering a container
+    // for it would be the noise this spec is trying to remove.
+    throw boot.cause === 'environment_not_ready'
+      ? new ToolchainUnavailableError(bootFinding(boot, structuralRunner), config.projectRoot)
+      : new Error(bootFinding(boot, structuralRunner));
+  }
   actual.stdout.write(bootFinding(boot, structuralRunner));
 
   const packets = await actual.getSuitePacketsBatch();
@@ -371,7 +409,8 @@ function bootFinding(boot: BootCheck, runner: string | null): string {
     // Not checked is not broken, and nothing downstream may treat it as such.
     // Conflating the two would block honest projects — the whole reason this
     // state is named for what happened rather than for what we know.
-    return `${NOT_CHECKED_REASON[boot.reason]} Generation continues.${caveat}\n`;
+    const said = boot.detail ? `\n\n  ${boot.detail}\n` : '';
+    return `${NOT_CHECKED_REASON[boot.reason]}${said} Generation continues.${caveat}\n`;
   }
 
   const headline =
@@ -424,7 +463,7 @@ const STRUCTURAL_ONLY =
   'which has nothing of ours to load until its suite exists, so it was not asked.';
 
 const NOT_CHECKED_REASON: Record<
-  'no_runner' | 'runner_too_old' | 'runner_could_not_answer' | 'timed_out' | 'nothing_to_load',
+  'no_runner' | 'runner_too_old' | 'runner_could_not_answer' | 'timed_out' | 'nothing_to_load' | 'place_failed',
   string
 > = {
   no_runner: 'Did not check whether the suite can start: no runner available to load it with.',
@@ -443,6 +482,13 @@ const NOT_CHECKED_REASON: Record<
     'stopped on an error of its own before loading anything. Nothing was learned about your code either way.',
   timed_out: 'Did not check whether the suite can start: loading it took too long and was stopped.',
   nothing_to_load: 'Did not check whether the suite can start: there was nothing to load yet.',
+  // Spec 36, criterion 8. Docker refused, or the container went away between the
+  // check and the spawn. Nothing here says anything about the project, and the
+  // one thing this must never turn into is "we found a defect in your code".
+  place_failed:
+    'Did not check whether the suite can start: the place this project runs in did not carry the command ' +
+    'out. That is a fault of the container or the docker daemon, not of your code, and nothing was learned ' +
+    'about your code either way.',
 };
 
 function knownDefectContext(args: string[]): KnownDefectContext {

@@ -11,6 +11,7 @@ import {
 } from '../files/behavioral.ts';
 import { runBddSuite } from '../runner/bdd.ts';
 import { boundReport } from '../runner/boundReport.ts';
+import { placeOf } from '../runner/place.ts';
 import type { SuiteArtifact } from '../wire.ts';
 import {
   branchRunner,
@@ -112,6 +113,22 @@ async function runCandidateAtRevision(
   output: HostBranchOutput,
   revision: string,
 ): Promise<{ revision: string; run_result: string }> {
+  // Spec 36, Non-Goals. The worktree below is created under the system's
+  // temporary directory — outside anything a container has mounted, so in there
+  // it does not exist at all. Said plainly rather than run into. The obvious
+  // repair, moving the worktree under `.unitbob/`, puts a whole second copy of
+  // the application inside the tree graphify scans, and a copy left behind by a
+  // failure builds the next map out of two applications.
+  const place = placeOf(projectRoot);
+  if (place.kind === 'docker') {
+    throw new Error(
+      "Reviewing at a fixed revision is not supported while this project's tests run inside a container " +
+        `(\`${place.container}\`): the review needs a git worktree outside the project, which the container ` +
+        'cannot see. Review against the working tree instead (drop the fixed revision), or run this project ' +
+        'on this machine.',
+    );
+  }
+
   const resolved = execFileSync('git', ['rev-parse', '--verify', revision], {
     cwd: projectRoot,
     encoding: 'utf8',

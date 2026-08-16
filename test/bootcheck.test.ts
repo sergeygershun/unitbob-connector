@@ -476,3 +476,27 @@ test('a project whose suite starts is ok, even with a defect waiting inside it',
 
   assert.deepEqual(result, { status: 'ok' });
 });
+
+// Spec 36, criterion 8. `docker exec` fails with 125/126/127 for reasons of its
+// own — the container stopped between the check and the spawn — and those codes
+// collide with real runners'. Unmarked, the exit code reads as "broken" and
+// `causeOf` then picks a cause by matching the output against a path pattern:
+// somebody would be told a defect was found in their code because a daemon
+// refused. It must be able to reach neither verdict.
+test('a failure of the place itself never becomes a verdict about the code', async () => {
+  const deps: BootCheckDeps = {
+    runCmd: async () => ({
+      code: 126,
+      stdout: '',
+      // Full of paths that look exactly like this project's own code — which is
+      // what `causeOf` would seize on.
+      stderr: 'app/models/billing.rb:12: Error response from daemon: container is not running',
+      placeFailure: 'Error response from daemon: container is not running',
+    }),
+  };
+
+  const result = await bootCheck(railsProject(), 'rspec', deps);
+
+  assert.equal(result.status, 'not_checked');
+  assert.equal(result.status === 'not_checked' ? result.reason : '', 'place_failed');
+});

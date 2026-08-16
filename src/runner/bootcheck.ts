@@ -33,7 +33,18 @@ export type BootCheck =
     }
   | {
       status: 'not_checked';
-      reason: 'no_runner' | 'runner_too_old' | 'runner_could_not_answer' | 'timed_out' | 'nothing_to_load';
+      reason:
+        | 'no_runner'
+        | 'runner_too_old'
+        | 'runner_could_not_answer'
+        | 'timed_out'
+        | 'nothing_to_load'
+        // The place itself did not carry the command out — the container
+        // stopped, the image has no such executable (spec 36, criterion 8).
+        // Its own state, because it is the one answer that is about neither the
+        // runner nor the code.
+        | 'place_failed';
+      detail?: string;
     };
 
 // Three states, and the third is named for what happened rather than for what
@@ -344,6 +355,13 @@ function classify(
   // runProcess reports a timeout as a null exit code. Waiting too long tells us
   // nothing about the code, so it must not read as a defect.
   if (result.code === null) return { status: 'not_checked', reason: 'timed_out' };
+  // Before the exit code is read at all, and that order is the whole point. The
+  // codes docker returns for its own failures overlap with real runners' codes,
+  // and one step further down `causeOf` picks a cause by matching the output
+  // against a path pattern — so a container that stopped mid-run could come back
+  // as "found a defect that stops your test suite from starting". An accusation
+  // about somebody's code, for a failure of the daemon.
+  if (result.placeFailure) return { status: 'not_checked', reason: 'place_failed', detail: result.placeFailure };
 
   const outcome = verdict(result);
   if (outcome === 'ok') return { status: 'ok' };

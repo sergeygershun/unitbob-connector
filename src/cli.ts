@@ -11,6 +11,8 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ensureLinked } from './link.ts';
+import { placeAdvice } from './runner/placeAdvice.ts';
+import { ToolchainUnavailableError } from './runner/toolchain.ts';
 import type { Config } from './config.ts';
 import type { SuiteBuildResult } from './wire.ts';
 import { recipe } from './verbs/recipe.ts';
@@ -157,7 +159,13 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
         return 1;
     }
   } catch (err) {
-    process.stderr.write(`${(err as Error).message}\n`);
+    // Spec 36, §7.1. One `catch` already stands over every verb, and every hard
+    // stop reaches it — but it also catches "the server did not answer" and
+    // "your token was refused", and advising somebody with a dead Heroku to
+    // configure a container is a new kind of useless message. So the advice is
+    // attached to one named stop and to nothing else.
+    const advice = err instanceof ToolchainUnavailableError ? placeAdvice(err.projectRoot) : null;
+    process.stderr.write(`${(err as Error).message}\n${advice ? `\n${advice}\n` : ''}`);
     return 1;
   }
 }

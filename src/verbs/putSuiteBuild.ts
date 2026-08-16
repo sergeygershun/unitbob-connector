@@ -4,6 +4,7 @@ import {
   readSuiteBuildRequest,
   type SuiteBuildBranch,
 } from '../files/suiteBuild.ts';
+import { placeProblem } from '../runner/place.ts';
 import { collectBuildProblems } from './validateBuild.ts';
 import { PUBLISHED, uploadItem, withReview } from '../files/suiteBuildUpload.ts';
 import { Wire, type SuiteBuildItem, type SuiteBuildResult } from '../wire.ts';
@@ -35,6 +36,12 @@ export async function putSuiteBuild(
   _args: string[] = [],
   deps?: Partial<PutSuiteBuildDeps>,
 ): Promise<SuiteBuildResult[]> {
+  // Spec 36, criterion 7. Publishing is followed immediately by a first run, so
+  // a place that cannot be used is not something to discover after the suite is
+  // stored on the server.
+  const unusable = placeProblem(config.projectRoot);
+  if (unusable) throw new Error(`${unusable}\nNothing was uploaded.`);
+
   const request = readSuiteBuildRequest(config.projectRoot);
   // Spec 32-6: read branch by branch, so one unreadable entry neither hides the
   // next branch's problems nor sinks a peer that is finished and correct.

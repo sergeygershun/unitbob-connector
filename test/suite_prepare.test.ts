@@ -898,3 +898,33 @@ for (const runner of ['pytest-bdd', 'cucumber-js'] as const) {
     assert.equal(readFileSync(join(projectRoot, world.path), 'utf8'), world.content);
   });
 }
+
+// Spec 36, criterion 7 and task 3.2. The check for "can work happen where this
+// project's dependencies live" runs before the first write and before the first
+// call to the server. After a suite has been generated and run, the evidence has
+// already gone: a container that is not sharing the folder takes the report with
+// it when it stops.
+test('an unusable execution place stops suite-prepare before anything is written or fetched', async () => {
+  const projectRoot = railsProject();
+  writeFileSync(
+    join(projectRoot, '.unitbob.json'),
+    JSON.stringify({ server: 'https://host', repo_id: 3, token: 't', exec: { docker: { container: 'nope' } } }),
+  );
+  let fetched = false;
+
+  await assert.rejects(
+    () => suitePrepare(config(projectRoot), ['--no-known-defect'], {
+      precheck: okPrecheck,
+      bootCheck: okBoot,
+      ensureRunner: okRunner,
+      getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+      getSuitePacketsBatch: async () => { fetched = true; return packets(); },
+      stdout: { write: () => true },
+    }),
+    /container `nope`/,
+  );
+
+  assert.equal(fetched, false);
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build')), false);
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'structural')), false);
+});

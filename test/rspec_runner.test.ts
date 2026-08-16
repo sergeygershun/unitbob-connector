@@ -100,3 +100,25 @@ test('reads the JSON report from the --out file, immune to stdout pollution', as
   assert.deepEqual(JSON.parse(result.report), { examples: [] });
   assert.match(result.stdout, /DEPRECATION WARNING/);
 });
+
+// Spec 36, criterion 9. The report goes to a fixed path with no run marker on
+// it, and — once the run happens in a container — into a folder both sides
+// share. A run we gave up on can leave a process alive in there that writes the
+// report after we stopped waiting, and the next run would read it as its own:
+// a green result nobody earned. Having none is the better of the two.
+test('a report left over from an earlier run is not counted as this run\'s', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, 'bin'), { recursive: true });
+  mkdirSync(join(projectRoot, '.unitbob', 'structural'), { recursive: true });
+  writeFileSync(
+    join(projectRoot, '.unitbob', 'structural', 'rspec_result.json'),
+    '{"examples":[{"status":"passed"}]}',
+  );
+  // This one dies before writing anything, exactly as a suite that cannot boot
+  // does.
+  executable(join(projectRoot, 'bin', 'rspec'), 'exit 1');
+
+  const result = await runRspecSuite(projectRoot, ['.unitbob/structural/architecture_map_contracts_spec.rb']);
+
+  assert.equal(result.report, '');
+});

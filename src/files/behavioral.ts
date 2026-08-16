@@ -403,7 +403,12 @@ export function copyBehavioralRunnerEnvironment(
 const CONNECTOR_RUN_ARTIFACTS: ReadonlySet<string> = new Set(BDD_RUN_ARTIFACTS);
 
 const EMPTY_ENTRIES = new Set<string>();
-const RUNNER_ENVIRONMENT_ENTRIES: Record<string, ReadonlySet<string>> = {
+
+// What under the behavioral root is an *installed environment* rather than
+// generated text. Exported since spec 36: when the place a run happens in
+// changes, exactly these entries are thrown away so they can be installed again,
+// and the generated suite sitting beside them is left untouched.
+export const RUNNER_ENVIRONMENT_ENTRIES: Record<string, ReadonlySet<string>> = {
   cucumber: new Set(['.bundle', 'Gemfile', 'Gemfile.lock']),
   'cucumber-js': new Set(['node_modules', 'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']),
   'pytest-bdd': new Set(['.venv']),

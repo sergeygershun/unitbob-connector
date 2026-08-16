@@ -7,6 +7,8 @@ import {
   type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
 import { digestOf, failureSet, readRunState, rememberFailures } from '../runner/failureDigest.ts';
+import { placeProblem } from '../runner/place.ts';
+import { placeAdvice } from '../runner/placeAdvice.ts';
 import { validateStack } from '../runner/precheck.ts';
 import { runBddSuite } from '../runner/bdd.ts';
 import { runStructuralByRunner } from './run.ts';
@@ -55,6 +57,11 @@ export async function runLocal(
     stdout: process.stdout,
     ...deps,
   };
+
+  // Spec 36, criterion 7. A run that cannot reach the place its dependencies
+  // live in has nothing to report but noise, so it is stopped by name here.
+  const unusable = placeProblem(config.projectRoot);
+  if (unusable) throw new Error(unusable);
 
   const request = readSuiteBuildRequest(config.projectRoot);
   const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
@@ -203,7 +210,12 @@ async function runOneBranch(
         ? await d.runBehavioral(config.projectRoot, runner, suitePaths[0])
         : await d.runStructural(config.projectRoot, runner, suitePaths);
   } catch (err) {
-    d.stdout.write(`The runner could not start: ${(err as Error).message}\n`);
+    // The second and last dead end (spec 36, §7.1). This one does not throw —
+    // it prints and returns zero, so it never reaches the one `catch` that adds
+    // this advice everywhere else. And it is the case that matters most: the
+    // suite exists by now, and the person is trying to run it.
+    const advice = placeAdvice(config.projectRoot);
+    d.stdout.write(`The runner could not start: ${(err as Error).message}\n${advice ? `\n${advice}\n` : ''}`);
     return null;
   }
 
