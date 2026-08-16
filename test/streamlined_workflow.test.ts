@@ -325,6 +325,21 @@ test('repair packets run sequentially and validate owned cases before one final 
   assert.doesNotMatch(flat, /run repair packets (?:together|in parallel)/i);
 });
 
+// Spec 35-1, criterion 3. Sequential repair produces no output for tens of
+// minutes at a time, and five such packets in a row are indistinguishable from a
+// hung process — which is exactly how one run was read. The coordinator already
+// knows the sequence; this only makes it say it.
+test('the coordinator names each repair packet before it starts and after it returns', () => {
+  assert.match(flat, /repair 3\/7: bh-agency-solo-sales/);
+  assert.match(flat, /repair 3\/7: bh-agency-solo-sales — 48 scenarios green/);
+  assert.match(flat, /one line before launching a packet and one line after it returns/i);
+  // The count is the packets that were actually built, not a guess.
+  assert.match(flat, /number after the slash is the count of failure packets you actually built/i);
+  // Nothing new is introduced to carry it: no bar, no clock, no file.
+  assert.match(flat, /No progress bar, no timer, no estimate/i);
+  assert.doesNotMatch(flat, /persisted progress|progress file/i);
+});
+
 test('partial checkpoints enter the same executable repair loop', () => {
   assert.match(flat, /unresolved_promises.*without.*initial.*failure/i);
   assert.match(flat, /complete.*unresolved_promises.*first/i);

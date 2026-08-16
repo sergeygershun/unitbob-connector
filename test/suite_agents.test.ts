@@ -36,7 +36,7 @@ test('suite-worker has an emergency 150-turn Sonnet fuse and one plan-item contr
   assert.match(body, /final read.*confirm every `facts` entry.*object/i);
 });
 
-// Spec 42, Task 0.3. The rule "a checkpoint owes `decisions` and
+// Spec 43, Task 0.3. The rule "a checkpoint owes `decisions` and
 // `known_problems`" lived in one line of `validateWorkerCheckpoints.ts` and
 // nowhere a worker or a coordinator can read it. Three runs paid for that in
 // rejected checkpoints — about thirty on one of them, plus a hand-written
@@ -59,7 +59,7 @@ test('every place a checkpoint is written names the keys the gate requires', () 
   assert.match(workflow, /"decisions": \[\], "known_problems": \[\]/);
 });
 
-// Spec 43, §1.1–1.5. Two runs out of four lost an hour each to roles the session
+// Spec 44, §1.1–1.5. Two runs out of four lost an hour each to roles the session
 // could not see, and both found out only at fan-out: a2time after the map, the
 // plan and 18 seeded checkpoints; noahsat-web after a full behavioral branch it
 // then had to throw away. The check costs seconds, so it stands at the top of
@@ -152,4 +152,18 @@ test('suite-repair-worker validates its owned slice within a 150-turn fuse', () 
   assert.match(body, /ambigu.*build_error/i);
   assert.match(body, /business contract.*production source/i);
   assert.match(body, /final read.*confirm every `facts` entry.*object/i);
+});
+
+// Spec 35-1, criterion 4, under spec 43's one-place-per-rule. The full scope of
+// verdicts — including the capabilities the finite plan left outside the chosen
+// scope — is stated in the brain prompt that owns this review. A copy here would
+// be a second home for a rule with one owner, which is how the local marker
+// check drifted from the server's and had to be removed.
+test('the reviewer agent points at the review request and does not re-tell the brain rule about scope', () => {
+  const { body } = agent('suite-reviewer');
+
+  assert.match(body, /one entry per assigned capability/i);
+  assert.doesNotMatch(body, /outside the chosen scope/i);
+  assert.doesNotMatch(body, /without reading Scenarios/i);
+  assert.doesNotMatch(body, /fifty-six|56 capabilit/i);
 });

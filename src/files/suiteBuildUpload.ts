@@ -5,7 +5,7 @@ import type { SuiteBuildItem } from '../wire.ts';
 // What travels to the server, and what "published" means when it answers. One
 // module, because two commands ask those questions: `put-suite-build` sends the
 // batch, and `validate-build` sends the same batch as a dry run so the server's
-// verdict is about the exact bytes the publish will carry (spec 42, §3).
+// verdict is about the exact bytes the publish will carry (spec 43, §3).
 //
 // A second assembly would be a second answer to "what are we uploading", and the
 // dry run would then be checking something the publish does not send — which is

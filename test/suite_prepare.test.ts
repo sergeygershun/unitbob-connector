@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { suitePrepare as runSuitePrepare } from '../src/verbs/suitePrepare.ts';
 import { UNITBOB_HELPER_RB } from '../src/files/guardrails.ts';
-import { BEHAVIORAL_WORLD, BEHAVIORAL_WORLD_PATH } from '../src/files/behavioral.ts';
+import { BEHAVIORAL_WORLD, BEHAVIORAL_WORLD_PATH, behavioralWorldFor } from '../src/files/behavioral.ts';
 import { readSuiteBuildRequest } from '../src/files/suiteBuild.ts';
 import type { Config } from '../src/config.ts';
 import type { SuitePacket } from '../src/wire.ts';
@@ -107,7 +107,7 @@ test('suite-prepare fetches both peer assignments and each branch recipe, then w
   assert.equal(behavioral.recipe.name, 'generate_behavioral');
 });
 
-// Spec 43, §3.2. The one thing a step file must get right to exist at all — its
+// Spec 44, §3.2. The one thing a step file must get right to exist at all — its
 // name — was known only inside `src/runner/bdd.ts`, and the recipe's retelling of
 // it was wrong for pytest. It now travels on the branch that will be written
 // against that runner, and is printed where the coordinator is already reading.
@@ -256,7 +256,7 @@ test('suite-prepare materializes the boot helper right after the precheck, in a 
   assert.equal(readFileSync(helperPath, 'utf8'), UNITBOB_HELPER_RB);
 });
 
-// Spec 42, §5.1. This step was unconditional, so a Flask app and a NestJS app
+// Spec 43, §5.1. This step was unconditional, so a Flask app and a NestJS app
 // each came away with a Ruby boot helper and an `rspec.opts` they cannot run and
 // never asked for — the product leaving another stack's litter in someone's
 // repository.
@@ -844,3 +844,57 @@ test('suite-prepare passes on what provisioning could not do for them', async ()
   // A note, not a refusal: the request is still written and the build goes on.
   assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'request.json')), true);
 });
+
+// Spec 35-1, criterion 2. A worker decides what a step may assume before it
+// writes one, so the fact has to arrive here — not as a surprise in the middle
+// of a run that quietly went out to the network.
+test('the behavioral branch is told what Cucumber does not load before a step is written', async () => {
+  const projectRoot = railsProject();
+  const output: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: () => ({ runner: 'cucumber' }),
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output.push(chunk); return true; } },
+  });
+
+  const text = output.join('');
+  assert.match(text, /Cucumber loads neither `spec\/rails_helper\.rb` nor `spec\/support\/\*\*`/);
+  assert.match(text, /outgoing HTTP is blocked/);
+});
+
+// The same run on the other two stacks. Every branch is told, and each is told
+// its own runner's facts — a Ruby sentence printed over a Python branch would be
+// exactly as untrue as the silence it replaced.
+for (const runner of ['pytest-bdd', 'cucumber-js'] as const) {
+  test(`the ${runner} branch is told its own harness facts, and no Ruby ones`, async () => {
+    const projectRoot = tmpProject();
+    const output: string[] = [];
+
+    await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+      precheck: okPrecheck,
+      bootCheck: okBoot,
+      ensureRunner: okRunner,
+      runnerEnvelope: () => ({ runner }),
+      getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+      getSuitePacketsBatch: async () => {
+        const [structural, behavioral] = packets();
+        return [structural, { ...behavioral, runner } as SuitePacket];
+      },
+      stdout: { write: (chunk) => { output.push(chunk); return true; } },
+    });
+
+    const text = output.join('');
+    assert.match(text, /leave this machine is refused/);
+    assert.doesNotMatch(text, /rails_helper/);
+
+    // And the harness the notice describes is actually on disk by now, restored
+    // for this runner the same way the Ruby World always was.
+    const world = behavioralWorldFor(runner)!;
+    assert.equal(readFileSync(join(projectRoot, world.path), 'utf8'), world.content);
+  });
+}

@@ -51,7 +51,7 @@ test('materializes a vitest suite without the Ruby boot kit', () => {
   assert.equal(existsSync(join(dir, 'rspec.opts')), false);
 });
 
-// Spec 42, §6.4. A branch is one file per assignment now. This step wiped the
+// Spec 43, §6.4. A branch is one file per assignment now. This step wiped the
 // directory and wrote only the main file back, so a published four-file suite
 // came back as one — and the run that followed it protected a quarter of what
 // the map claimed, without a word.

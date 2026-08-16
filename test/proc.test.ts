@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { ensureUnitbobIgnored, runGraphifyExtractKeyless, runProcess } from '../src/proc.ts';
+import {
+  GRAPH_NOISE_PATTERNS,
+  ensureUnitbobIgnored,
+  ignoreExclusions,
+  runGraphifyExtractKeyless,
+  runProcess,
+} from '../src/proc.ts';
 
 function tmpProject(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -89,13 +95,62 @@ test('ensureUnitbobIgnored leaves paths that can hold business logic alone', () 
 test('ensureUnitbobIgnored keeps a pattern the project already declared', () => {
   const projectRoot = tmpProject('unitbob-proc-ignore-kept-');
   const ignorePath = join(projectRoot, '.graphifyignore');
-  writeFileSync(ignorePath, 'vendor/\nmy-own-rule/\n');
+  writeFileSync(ignorePath, 'db/migrate/\nmy-own-rule/\n');
 
   ensureUnitbobIgnored(projectRoot);
 
   const lines = readFileSync(ignorePath, 'utf8').split('\n').filter(Boolean);
-  assert.deepEqual(lines.slice(0, 2), ['vendor/', 'my-own-rule/']);
-  assert.equal(lines.filter((line) => line === 'vendor/').length, 1);
+  assert.deepEqual(lines.slice(0, 2), ['db/migrate/', 'my-own-rule/']);
+  assert.equal(lines.filter((line) => line === 'db/migrate/').length, 1);
+});
+
+// Spec 35-1, criterion 1. As a glob, `vendor/` is not relative to the repository
+// root — it matches a `vendor` directory at any depth, so it also swallowed
+// `app/controllers/vendor/` and took a whole contractor console off the map of
+// one real application with nothing said about it.
+test('the template anchors vendor at the repository root', () => {
+  assert.ok(GRAPH_NOISE_PATTERNS.includes('/vendor/'));
+  assert.ok(!GRAPH_NOISE_PATTERNS.includes('vendor/'));
+});
+
+// Editing the file alone cannot fix an installed project: `ensureLines` appends
+// whatever the template is missing, so the anchored form would land next to the
+// old one and the old one would keep eating `app/**/vendor/`.
+test('ensureUnitbobIgnored migrates an unanchored vendor line and leaves the rest alone', () => {
+  const projectRoot = tmpProject('unitbob-proc-ignore-migrate-');
+  const ignorePath = join(projectRoot, '.graphifyignore');
+  writeFileSync(ignorePath, '# mine\nvendor/bundle/\nvendor/\nmy-own-rule/\n');
+
+  ensureUnitbobIgnored(projectRoot);
+  const afterOnce = readFileSync(ignorePath, 'utf8');
+  ensureUnitbobIgnored(projectRoot);
+
+  assert.equal(readFileSync(ignorePath, 'utf8'), afterOnce, 'the migration must be idempotent');
+  const lines = afterOnce.split('\n');
+  assert.deepEqual(lines.slice(0, 4), ['# mine', 'vendor/bundle/', '/vendor/', 'my-own-rule/']);
+  assert.equal(lines.filter((line) => line === 'vendor/').length, 0);
+  assert.equal(lines.filter((line) => line === '/vendor/').length, 1);
+});
+
+// The general cure. Anchoring `/vendor/` fixes the blind spot we found; this is
+// what makes the next one visible, whichever pattern causes it.
+test('ignoreExclusions counts the files each pattern takes off the map, and stays quiet about the rest', () => {
+  const projectRoot = tmpProject('unitbob-proc-exclusions-');
+  writeProjectFile(projectRoot, '.graphifyignore', '# a comment\n\n/vendor/\ndb/migrate/\n*.min.js\nnothing-here/\n');
+  writeProjectFile(projectRoot, 'vendor/gems/a.rb', '');
+  writeProjectFile(projectRoot, 'vendor/gems/b.rb', '');
+  writeProjectFile(projectRoot, 'app/controllers/vendor/console.rb', '');
+  writeProjectFile(projectRoot, 'db/migrate/001_create.rb', '');
+  writeProjectFile(projectRoot, 'app/assets/jquery.min.js', '');
+  writeProjectFile(projectRoot, 'app/models/bill.rb', '');
+
+  const exclusions = ignoreExclusions(projectRoot);
+
+  assert.deepEqual(exclusions, [
+    { pattern: '/vendor/', files: 2 },
+    { pattern: 'db/migrate/', files: 1 },
+    { pattern: '*.min.js', files: 1 },
+  ]);
 });
 
 test('ensureUnitbobIgnored adds graphify-out exactly once and preserves an existing entry', () => {
@@ -126,6 +181,9 @@ test('the ignore rules keep business code in the graph and drop the rest', async
   writeProjectFile(projectRoot, 'app/models/bill.rb', 'class Bill\n  def debt\n    42\n  end\nend\n');
   writeProjectFile(projectRoot, 'app/javascript/controllers/bill_controller.js', 'export function connect() { return 1; }\n');
   writeProjectFile(projectRoot, 'lib/pricing.py', 'def total(items):\n    return sum(items)\n');
+  // Kept, and the reason the vendor pattern is anchored: this is the project's
+  // own code, in a folder that happens to be named after the people it serves.
+  writeProjectFile(projectRoot, 'app/controllers/vendor/console_controller.rb', 'class ConsoleController\n  def payouts\n    7\n  end\nend\n');
   // Dropped: vendored, generated, and type-only files.
   writeProjectFile(projectRoot, 'vendor/assets/moment.js', 'function moment() { return 1; }\n');
   writeProjectFile(projectRoot, 'app/assets/javascripts/datatables.js', 'function dataTable() { return 1; }\n');
@@ -141,7 +199,12 @@ test('the ignore rules keep business code in the graph and drop the rest', async
   const files = new Set<string>(graph.nodes.map((node: { source_file?: string }) => node.source_file ?? ''));
   const covered = (prefix: string) => [...files].some((file) => file.startsWith(prefix));
 
-  for (const kept of ['app/models/bill.rb', 'app/javascript/controllers/bill_controller.js', 'lib/pricing.py']) {
+  for (const kept of [
+    'app/models/bill.rb',
+    'app/javascript/controllers/bill_controller.js',
+    'lib/pricing.py',
+    'app/controllers/vendor/console_controller.rb',
+  ]) {
     assert.ok(covered(kept), `${kept} is business code and must be in the graph`);
   }
   for (const dropped of ['vendor/', 'app/assets/', 'db/migrate/', 'app/models/migrations/', 'types/']) {

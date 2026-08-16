@@ -2,7 +2,7 @@
 // captures stdout/stderr/exit code and hands them back untouched — shaping or
 // interpreting that output is the caller's (and ultimately Rails') job.
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface ProcResult {
@@ -104,7 +104,14 @@ export const GRAPH_NOISE_PATTERNS = [
   // apps dumped libraries — on the measured app that folder was moment.js,
   // datatables.js and jquery.inputmask, against a single node of own code. A
   // modern Rails app keeps its own JS in `app/javascript/`, which stays.
-  'vendor/',
+  //
+  // Anchored to the repository root, and this is the whole difference between a
+  // pattern and a blind spot: a gitignore pattern whose only separator is the
+  // trailing one is *not* relative to the root, so a bare `vendor/` matched a
+  // `vendor` directory at any depth. On one real Rails app (2026-08-16) that
+  // took `app/controllers/vendor/` with it — the project's own contractor
+  // console, gone from the map for a whole run, with nothing said about it.
+  '/vendor/',
   'app/assets/javascripts/',
   'app/assets/builds/',
   'app/assets/config/',
@@ -151,7 +158,26 @@ export function ensureUnitbobIgnored(projectRoot: string): void {
   // `.graphifyignore` is unitbob's own bookkeeping, like the other two entries —
   // the user never edits it, so it stays out of their commits.
   ensureLines(join(projectRoot, '.gitignore'), ['.unitbob/', 'graphify-out/', '.graphifyignore']);
+
+  // Before `ensureLines`, never after. `ensureLines` appends whatever the
+  // template is missing, so on an already-installed project the anchored form
+  // would land in the file *next to* the old unanchored one, and the old one
+  // would go on eating `app/**/vendor/` exactly as before.
+  replaceLine(join(projectRoot, '.graphifyignore'), 'vendor/', '/vendor/');
   ensureLines(join(projectRoot, '.graphifyignore'), GRAPH_NOISE_PATTERNS);
+}
+
+// Rewrite one line this connector wrote in an earlier release, and nothing else.
+// The comparison is exact on the trimmed line, so a line the user wrote —
+// `vendor/bundle/`, `# vendor`, anything else — is left byte for byte as they
+// wrote it. Idempotent: a second run finds nothing to replace.
+function replaceLine(path: string, from: string, to: string): void {
+  if (!existsSync(path)) return;
+
+  const lines = readFileSync(path, 'utf8').split('\n');
+  if (!lines.some((line) => line.trim() === from)) return;
+
+  writeFileSync(path, lines.map((line) => (line.trim() === from ? to : line)).join('\n'));
 }
 
 // Appends whichever lines are missing, in one write, leaving the user's own
@@ -166,6 +192,109 @@ function ensureLines(path: string, lines: string[]): void {
 
   const prefix = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
   writeFileSync(path, `${current}${prefix}${missing.join('\n')}\n`);
+}
+
+export interface IgnoreExclusion {
+  pattern: string;
+  files: number;
+}
+
+// What the ignore file actually costs, counted in files, pattern by pattern.
+//
+// This is the general cure and the reason it is worth more than the particular
+// one above: an ignore pattern is a silent instrument. Everything it matches
+// simply never reaches the graph, and the subsystem it swallowed leaves no trace
+// of having existed — which is how one over-broad line hid a whole console and
+// the run looked complete. Anchoring `/vendor/` fixes the blind spot we found;
+// this makes the next one visible, whichever pattern causes it.
+//
+// The whole file is read, not just this connector's own template: a line the
+// user wrote can hide a subsystem exactly as well as a line we wrote.
+export function ignoreExclusions(projectRoot: string): IgnoreExclusion[] {
+  const path = join(projectRoot, '.graphifyignore');
+  if (!existsSync(path)) return [];
+
+  const counted = readFileSync(path, 'utf8')
+    .split('\n')
+    .flatMap((line) => {
+      const matcher = compileIgnorePattern(line);
+      return matcher ? [{ pattern: line.trim(), matcher, files: 0 }] : [];
+    });
+  if (counted.length === 0) return [];
+
+  for (const file of filesUnder(projectRoot)) {
+    // Every pattern that matches is credited, not just the first: two patterns
+    // covering the same directory are each costing you those files, and picking
+    // a winner would report one of them as harmless.
+    for (const entry of counted) {
+      if (matchesIgnorePattern(file, entry.matcher)) entry.files += 1;
+    }
+  }
+
+  return counted.filter((entry) => entry.files > 0).map(({ pattern, files }) => ({ pattern, files }));
+}
+
+interface IgnoreMatcher {
+  dirOnly: boolean;
+  regex: RegExp;
+}
+
+// The working subset of gitignore syntax — the part the patterns in this file
+// actually use. The rule that matters is the anchoring one: a pattern with a
+// separator anywhere but the end is relative to the repository root, and one
+// without is not. That single rule is the entire distance between `/vendor/`
+// and `vendor/`, so it is spelled out here rather than assumed.
+//
+// Negations (`!`) are not supported and are skipped rather than half-honoured:
+// counting a re-include as an exclusion would report a loss that never happened.
+function compileIgnorePattern(line: string): IgnoreMatcher | null {
+  const trimmed = line.trim();
+  if (trimmed === '' || trimmed.startsWith('#') || trimmed.startsWith('!')) return null;
+
+  const dirOnly = trimmed.endsWith('/');
+  const path = dirOnly ? trimmed.slice(0, -1) : trimmed;
+  const anchored = path.includes('/');
+  const source = path.replace(/^\//, '').split('/').map(globSegment).join('/');
+
+  return { dirOnly, regex: new RegExp(anchored ? `^${source}$` : `^(?:.*/)?${source}$`) };
+}
+
+function globSegment(segment: string): string {
+  return segment
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]');
+}
+
+function matchesIgnorePattern(relativePath: string, matcher: IgnoreMatcher): boolean {
+  const parts = relativePath.split('/');
+  // A pattern ending in `/` matches directories only, so for a file it is the
+  // ancestors that have to match and never the file itself. Excluding a
+  // directory excludes everything under it, which is why every prefix is tried.
+  const deepest = matcher.dirOnly ? parts.length - 1 : parts.length;
+
+  for (let depth = 1; depth <= deepest; depth += 1) {
+    if (matcher.regex.test(parts.slice(0, depth).join('/'))) return true;
+  }
+  return false;
+}
+
+// Directories graphify drops on its own (see the note above
+// `GRAPH_NOISE_PATTERNS`), plus `.git`. Counting inside them would charge our
+// patterns for files that were never going to reach the graph anyway, and the
+// number the reader is weighing is "what did this line cost me".
+const ALREADY_OFF_THE_GRAPH: ReadonlySet<string> = new Set([
+  '.git', 'node_modules', 'venv', '.venv', 'dist', 'build', 'target', 'out', '__pycache__',
+]);
+
+// Symlinks are neither followed nor counted: a link is not a file the graph
+// would have gained, and following one can walk forever.
+function filesUnder(root: string, relative = ''): string[] {
+  return readdirSync(join(root, relative), { withFileTypes: true }).flatMap((entry) => {
+    const path = relative ? `${relative}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) return ALREADY_OFF_THE_GRAPH.has(entry.name) ? [] : filesUnder(root, path);
+    return entry.isFile() ? [path] : [];
+  });
 }
 
 export async function runGraphifyExtractKeyless(projectRoot: string): Promise<ProcResult> {

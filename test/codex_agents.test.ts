@@ -47,7 +47,7 @@ test('every bounded Codex role is installed and budgeted', () => {
   }
 });
 
-// Spec 42, §7.8. The review schema was written from memory on every run, and
+// Spec 43, §7.8. The review schema was written from memory on every run, and
 // three runs out of four lost their publish to it: an invented `outcome_kind`
 // vocabulary, `candidate_digest` nested one level too deep, and a coordinator's
 // "no other top-level keys" that dropped the digest altogether. The schema now
@@ -118,7 +118,7 @@ test('codex-install places all definitions in the Codex user agent directory', (
   assert.match(output.join(''), /Start a new Codex thread before running Unitbob/);
 });
 
-// Spec 43, §1.7. The message said "Installed 3" while the list beside it held
+// Spec 44, §1.7. The message said "Installed 3" while the list beside it held
 // four names, for a whole release, because the count was a literal living
 // somewhere the list could not reach it. Both halves are asserted here so that a
 // fifth role changes the message without anybody editing the message.
@@ -138,7 +138,7 @@ test('codex-install counts the definitions from the list it installs, not from a
   assert.match(output.join(''), new RegExp(`\\b${AGENT_NAMES.length} Unitbob Codex agent definitions\\b`));
 });
 
-// Spec 43, §1.6. Refusing to overwrite protected a definition the user had
+// Spec 44, §1.6. Refusing to overwrite protected a definition the user had
 // edited — and stopped every upgrade from an older release, which is the case
 // that actually happens. Worse for the check that now stands at the top of both
 // workflows: a stale role answers READY, so a refused update reads as a session

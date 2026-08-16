@@ -23,7 +23,7 @@ function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'unitbob-routes-'));
 }
 
-// A Gemfile naming Rails, and a route file. Spec 42, §5.2: which stack this is
+// A Gemfile naming Rails, and a route file. Spec 43, §5.2: which stack this is
 // gets one answer in this package, and `config/routes.rb` on its own was not
 // it — it said yes to any project that happens to carry that path, and no to a
 // Rails application that keeps its routes anywhere else.
@@ -357,7 +357,7 @@ test('a stack with no router to ask says nothing and writes nothing', async () =
   assert.deepEqual(deps.calls, [], 'nothing is started on a stack we cannot ask');
 });
 
-// Spec 42, §5.2. `config/routes.rb` used to be the whole test, which made this
+// Spec 43, §5.2. `config/routes.rb` used to be the whole test, which made this
 // module a stack detector of its own — one wrong at both edges. A Node project
 // that happens to carry that path is not Rails, and nothing here should try to
 // boot it.

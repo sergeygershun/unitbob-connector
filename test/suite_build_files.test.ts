@@ -290,7 +290,7 @@ test('shares a golden behavioral review candidate digest with the server', () =>
   );
 });
 
-// Spec 42, §4. The digest names what the reviewer read. Editing metadata — the
+// Spec 43, §4. The digest names what the reviewer read. Editing metadata — the
 // very fix the server had demanded, on a run where the reviewer was right — used
 // to declare the review stale and cost a re-binding plus a second reviewer pass
 // while the suite files stood untouched.

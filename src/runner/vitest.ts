@@ -42,7 +42,7 @@ const PROJECT_CONFIGS = [
 // file of the branch in `include`, and the positional filters keep the run to
 // exactly those files.
 //
-// Named files rather than a directory glob, since spec 42, §6.5 made a branch
+// Named files rather than a directory glob, since spec 43, §6.5 made a branch
 // several files: the artifact already says which files it is, and a glob would
 // have to guess a naming convention nothing enforces. `include` is written even
 // when the project has no config of its own — Vitest's default include only

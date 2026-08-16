@@ -21,7 +21,7 @@ export const PYTEST_INI = '[pytest]\naddopts =\n';
 // JUnit XML report goes to --junit-xml, not stdout. The command is
 // connector-owned: the suite artifact never carries a command string.
 //
-// Every file of the branch is named positionally (spec 42, §6.5) — a branch is
+// Every file of the branch is named positionally (spec 43, §6.5) — a branch is
 // one file per assignment now, and pytest takes as many paths as it is given.
 //
 // Which pytest is a single question answered in one place (`locateRunner`), so

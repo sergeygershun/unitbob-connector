@@ -36,7 +36,7 @@ const FORBIDDEN = [
 // why no table of languages or result formats appears in either file.
 const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   // `wire.ts` types the response shape it relays, `unguarded_by_review` and all
-  // (spec 42, §7). Typing a field is transport; the connector never computes one.
+  // (spec 43, §7). Typing a field is transport; the connector never computes one.
   'wire.ts': [/manifest/i, /\bunguarded\b/i],
   [join('files', 'guardrails.ts')]: [/manifest/i],
   [join('files', 'suiteBuild.ts')]: [/manifest/i],
@@ -46,7 +46,7 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   [join('verbs', 'suitePrepare.ts')]: [/manifest/i],
   [join('verbs', 'validateBuild.ts')]: [/manifest/i],
 
-  // Spec 42, §7. `put-suite-build` prints the server's own `unguarded_by_review`
+  // Spec 43, §7. `put-suite-build` prints the server's own `unguarded_by_review`
   // list: capabilities the publish stored unguarded because the review objected
   // to every Scenario guarding them. Relaying the server's words is what this
   // command is for, and the alternative — silence, because the word is
@@ -56,7 +56,7 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
 
 // Spec 32-6 Phase 3 gave `validateBuild.ts` a standing exemption for `covered`,
 // `unguarded` and `coverage`: it held a local copy of the server's rules and had
-// to name what it was comparing. Spec 42 deleted that copy — the command asks
+// to name what it was comparing. Spec 43 deleted that copy — the command asks
 // the server for a dry run instead of predicting its verdict — so the exemption
 // went with it, and its absence above is now the guard. Those words reappearing
 // in that file mean a second implementation of a server rule has started growing

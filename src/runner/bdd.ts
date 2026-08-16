@@ -40,7 +40,7 @@ const PYTEST_INI = '[pytest]\naddopts =\n';
 
 // What a step file has to be for a strategy to load and execute it — the two
 // facts a writer needs before writing one, stated by the side that does the
-// loading (spec 43, §3).
+// loading (spec 44, §3).
 //
 // These used to be retold in the generation recipe, and on pytest the retelling
 // was wrong: it named `<capability>_steps.py`, which pytest does not collect. A

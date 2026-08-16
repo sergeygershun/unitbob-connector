@@ -79,7 +79,7 @@ export interface SuiteBuildResult {
   error?: string;
   counts?: Record<string, number>;
   // Capabilities the publish stored `unguarded` because the review objected to
-  // every Scenario guarding them (spec 42, §7). Present only when it happened —
+  // every Scenario guarding them (spec 43, §7). Present only when it happened —
   // the run is standing here when the decision is made, and should not first
   // meet it as a grey lamp on the map.
   unguarded_by_review?: Array<{ capability_id: string; reason: string }>;
@@ -264,7 +264,7 @@ export class Wire {
   // carries one result per suite_kind.
   //
   // `dryRun` is the same route, the same body and the same server-side
-  // validation, stopped before the first write (spec 42, §1). It answers
+  // validation, stopped before the first write (spec 43, §1). It answers
   // `would_publish` instead of `created`, and it is deliberately not a route of
   // its own: a second route would grow a second implementation, which is the
   // defect this whole spec removes.

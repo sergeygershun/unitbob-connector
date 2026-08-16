@@ -56,7 +56,7 @@ export async function putSuiteBuild(
   // skipped by going straight to the upload — but reported the way every other
   // local failure here is reported: against the branch it belongs to.
   //
-  // Since spec 42 that check is exactly one question, and it is about a branch
+  // Since spec 43 that check is exactly one question, and it is about a branch
   // the answer has *no* entry for: everything else it used to ask is now asked
   // of the server, by a dry run, before this command runs at all. So its
   // problems can never land on a branch this loop visits, and they are reported
@@ -160,7 +160,7 @@ function printResult(result: SuiteBuildResult): string {
   );
 }
 
-// Spec 42, §7. A capability every one of whose Scenarios the review objected to
+// Spec 43, §7. A capability every one of whose Scenarios the review objected to
 // is stored `unguarded` by the publish. The run is standing right here when that
 // is decided, so it is told here, in the server's own words — finding it on the
 // map afterwards is how a run finishes believing it published a guarantee it did

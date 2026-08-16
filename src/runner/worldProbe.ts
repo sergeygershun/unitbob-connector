@@ -65,6 +65,9 @@ const PROBE_FEATURE = `Feature: Unitbob World profile
 
   Scenario: supported state is clean at the next scenario boundary
     Then the second World probe scenario sees clean state and fresh mocks
+
+  Scenario: outgoing HTTP does not leave the machine
+    Then the World probe cannot reach the network
 `;
 
 const PROBE_STEPS = `PROBE_VERSION = "unitbob-world-probe-#{Process.pid}"
@@ -96,6 +99,16 @@ end
 
 Then('its integration assertion counter advances') do
   expect(unitbob_session.assertions).to be > 0
+end
+
+# Spec 35-1, criterion 2. Checked here rather than trusted, because the failure
+# it guards against is invisible from inside: a suite whose WebMock never came on
+# passes exactly the same way, and only the other end of the wire ever finds out.
+Then('the World probe cannot reach the network') do
+  require 'net/http'
+  expect {
+    Net::HTTP.get(URI('http://unitbob-world-probe.invalid/'))
+  }.to raise_error(WebMock::NetConnectNotAllowedError)
 end
 
 Then('the second World probe scenario sees clean state and fresh mocks') do

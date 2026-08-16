@@ -208,6 +208,48 @@ function rubyBehavioralPrecheck(projectRoot: string): PrecheckResult {
   };
 }
 
+// What the behavioral branch's environment is, before a single step is written
+// (spec 35-1, criterion 2). None of the three BDD runners reads the project's own
+// test bootstrap, so on every stack nothing a project's test setup switches on is
+// on here — and a worker who assumes otherwise writes a test that quietly goes
+// out to the real network.
+//
+// One sentence per runner, in that runner's own terms and stating only what is
+// true of it. A shared sentence would have to be vague enough to fit all three,
+// and vague is how the fact went unsaid in the first place.
+const BEHAVIORAL_HARNESS_NOTICE: Readonly<Record<string, string>> = {
+  cucumber:
+    'Cucumber loads neither `spec/rails_helper.rb` nor `spec/support/**` — whatever your RSpec ' +
+    'setup switches on is off here. The connector-owned World file turns on the part that is the ' +
+    'same in every Rails app: WebMock is on and outgoing HTTP is blocked (localhost still ' +
+    'reachable), Sidekiq is in fake mode, ActiveJob is on the test adapter, and the default URL ' +
+    'host is fixed. Everything that depends on this application — signing in, factories, reading ' +
+    'props, stubbing a provider — is yours to write in shared steps.',
+
+  'cucumber-js':
+    'cucumber-js loads none of this project\'s test bootstrap — not your Vitest setup files, and ' +
+    'not `features/support/`, which the connector\'s explicit `--require` switches off. Whatever ' +
+    'your test setup switches on is off here. The connector-owned World file settles the one ' +
+    'thing that is the same in every JavaScript project: a connection that would leave this ' +
+    'machine is refused, localhost included in neither direction — it stays reachable. There is ' +
+    'no project-wide job runner or default host to fix, so nothing else is assumed. Signing in, ' +
+    'fixtures and seeding are yours to write in shared steps.',
+
+  'pytest-bdd':
+    'pytest runs here against the connector\'s own config (`-c`), so this project\'s pytest ' +
+    'settings — addopts, markers, plugin configuration — do not apply, and the only conftest.py ' +
+    'files loaded are those from the repository root down to `step_definitions/`: your ' +
+    '`tests/conftest.py` fixtures are not available. The connector-owned `conftest.py` one level ' +
+    'above `step_definitions/` settles the one thing that is the same in every Python project: a ' +
+    'connection that would leave this machine is refused, and localhost stays reachable. Your own ' +
+    '`step_definitions/conftest.py` is untouched and is where your shared fixtures belong.',
+};
+
+export function behavioralHarnessNotice(runner: string): string | null {
+  const notice = BEHAVIORAL_HARNESS_NOTICE[runner];
+  return notice ? `\n${notice}\n` : null;
+}
+
 function jsBehavioralPrecheck(projectRoot: string): PrecheckResult {
   if (existsSync(join(projectRoot, 'package.json'))) return { ok: true };
 

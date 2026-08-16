@@ -28,7 +28,7 @@ const LABEL: Record<Outcome, string> = {
 // This used to refuse when an installed file differed from the bundled one, to
 // protect a definition the user had edited by hand. The case it actually met was
 // the ordinary one: an upgrade from an older release, where every file differs
-// and every install therefore failed. Spec 43, §1.6.
+// and every install therefore failed. Spec 44, §1.6.
 //
 // The refusal became actively harmful once the workflows started asking a role
 // whether this session can see it. A stale role answers that question exactly

@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { anyStackPrecheck, runnerReadyPrecheck, validateStack, type PrecheckDeps } from '../src/runner/precheck.ts';
+import {
+  anyStackPrecheck,
+  behavioralHarnessNotice,
+  runnerReadyPrecheck,
+  validateStack,
+  type PrecheckDeps,
+} from '../src/runner/precheck.ts';
 import { SIDECAR_DIR } from '../src/runner/toolchain.ts';
 
 function tmpProject(): string {
@@ -238,7 +244,7 @@ test('a sidecar runner counts as ready on every stack', () => {
   assert.deepEqual(runnerReadyPrecheck(ruby, 'rspec', pytestMissing), { ok: true });
 });
 
-// Spec 42, §5.3. `validateStack` runs on every `run` and `run-local`, long after
+// Spec 43, §5.3. `validateStack` runs on every `run` and `run-local`, long after
 // provisioning, and it used to answer the earlier question: does the *project*
 // carry this runner. So a project Unitbob had just equipped was told to edit its
 // Gemfile or to `npm i -D vitest` — advice for something it now has. The stack
@@ -279,4 +285,50 @@ test('nothing installed anywhere is refused, naming both places we looked', () =
   assert.match(check.message ?? '', /not installed in this project/);
   assert.match(check.message ?? '', /could not install one for itself/);
   assert.match(check.message ?? '', /Nothing was written/);
+});
+
+// Spec 35-1, criterion 2. The gap this closes was silent by construction:
+// Cucumber loads neither `spec/rails_helper.rb` nor `spec/support/**`, so WebMock
+// was off and outgoing HTTP left the machine while the structural branch had it
+// blocked. Nothing said so, and a worker had no way to know before writing.
+test('the behavioral harness notice names what Cucumber does not load, and what the connector stubs', () => {
+  const notice = behavioralHarnessNotice('cucumber')!;
+
+  assert.match(notice, /spec\/rails_helper\.rb/);
+  assert.match(notice, /spec\/support/);
+  assert.match(notice, /WebMock/);
+  assert.match(notice, /outgoing HTTP is blocked/);
+  assert.match(notice, /Sidekiq/);
+  assert.match(notice, /ActiveJob/);
+  assert.match(notice, /host/);
+});
+
+// Every BDD stack, because none of the three runners reads its project's own
+// test bootstrap and all three were reaching the real network in silence. Each
+// notice is written in its own runner's terms: one shared sentence would have to
+// be vague enough to fit all three, and vague is how the fact went unsaid.
+test('the JavaScript branch is told what cucumber-js does not load, in its own terms', () => {
+  const notice = behavioralHarnessNotice('cucumber-js')!;
+
+  assert.match(notice, /features\/support/);
+  assert.match(notice, /leave this machine is refused/);
+  assert.match(notice, /localhost/);
+  // No Rails fact leaks across. JavaScript has no project-wide job runner to put
+  // in fake mode, and nothing here should imply there is one.
+  assert.doesNotMatch(notice, /rails_helper|Sidekiq|ActiveJob|WebMock/);
+});
+
+test('the Python branch is told which conftest files pytest loads here, and which it does not', () => {
+  const notice = behavioralHarnessNotice('pytest-bdd')!;
+
+  assert.match(notice, /tests\/conftest\.py/);
+  assert.match(notice, /step_definitions\/conftest\.py` is untouched/);
+  assert.match(notice, /leave this machine is refused/);
+  assert.doesNotMatch(notice, /rails_helper|Sidekiq|ActiveJob|WebMock/);
+});
+
+// A structural runner has no behavioral harness and gets no sentence about one.
+test('the behavioral harness notice says nothing about a runner with no harness', () => {
+  assert.equal(behavioralHarnessNotice('rspec'), null);
+  assert.equal(behavioralHarnessNotice('vitest'), null);
 });

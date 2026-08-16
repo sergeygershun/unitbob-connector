@@ -70,7 +70,7 @@ test('prefers vitest.config over vite.config when both exist', async () => {
   assert.ok(written.includes('"../vitest.config.ts"'), 'the more specific config wins');
 });
 
-// Spec 42, §6.5. Vitest's default `include` only reaches a `.unitbob/` file that
+// Spec 43, §6.5. Vitest's default `include` only reaches a `.unitbob/` file that
 // happens to be named `*.test.ts`, so leaning on it was a trap set for whoever
 // names a slice after the capability it guards: the run collects zero tests and
 // reports that as if the suite were empty. The branch's files are now always
@@ -86,7 +86,7 @@ test('with no project config, writes a config that still names the branch files'
   assert.ok(written.includes(suitePath), 'the branch file is in include');
 });
 
-// Spec 42, §6. One file per assignment, all of them running as one suite.
+// Spec 43, §6. One file per assignment, all of them running as one suite.
 test('every file of the branch is filtered for and included', async () => {
   const projectRoot = tmpProject();
   writeFileSync(join(projectRoot, 'vitest.config.ts'), 'export default {};\n');

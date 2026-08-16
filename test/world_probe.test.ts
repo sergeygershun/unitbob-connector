@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { probeBehavioralWorld } from '../src/runner/worldProbe.ts';
 
-test('the World probe executes two scenarios and checks request, mocks, assertions and state cleanup', async () => {
+test('the World probe executes three scenarios and checks request, mocks, assertions, state cleanup and the network block', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-world-probe-'));
   let feature = '';
   let steps = '';
@@ -22,7 +22,11 @@ test('the World probe executes two scenarios and checks request, mocks, assertio
   });
 
   assert.equal(result.status, 'ok');
-  assert.equal((feature.match(/Scenario:/g) ?? []).length, 2);
+  assert.equal((feature.match(/Scenario:/g) ?? []).length, 3);
+  // Spec 35-1, criterion 2. Proved on the user's own project rather than assumed
+  // from the World file's source: a suite whose WebMock never came on passes
+  // exactly like one where it did, and only the far end of the wire finds out.
+  assert.match(steps, /WebMock::NetConnectNotAllowedError/);
   assert.match(steps, /unitbob_expect_status/);
   assert.match(steps, /unitbob_expect_redirect_to/);
   assert.match(steps, /PROBE_RECEIVER/);

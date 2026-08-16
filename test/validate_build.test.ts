@@ -8,7 +8,7 @@ import { collectBuildProblems, validateBuild, validateBuildProblems } from '../s
 import { WireError, type SuiteBuildItem, type SuiteBuildResult } from '../src/wire.ts';
 import type { Config } from '../src/config.ts';
 
-// Spec 42. This command used to predict the server's verdict from a local copy
+// Spec 43. This command used to predict the server's verdict from a local copy
 // of its rules; it now asks the server for that verdict with a dry run. So the
 // tests here are of two kinds and no others:
 //
@@ -190,7 +190,7 @@ test('a branch the host declined is accepted, and named as publishing nothing', 
   assert.doesNotMatch(asked.output, /would refuse/);
 });
 
-// Spec 42, §3.4, and ADR 0001 in one line: with no server the command succeeds,
+// Spec 43, §3.4, and ADR 0001 in one line: with no server the command succeeds,
 // because there is no verdict to report — and it says which questions therefore
 // went unasked. The silent "your suite answer looks well-formed" this replaces
 // is the sentence that twice preceded a refusal on a2time.

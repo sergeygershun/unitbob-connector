@@ -35,6 +35,10 @@ test('ensureRunner for Ruby generates sidecar Gemfile and does not touch root Ge
   const sidecarContent = readFileSync(sidecarGemfile, 'utf8');
   assert.match(sidecarContent, /eval_gemfile/);
   assert.match(sidecarContent, /gem "cucumber"/);
+  // Spec 35-1, criterion 2: the World file blocks outgoing HTTP, and it can only
+  // do that if webmock resolves. Promising it in the World and hoping the project
+  // happens to carry the gem is the same silence this spec removes.
+  assert.match(sidecarContent, /gem "webmock"/);
 
   // Verify root Gemfile remains untouched byte-for-byte
   const rootGemfileAfter = readFileSync(join(projectRoot, 'Gemfile'), 'utf8');
@@ -200,7 +204,7 @@ test('ensureStructuralRunner installs the application\'s packages and pytest int
   assert.equal(deps.calls[2], `${venvPython} -m pip install pytest`);
 });
 
-// Spec 42, §5.4. Detection accepts `pyproject.toml` and `Pipfile`; this builder
+// Spec 43, §5.4. Detection accepts `pyproject.toml` and `Pipfile`; this builder
 // only ever read `requirements*.txt`, and finding nothing to install counted as
 // nothing needing installation. So a sidecar holding pytest and not one line of
 // the application was reported as a success, and the failure surfaced much

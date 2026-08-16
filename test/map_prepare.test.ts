@@ -201,3 +201,38 @@ test('map-prepare exits before recipes when graphify fails', async () => {
 
   assert.equal(fetchedRecipe, false);
 });
+
+// Spec 35-1, criterion 1. An ignore pattern is silent by nature: what it matches
+// never becomes a node, and the subsystem it swallowed looks exactly like one
+// nobody ever wrote. This is the line that makes the next blind spot visible.
+test('map-prepare names what the ignore file kept out of the graph, and only the patterns that took something', async () => {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, '.graphifyignore'), '/vendor/\ndb/migrate/\nnothing-here/\n');
+  mkdirSync(join(projectRoot, 'vendor', 'gems'), { recursive: true });
+  writeFileSync(join(projectRoot, 'vendor', 'gems', 'a.rb'), '');
+  writeFileSync(join(projectRoot, 'vendor', 'gems', 'b.rb'), '');
+  mkdirSync(join(projectRoot, 'app', 'controllers', 'vendor'), { recursive: true });
+  writeFileSync(join(projectRoot, 'app', 'controllers', 'vendor', 'console.rb'), '');
+
+  let output = '';
+  await mapPrepare(config(projectRoot), [], {
+    ensureUnitbobIgnored: () => {},
+    requireGraphify: async () => {},
+    runGraphifyExtractKeyless: async () => {
+      mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
+      writeFileSync(join(projectRoot, 'graphify-out', 'graph.json'), '{ "nodes": [] }\n');
+      return { stdout: '', stderr: '', code: 0 };
+    },
+    getRecipe: async (name) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
+    stdout: { write: (chunk: string) => (output += chunk) },
+  });
+
+  assert.match(output, /Kept out of the graph by \.graphifyignore/);
+  assert.match(output, /\/vendor\/ — 2 files/);
+  // The anchored pattern leaves the project's own contractor console alone, so
+  // it is not among the excluded files above.
+  assert.doesNotMatch(output, /\/vendor\/ — 3 files/);
+  // A pattern that matched nothing is not news.
+  assert.doesNotMatch(output, /nothing-here/);
+  assert.doesNotMatch(output, /db\/migrate/);
+});

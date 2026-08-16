@@ -10,7 +10,13 @@ import {
 } from '../files/suiteBuild.ts';
 import { bddStepLoading, type BddStepLoading } from '../runner/bdd.ts';
 import { bootCheck, SIGNAL_STRENGTH, type BootCheck } from '../runner/bootcheck.ts';
-import { anyStackPrecheck, detectBddRunner, detectStructuralRunner, runnerReadyPrecheck } from '../runner/precheck.ts';
+import {
+  anyStackPrecheck,
+  behavioralHarnessNotice,
+  detectBddRunner,
+  detectStructuralRunner,
+  runnerReadyPrecheck,
+} from '../runner/precheck.ts';
 import { selectRunnerEnvelope, withInstalledRunnerVersion, type RunnerEnvelope } from '../runner/manifest.ts';
 import { ensureRunner, ensureStructuralRunner, type ProvisionResult } from '../runner/provision.ts';
 import { probeBehavioralWorld, type WorldProbeResult } from '../runner/worldProbe.ts';
@@ -171,8 +177,14 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
         fixableNotices.push(`  Behavioral runner "${runner}" not installed: ${prov.message ?? ''}${steps}`);
         continue;
       }
+      // Every BDD runner with a connector-owned harness gets it here, before its
+      // branch is offered to the host (spec 35-1). Only Ruby is probed by
+      // running it: the Ruby World integrates deeply with Rails, and the probe
+      // needs an application to integrate with. The JS and Python harnesses do
+      // one thing — refuse connections that leave the machine — and their
+      // guards are executed for real in the connector's own suite.
+      materializeBehavioralWorld(config.projectRoot, runner);
       if (runner === 'cucumber') {
-        materializeBehavioralWorld(config.projectRoot);
         const probe = await actual.worldProbe(config.projectRoot);
         if (probe.status === 'fixable') {
           fixableNotices.push(`  Behavioral World profile is not ready (fixable): ${probe.message ?? 'probe failed'}`);
@@ -190,7 +202,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
       const manifest = actual.runnerEnvelope(packet, runner, config.projectRoot);
       if (!manifest) return { packet, runner, branch: null };
 
-      // Spec 43, §3.2. The rule for which step files this runner loads travels
+      // Spec 44, §3.2. The rule for which step files this runner loads travels
       // with the branch that will be written against it, so nobody has to read
       // the connector's own source to find it out — which is exactly what two
       // coordinators did.
@@ -256,6 +268,13 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   // not collect produces no error, only a green run over no scenarios.
   for (const { packet, runner, branch } of prepared) {
     if (!branch || packet.suite_kind !== 'behavioral' || !runner) continue;
+
+    // Before the steps are written, not after they misbehave: what this runner
+    // does and does not load is the fact a worker needs while deciding what a
+    // step may assume (spec 35-1, criterion 2).
+    const harness = behavioralHarnessNotice(runner);
+    if (harness) actual.stdout.write(harness);
+
     actual.stdout.write(
       branch.step_loading
         ? stepLoadingNotice(runner, branch.step_loading)
@@ -300,7 +319,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
 }
 
 // The runner's own rule for which step files it will load, in the words of the
-// side that loads them (spec 43, §3.2). The same object is in `request.json`, on
+// side that loads them (spec 44, §3.2). The same object is in `request.json`, on
 // the behavioral branch; this is the copy the coordinator sees without opening a
 // file.
 //

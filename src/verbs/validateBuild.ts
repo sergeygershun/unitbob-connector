@@ -11,7 +11,7 @@ import {
 import { PUBLISHED, uploadItem, withReview, WOULD_PUBLISH } from '../files/suiteBuildUpload.ts';
 import { Wire, WireError, type SuiteBuildItem, type SuiteBuildResult } from '../wire.ts';
 
-// Spec 42. This file used to predict the server's verdict. It now asks for it.
+// Spec 43. This file used to predict the server's verdict. It now asks for it.
 //
 // The prediction was a copy of the server's rules — which ids are answered and
 // how, markers, surface arithmetic, the runner manifest, the surface ceiling —

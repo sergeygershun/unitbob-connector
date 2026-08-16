@@ -7,6 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { bddStepLoading, runBddSuite } from '../src/runner/bdd.ts';
+import { behavioralWorldFor } from '../src/files/behavioral.ts';
 import { PYTEST_BDD_PLUGIN } from '../src/runner/pytestBddPlugin.ts';
 
 function tmpProject(): string {
@@ -104,7 +105,7 @@ test('an unknown BDD runner is rejected, never guessed', async () => {
   await assert.rejects(() => runBddSuite(tmpProject(), 'behave', 'x.feature'), /Unsupported BDD runner/);
 });
 
-// Spec 43, §3.5–3.6. The recipe told writers to name pytest step files
+// Spec 44, §3.5–3.6. The recipe told writers to name pytest step files
 // `<capability>_steps.py`; pytest collects `test_*.py` and nothing else, so such
 // a file would have loaded silently as nothing at all — no error, a green run
 // over zero scenarios. What was missing was not a better sentence in the recipe
@@ -235,4 +236,27 @@ test('the pytest-bdd plugin hangs off the public pytest-bdd hooks and writes JSO
   }
   assert.match(PYTEST_BDD_PLUGIN, /json\.dump/);
   assert.match(PYTEST_BDD_PLUGIN, /UNITBOB_PYTEST_BDD_REPORT/);
+});
+
+// Spec 35-1, criterion 2. The connector-owned Python harness sits at
+// `.unitbob/behavioral/conftest.py`, one level above the collected directory,
+// and pytest loads it only because of these two arguments: it collects
+// `step_definitions/` and its rootdir is the project root, so every conftest.py
+// on the path between them is loaded. Verified against a real pytest 9.
+//
+// This is the coupling that would break silently. Point the run at a different
+// directory, or drop `--rootdir`, and the harness is simply never loaded: no
+// error, and a suite that quietly reaches the network again.
+test('the pytest run keeps the two arguments that make the connector-owned conftest load', async () => {
+  const projectRoot = tmpProject();
+  const sidecarPytest = join(projectRoot, '.unitbob', 'behavioral', '.venv', 'bin', 'pytest');
+  writeExecutable(sidecarPytest, `printf '%s' '{"version":1,"scenarios":[]}' > "$UNITBOB_PYTEST_BDD_REPORT"`);
+
+  const result = await runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/x.feature');
+
+  assert.ok(result.args.includes(STEPS_DIR), `collected directory missing from ${result.args.join(' ')}`);
+  assert.deepEqual(result.args.slice(-2), ['--rootdir', projectRoot]);
+  // And the harness path stays below the rootdir and above the collected
+  // directory — the only place pytest would pick it up from.
+  assert.equal(behavioralWorldFor('pytest-bdd')?.path, '.unitbob/behavioral/conftest.py');
 });
