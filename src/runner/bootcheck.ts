@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { executable, runProcess, type ProcResult } from '../proc.ts';
-import { locateRunner } from './toolchain.ts';
+import { executable, type ProcResult } from '../proc.ts';
+import { projectRootAsSeenByThePlace, runInProject } from './place.ts';
+import { commandFileOnHost, locateRunner } from './toolchain.ts';
 import { GUARDRAILS_DIR, HELPER_FILE } from '../files/guardrails.ts';
 import { PYTEST_INI, PYTEST_INI_FILE } from './pytest.ts';
 import { PROVISION_TIMEOUT_MS } from './provision.ts';
@@ -55,11 +56,7 @@ export interface BootCheckDeps {
 
 const defaultDeps: BootCheckDeps = {
   runCmd: (command, args, options) =>
-    runProcess(command, args, {
-      cwd: options.cwd,
-      timeoutMs: PROVISION_TIMEOUT_MS,
-      env: { ...process.env, ...options.env },
-    }),
+    runInProject(options.cwd, command, args, { timeoutMs: PROVISION_TIMEOUT_MS, env: options.env }),
 };
 
 // How much of a runner's output rides along in `detail`. Enough to see the
@@ -109,8 +106,8 @@ export async function bootCheck(
 // `spec/support` and the project's own configuration all come along for free,
 // without this module knowing anything about them.
 async function rubyBootCheck(projectRoot: string, deps: BootCheckDeps): Promise<BootCheck> {
-  const helper = join(projectRoot, GUARDRAILS_DIR, HELPER_FILE);
-  if (!existsSync(helper)) return { status: 'not_checked', reason: 'nothing_to_load' };
+  const helper = `${GUARDRAILS_DIR}/${HELPER_FILE}`;
+  if (!existsSync(join(projectRoot, helper))) return { status: 'not_checked', reason: 'nothing_to_load' };
 
   const first = await loadRubyHelper(projectRoot, helper, deps);
   if (first.status !== 'broken') return first;
@@ -150,8 +147,7 @@ async function loadRubyHelper(
   // someone whose bundler is installed and working. That is the mistake
   // `runner_too_old` and `runner_could_not_answer` were added to stop making,
   // and the global `bundle` was standing right there the whole time.
-  const localBundle = join(projectRoot, 'bin', 'bundle');
-  const command = executable(localBundle) ? localBundle : 'bundle';
+  const command = executable(join(projectRoot, 'bin', 'bundle')) ? 'bin/bundle' : 'bundle';
 
   // When Unitbob installed rspec-rails for itself, the gems this helper needs
   // are resolved by the sidecar Gemfile, not the project's. Asking bundler
@@ -159,12 +155,22 @@ async function loadRubyHelper(
   // which is exactly the way a check ends up predicting the wrong thing.
   const located = locateRunner(projectRoot, 'rspec');
 
+  // `require "./…"`, and the leading dot is not cosmetic: Ruby resolves a
+  // relative require against `$LOAD_PATH`, which does not hold the working
+  // directory, and only a path beginning with `.` is resolved against the
+  // working directory instead. The helper finds its own neighbours through
+  // `__dir__`, which is absolute however the file was reached, so nothing else
+  // about it changes.
   return classify(
     projectRoot,
     'rspec',
-    await attempt(deps, command, ['exec', 'ruby', '-e', `require ${JSON.stringify(helper)}`], {
+    await attempt(deps, command, ['exec', 'ruby', '-e', `require ${JSON.stringify(`./${helper}`)}`], {
       cwd: projectRoot,
-      env: { ...located?.env, RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
+      env: {
+        ...located?.env,
+        RAILS_ENV: 'test',
+        UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
+      },
     }),
     // A clean load says nothing on stdout and exits 0. Anything else is the
     // suite failing to start.
@@ -249,8 +255,7 @@ function pytestVerdict(code: number | null): Verdict {
 async function vitestBootCheck(projectRoot: string, deps: BootCheckDeps): Promise<BootCheck> {
   // A sidecar vitest counts as installed: it is ours, it is on disk, and it is
   // the one the run will spawn. What stays out is `npx`, for the reason below.
-  const local = locateRunner(projectRoot, 'vitest')?.command
-    ?? join(projectRoot, 'node_modules', '.bin', 'vitest');
+  const local = locateRunner(projectRoot, 'vitest')?.command ?? 'node_modules/.bin/vitest';
   // Only a vitest already installed in the project is used. Reaching for `npx`
   // would install a package to answer a question, and installing into the
   // user's project is not this check's business.
@@ -260,7 +265,7 @@ async function vitestBootCheck(projectRoot: string, deps: BootCheckDeps): Promis
   // "cannot be asked", and the answer came back `runner_too_old` — a positive
   // falsehood about a version nobody looked at. `no_runner` is the honest one
   // here: there is no vitest this check can invoke.
-  if (!executable(local)) return { status: 'not_checked', reason: 'no_runner' };
+  if (!executable(commandFileOnHost(projectRoot, local))) return { status: 'not_checked', reason: 'no_runner' };
 
   // `list` is a subcommand only from Vitest 2.1. Older versions read it as a
   // *filename filter* and go on to run whatever it matches, which was measured
@@ -478,14 +483,13 @@ export function firstErrorLine(output: string): string {
 async function prepareTestDatabase(projectRoot: string, deps: BootCheckDeps): Promise<boolean> {
   if (!testDatabaseIsSeparate(projectRoot)) return false;
 
-  const rails = join(projectRoot, 'bin', 'rails');
-  const useBinstub = executable(rails);
-  const command = useBinstub ? rails : 'bundle';
+  const useBinstub = executable(join(projectRoot, 'bin', 'rails'));
+  const command = useBinstub ? 'bin/rails' : 'bundle';
   const args = useBinstub ? ['db:test:prepare'] : ['exec', 'rails', 'db:test:prepare'];
 
   const result = await attempt(deps, command, args, {
     cwd: projectRoot,
-    env: { RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
+    env: { RAILS_ENV: 'test', UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot) },
   });
   return result !== null && result.code === 0;
 }

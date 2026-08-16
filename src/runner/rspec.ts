@@ -1,8 +1,8 @@
 import { join } from 'node:path';
-import { runProcess, type ProcResult } from '../proc.ts';
 import { GUARDRAILS_DIR, OPTIONS_FILE } from '../files/guardrails.ts';
+import { projectRootAsSeenByThePlace, runInProject, type ProjectRun } from './place.ts';
 import { locateRunner } from './toolchain.ts';
-import { readReport, type RunnerResult } from './types.ts';
+import { clearReport, readFreshReport, type RunnerResult } from './types.ts';
 
 export const RSPEC_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -28,7 +28,10 @@ export const RSPEC_RESULT_FILE = join(GUARDRAILS_DIR, 'rspec_result.json');
 // root.
 export async function runRspecSuite(projectRoot: string, suitePaths: string[]): Promise<RunnerResult> {
   const optionsPath = join(GUARDRAILS_DIR, OPTIONS_FILE);
-  const { result, command, args } = await invokeRspec(projectRoot, [
+  const reportPath = join(projectRoot, RSPEC_RESULT_FILE);
+  const survivor = clearReport(reportPath);
+
+  const run = await invokeRspec(projectRoot, [
     ...suitePaths,
     '--options',
     optionsPath,
@@ -43,11 +46,9 @@ export async function runRspecSuite(projectRoot: string, suitePaths: string[]): 
   ]);
 
   return {
-    ...result,
-    command,
-    args,
+    ...run,
     resultPath: RSPEC_RESULT_FILE,
-    report: readReport(join(projectRoot, RSPEC_RESULT_FILE)),
+    report: readFreshReport(reportPath, survivor),
   };
 }
 
@@ -56,19 +57,17 @@ export async function runRspecSuite(projectRoot: string, suitePaths: string[]): 
 // run and the checks that predicted it always mean the same installation. Every
 // run sets RAILS_ENV=test so guardrails execute against the Rails test
 // environment the project's `rails_helper` configures.
-async function invokeRspec(
-  projectRoot: string,
-  rspecArgs: string[],
-): Promise<{ result: ProcResult; command: string; args: string[] }> {
+async function invokeRspec(projectRoot: string, rspecArgs: string[]): Promise<ProjectRun> {
   const located = locateRunner(projectRoot, 'rspec');
   const command = located?.command ?? 'bundle';
   const args = [...(located?.args ?? ['exec', 'rspec']), ...rspecArgs];
 
-  const result = await runProcess(command, args, {
-    cwd: projectRoot,
+  return runInProject(projectRoot, command, args, {
     timeoutMs: RSPEC_TIMEOUT_MS,
-    env: { ...process.env, ...located?.env, RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
+    env: {
+      ...located?.env,
+      RAILS_ENV: 'test',
+      UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
+    },
   });
-
-  return { result, command, args };
 }

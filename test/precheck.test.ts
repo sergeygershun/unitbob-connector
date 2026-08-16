@@ -217,7 +217,8 @@ test('pytest: a sidecar interpreter satisfies the runner check', () => {
 
   // Nothing on the machine can import pytest — only the environment Unitbob
   // built can, and the check asks it the same question it asks any other.
-  const onlyTheSidecar: PrecheckDeps = { commandSucceeds: (command) => command.startsWith(venvBin) };
+  // Commands name the sidecar relative to the project root (spec 36, §4.2).
+  const onlyTheSidecar: PrecheckDeps = { commandSucceeds: (command) => command.startsWith(`${SIDECAR_DIR}/.venv/bin`) };
   assert.deepEqual(validateStack(dir, 'pytest', onlyTheSidecar), { ok: true });
   assert.deepEqual(validateStack(dir, 'pytest-bdd', onlyTheSidecar), { ok: true });
 

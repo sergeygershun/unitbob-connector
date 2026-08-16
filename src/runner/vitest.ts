@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { runProcess } from '../proc.ts';
 import { GUARDRAILS_DIR } from '../files/guardrails.ts';
+import { projectRootAsSeenByThePlace, runInProject } from './place.ts';
 import { locateRunner } from './toolchain.ts';
-import { readReport, type RunnerResult } from './types.ts';
+import { clearReport, readFreshReport, type RunnerResult } from './types.ts';
 
 export const VITEST_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -70,18 +70,18 @@ export async function runVitestSuite(projectRoot: string, suitePaths: string[]):
     `--outputFile=${VITEST_RESULT_FILE}`,
   ];
 
-  const result = await runProcess(command, args, {
-    cwd: projectRoot,
+  const reportPath = join(projectRoot, VITEST_RESULT_FILE);
+  const survivor = clearReport(reportPath);
+
+  const run = await runInProject(projectRoot, command, args, {
     timeoutMs: VITEST_TIMEOUT_MS,
-    env: { ...process.env, ...located?.env, UNITBOB_REPO_ROOT: projectRoot },
+    env: { ...located?.env, UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot) },
   });
 
   return {
-    ...result,
-    command,
-    args,
+    ...run,
     resultPath: VITEST_RESULT_FILE,
-    report: readReport(join(projectRoot, VITEST_RESULT_FILE)),
+    report: readFreshReport(reportPath, survivor),
   };
 }
 

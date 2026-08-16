@@ -1,7 +1,7 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { executable } from '../proc.ts';
+import { commandSucceedsInProject } from './place.ts';
 
 // Where Unitbob keeps a test runner it had to install for itself, together with
 // whatever that runner needs to load the project.
@@ -18,12 +18,28 @@ export function sidecarPath(projectRoot: string, ...segments: string[]): string 
   return join(projectRoot, SIDECAR_DIR, ...segments);
 }
 
+// The file a command names, on the host's own filesystem.
+//
+// A command that names a file we own is written relative to the project root, so
+// that it means the same thing wherever it is started (spec 36, §4.2). Asking
+// whether that file exists is a different question and is always the host's:
+// under the invariant the connector's files are on the host, and the place sees
+// the very same ones. A command with no path in it — `bundle`, `python3` — is
+// resolved by the place through its own PATH and is returned unchanged.
+export function commandFileOnHost(projectRoot: string, command: string): string {
+  if (isAbsolute(command) || !command.includes('/')) return command;
+  return join(projectRoot, command);
+}
+
 // How to start one structural runner here, and where it came from.
 //
 // `args` is a prefix: the caller appends the runner's own arguments to it. That
 // keeps `python -m pytest` and a bare `pytest` binary interchangeable at the one
 // call site that cares.
 export interface RunnerCommand {
+  // Relative to the project root when it names a file (the working directory of
+  // every project command is the project root), or a bare name to be found on
+  // PATH. Never an absolute host path: see `commandFileOnHost`.
   command: string;
   args: string[];
   env?: Record<string, string>;
@@ -39,8 +55,11 @@ export interface ToolDeps {
   commandSucceeds: (command: string, args: string[], cwd: string) => boolean;
 }
 
+// Asked of the place the run will happen in, never of this machine by default
+// (spec 36, §3). `cwd` is the project root at every call site, which is what
+// says which place that is.
 export const defaultToolDeps: ToolDeps = {
-  commandSucceeds: (command, args, cwd) => spawnSync(command, args, { cwd, timeout: 10_000 }).status === 0,
+  commandSucceeds: (command, args, cwd) => commandSucceedsInProject(cwd, command, args),
 };
 
 // How to invoke `runner` in this project, or null when nothing here can.
@@ -114,8 +133,11 @@ function locatePytest(projectRoot: string, deps: ToolDeps): RunnerCommand | null
   // behind. Trusting the file made provisioning report success and the boot
   // check then say "No module named pytest" about an environment we had just
   // built. Found on a Flask project, 2026-08-12.
-  const venvPython = sidecarPath(projectRoot, '.venv', 'bin', 'python');
-  if (executable(venvPython) && deps.commandSucceeds(venvPython, ['-m', 'pytest', '--version'], projectRoot)) {
+  const venvPython = `${SIDECAR_DIR}/.venv/bin/python`;
+  if (
+    executable(commandFileOnHost(projectRoot, venvPython)) &&
+    deps.commandSucceeds(venvPython, ['-m', 'pytest', '--version'], projectRoot)
+  ) {
     return { command: venvPython, args: ['-m', 'pytest'], source: 'sidecar' };
   }
 
@@ -132,11 +154,11 @@ function locatePytest(projectRoot: string, deps: ToolDeps): RunnerCommand | null
 // checks that must not install anything. The vitest runner keeps `npx` as its
 // own last resort, which is the behaviour it has always had.
 function locateVitest(projectRoot: string): RunnerCommand | null {
-  const sidecar = sidecarPath(projectRoot, 'node_modules', '.bin', 'vitest');
-  if (executable(sidecar)) return { command: sidecar, args: [], source: 'sidecar' };
+  const sidecar = `${SIDECAR_DIR}/node_modules/.bin/vitest`;
+  if (executable(commandFileOnHost(projectRoot, sidecar))) return { command: sidecar, args: [], source: 'sidecar' };
 
-  const project = join(projectRoot, 'node_modules', '.bin', 'vitest');
-  if (executable(project)) return { command: project, args: [], source: 'project' };
+  const project = 'node_modules/.bin/vitest';
+  if (executable(commandFileOnHost(projectRoot, project))) return { command: project, args: [], source: 'project' };
 
   return null;
 }
@@ -155,8 +177,11 @@ function locateRspec(projectRoot: string): RunnerCommand | null {
     };
   }
 
-  const binstub = join(projectRoot, 'bin', 'rspec');
-  if (executable(binstub)) return { command: binstub, args: [], source: 'project' };
+  // Relative, and the slash is not decoration: `spawn` resolves a command
+  // against the working directory only when it has one, and a bare `rspec` would
+  // go looking on PATH — a different command altogether.
+  const binstub = 'bin/rspec';
+  if (executable(commandFileOnHost(projectRoot, binstub))) return { command: binstub, args: [], source: 'project' };
 
   return { command: 'bundle', args: ['exec', 'rspec'], source: 'project' };
 }

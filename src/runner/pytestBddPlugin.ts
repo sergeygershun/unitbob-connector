@@ -14,6 +14,15 @@ import os
 _UNITBOB_REPORT = {"version": 1, "scenarios": []}
 _UNITBOB_CURRENT = {}
 
+# Resolved once, at import, and never again. The connector passes this path
+# relative to the project root — a relative path means the same thing whether the
+# run happens on this machine or inside a container, and an absolute host path
+# would name a directory the run cannot see. The working directory is the project
+# root when the plugin loads, so a fixture that changes directory later cannot
+# move the report out from under us.
+_UNITBOB_OUT = os.environ.get("UNITBOB_PYTEST_BDD_REPORT")
+_UNITBOB_OUT = os.path.abspath(_UNITBOB_OUT) if _UNITBOB_OUT else None
+
 
 def pytest_bdd_before_scenario(request, feature, scenario):
     _UNITBOB_CURRENT[id(scenario)] = {
@@ -55,8 +64,7 @@ def pytest_bdd_after_scenario(request, feature, scenario):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    out = os.environ.get("UNITBOB_PYTEST_BDD_REPORT")
-    if out:
-        with open(out, "w") as handle:
+    if _UNITBOB_OUT:
+        with open(_UNITBOB_OUT, "w") as handle:
             json.dump(_UNITBOB_REPORT, handle)
 `;

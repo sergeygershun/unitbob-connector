@@ -27,6 +27,15 @@ export function executable(path: string): boolean {
 
 export const GRAPHIFY_TIMEOUT_MS = 10 * 60 * 1000;
 
+// The raw spawn, and it stays raw: this is how the connector starts the tools it
+// brought with it. `graphify` is installed on the vibecoder's own machine and
+// only ever reads files, so it has no business travelling anywhere.
+//
+// A command that needs the *project's* dependencies goes through
+// `runInProject` (`runner/place.ts`) instead — those may have to start where the
+// project's toolchain lives, which is not always this machine (spec 36). The
+// boundary is deliberately visible at each call site rather than hidden in a
+// mode: which function is called is the whole rule.
 export function runProcess(
   command: string,
   args: string[] = [],

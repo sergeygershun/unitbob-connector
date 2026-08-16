@@ -13,8 +13,12 @@ test('the World probe executes three scenarios and checks request, mocks, assert
     runCmd: async (command, args, options) => {
       assert.equal(command, 'bundle');
       assert.deepEqual(args.slice(0, 2), ['exec', 'cucumber']);
-      feature = readFileSync(args[2], 'utf8');
-      steps = readFileSync(args[args.indexOf('--require', 5) + 1], 'utf8');
+      // Every path in the command is relative to the project root — that is what
+      // lets the same command run in a container (spec 36, §4.2) — so the test
+      // rejoins them here, exactly as the working directory would.
+      assert.equal(args[2].startsWith('/'), false);
+      feature = readFileSync(join(projectRoot, args[2]), 'utf8');
+      steps = readFileSync(join(projectRoot, args[args.indexOf('--require', 5) + 1]), 'utf8');
       assert.equal(options.env.RAILS_ENV, 'test');
       assert.equal(options.env.CUCUMBER_PUBLISH_QUIET, 'true');
       return { code: 0, stdout: '', stderr: '' };

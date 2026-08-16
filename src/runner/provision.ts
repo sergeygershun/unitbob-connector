@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runProcess, type ProcResult } from '../proc.ts';
+import { executable, type ProcResult } from '../proc.ts';
+import { runInProject } from './place.ts';
 import {
   defaultToolDeps,
   projectProvidesRunner,
@@ -22,6 +23,10 @@ export const PROVISION_TIMEOUT_MS = 120_000;
 // budget instead of borrowing one sized for a single install.
 export const DEPENDENCY_INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 
+// Where the behavioral runner's own environment is installed, written the way
+// every path that reaches a command is written: relative to the project root.
+const BEHAVIORAL_DIR = '.unitbob/behavioral';
+
 export interface ProvisionResult {
   status: 'provisioned' | 'fixable';
   message?: string;
@@ -40,12 +45,15 @@ export interface ProvisionDeps {
   tools?: ToolDeps;
 }
 
+// `cwd` is the project root at every call site, and that is what decides where
+// the install happens: a sidecar built by this machine is no use inside a
+// container, and one built inside a container is no use here (see
+// `runner/placeEnvironment.ts`).
 const defaultDeps: ProvisionDeps = {
   runCmd: (command, args, options) =>
-    runProcess(command, args, {
-      cwd: options.cwd,
+    runInProject(options.cwd, command, args, {
       timeoutMs: options.timeoutMs ?? PROVISION_TIMEOUT_MS,
-      env: { ...process.env, ...options.env },
+      env: options.env,
     }),
 };
 
@@ -136,8 +144,8 @@ const VENV_BUILDERS = [
 // the project declares them in a requirements file, the application's own
 // packages — and deliberately nothing else. See `VENV_BUILDERS`.
 async function provisionPytest(projectRoot: string, deps: ProvisionDeps): Promise<ProvisionResult> {
-  const venvDir = sidecarPath(projectRoot, '.venv');
-  const venvPython = join(venvDir, 'bin', 'python');
+  const venvDir = `${SIDECAR_DIR}/.venv`;
+  const venvPython = `${venvDir}/bin/python`;
 
   const built = await buildPythonEnvironment(projectRoot, venvDir, deps);
   if (!built.created) {
@@ -174,12 +182,15 @@ async function provisionPytest(projectRoot: string, deps: ProvisionDeps): Promis
 // installs all three from wheels in seconds. So when the requirements will not
 // go in, the environment is rebuilt with the next builder rather than handed
 // over half-empty. Found 2026-08-12.
+// `venvDir` is relative to the project root, like every other path that reaches
+// a command: the interpreter is built and then started by the place, and only
+// the existence checks below are the host's (spec 36, §4.2).
 async function buildPythonEnvironment(
   projectRoot: string,
   venvDir: string,
   deps: ProvisionDeps,
 ): Promise<{ created: boolean; requirementsNote?: string }> {
-  const venvPython = join(venvDir, 'bin', 'python');
+  const venvPython = `${venvDir}/bin/python`;
 
   // The project's own statement of what it needs. It is also the only test of
   // whether an environment is any use: one the application's packages will not
@@ -187,7 +198,7 @@ async function buildPythonEnvironment(
   const requirements = ['requirements.txt', 'requirements/base.txt', 'requirements-dev.txt']
     .find((name) => existsSync(join(projectRoot, name)));
 
-  let created = existsSync(venvPython);
+  let created = existsSync(join(projectRoot, venvPython));
   let requirementsOk = requirements === undefined;
   let failure: string | undefined;
 
@@ -218,7 +229,7 @@ async function buildPythonEnvironment(
     // still installs into it, and a suite that runs and cannot import the
     // application says far more than no suite at all.
     if (index === VENV_BUILDERS.length - 1) break;
-    rmSync(venvDir, { recursive: true, force: true });
+    rmSync(join(projectRoot, venvDir), { recursive: true, force: true });
     created = false;
   }
 
@@ -235,7 +246,7 @@ async function buildPythonEnvironment(
   return {
     created,
     requirementsNote:
-      `installing ${requirements} into ${relativeVenv(projectRoot, venvDir)} did not finish on any Python ` +
+      `installing ${requirements} into ${venvDir} did not finish on any Python ` +
       `available here — the suite may not be able to import the application.` +
       (failure ? ` The install said: ${failure}` : ''),
   };
@@ -260,7 +271,7 @@ function noDependencySourceNote(projectRoot: string, venvDir: string): string {
     : 'no requirements.txt, pyproject.toml or Pipfile was found';
 
   return (
-    `the application's own packages are not installed into ${relativeVenv(projectRoot, venvDir)} — ${where}. ` +
+    `the application's own packages are not installed into ${venvDir} — ${where}. ` +
     'The suite can start, but it may not be able to import the application.'
   );
 }
@@ -365,8 +376,7 @@ async function provisionRspec(projectRoot: string, deps: ProvisionDeps): Promise
   // hands the sidecar versions the project does not run.
   copyLockIfPresent(projectRoot, sidecarPath(projectRoot, 'Gemfile.lock'));
 
-  const localBundle = join(projectRoot, 'bin', 'bundle');
-  const command = existsSync(localBundle) ? localBundle : 'bundle';
+  const command = executable(join(projectRoot, 'bin', 'bundle')) ? 'bin/bundle' : 'bundle';
   const result = await deps
     .runCmd(command, ['install'], {
       cwd: projectRoot,
@@ -457,9 +467,10 @@ async function provisionRuby(
   const gemfileRel = '.unitbob/behavioral/Gemfile';
   const env = { BUNDLE_GEMFILE: gemfileRel };
 
-  // Try project local bin/bundle, then bundle
-  const localBundle = join(projectRoot, 'bin', 'bundle');
-  const cmd = existsSync(localBundle) ? localBundle : 'bundle';
+  // Try project local bin/bundle, then bundle. Relative with a slash: the
+  // working directory is the project root, and a bare name would be looked up on
+  // PATH instead.
+  const cmd = executable(join(projectRoot, 'bin', 'bundle')) ? 'bin/bundle' : 'bundle';
   const result = await deps.runCmd(cmd, ['install'], { cwd: projectRoot, env }).catch((err) => ({
     code: 1,
     stdout: '',
@@ -482,9 +493,9 @@ async function provisionPython(
   behavioralDir: string,
   deps: ProvisionDeps,
 ): Promise<ProvisionResult> {
-  const venvDir = join(behavioralDir, '.venv');
-  const venvPython = join(venvDir, 'bin', 'python');
-  const venvPytest = join(venvDir, 'bin', 'pytest');
+  const venvDir = `${BEHAVIORAL_DIR}/.venv`;
+  const venvPython = `${venvDir}/bin/python`;
+  const venvPytest = join(projectRoot, venvDir, 'bin', 'pytest');
 
   // The behavioral suite drives the application, so its environment needs the
   // application in it — the same requirement, and now the same treatment, as the
@@ -496,7 +507,7 @@ async function provisionPython(
   if (!built.created) {
     return {
       status: 'fixable',
-      message: `Failed to create virtual environment under ${relativeVenv(projectRoot, venvDir)}.`,
+      message: `Failed to create virtual environment under ${venvDir}.`,
       checklist: ['Install python3-venv or uv: `python3 -m venv --help` or `pip install uv`.'],
     };
   }
@@ -505,7 +516,7 @@ async function provisionPython(
   if (!installed && !existsSync(venvPytest)) {
     return {
       status: 'fixable',
-      message: `Failed to install pytest-bdd into ${relativeVenv(projectRoot, venvDir)}.`,
+      message: `Failed to install pytest-bdd into ${venvDir}.`,
       checklist: [`Run \`${venvPython} -m pip install pytest-bdd\` manually to provision the runner.`],
     };
   }
@@ -513,10 +524,6 @@ async function provisionPython(
   return built.requirementsNote
     ? { status: 'provisioned', checklist: [built.requirementsNote] }
     : { status: 'provisioned' };
-}
-
-function relativeVenv(projectRoot: string, venvDir: string): string {
-  return venvDir.startsWith(projectRoot) ? venvDir.slice(projectRoot.length + 1) : venvDir;
 }
 
 async function provisionJs(

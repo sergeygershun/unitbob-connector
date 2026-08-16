@@ -25,7 +25,10 @@ test('uses executable bin/rspec first with the exact suite path, fixed order/see
   const result = await runRspecSuite(projectRoot, ['.unitbob/structural/architecture_map_contracts_spec.rb']);
   const payload = JSON.parse(result.stdout);
 
-  assert.equal(result.command, join(projectRoot, 'bin', 'rspec'));
+  // The binstub is named relative to the project root, and the slash is what
+  // makes it resolve there instead of on PATH (spec 36, §4.2). That the fake
+  // binstub is the thing that answered is proved by the payload below.
+  assert.equal(result.command, 'bin/rspec');
   assert.deepEqual(result.args, [
     '.unitbob/structural/architecture_map_contracts_spec.rb',
     '--options',

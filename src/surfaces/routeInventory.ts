@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { runProcess, type ProcResult } from '../proc.ts';
+import { executable, type ProcResult } from '../proc.ts';
 import { firstErrorLine } from '../runner/bootcheck.ts';
+import { projectRootAsSeenByThePlace, runInProject } from '../runner/place.ts';
 import { detectStructuralRunner } from '../runner/precheck.ts';
 import { graphPath } from '../files/mapBuild.ts';
 
@@ -80,13 +81,14 @@ export interface RouteInventoryDeps {
 // tens of seconds. The same budget the other boot-shaped step uses.
 const ROUTES_TIMEOUT_MS = 120_000;
 
+// The router is the application's own, so asking it is a project command and
+// goes where the project's dependencies live (spec 36, §5). Unlike every other
+// caller this one is allowed to fail: silence is already a normal answer here,
+// so a project whose container is misconfigured loses its route inventory and
+// nothing else.
 const defaultDeps: RouteInventoryDeps = {
   runCmd: (command, args, options) =>
-    runProcess(command, args, {
-      cwd: options.cwd,
-      timeoutMs: ROUTES_TIMEOUT_MS,
-      env: { ...process.env, ...options.env },
-    }),
+    runInProject(options.cwd, command, args, { timeoutMs: ROUTES_TIMEOUT_MS, env: options.env }),
 };
 
 export function routeInventoryPath(projectRoot: string): string {
@@ -305,17 +307,17 @@ async function askRouterOnce(
   deps: RouteInventoryDeps,
   environment: RouteEnvironment,
 ): Promise<ProcResult | null> {
-  const local = join(projectRoot, 'bin', 'rails');
-  const [command, args] = existsSync(local)
-    ? [local, ['runner', ROUTES_SCRIPT]]
+  const [command, args] = executable(join(projectRoot, 'bin', 'rails'))
+    ? ['bin/rails', ['runner', ROUTES_SCRIPT]]
     : ['bundle', ['exec', 'rails', 'runner', ROUTES_SCRIPT]];
+  const repoRoot = await projectRootAsSeenByThePlace(projectRoot);
 
   try {
     return await deps.runCmd(command, args, {
       cwd: projectRoot,
       env: environment === 'test'
-        ? { RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot }
-        : { UNITBOB_REPO_ROOT: projectRoot },
+        ? { RAILS_ENV: 'test', UNITBOB_REPO_ROOT: repoRoot }
+        : { UNITBOB_REPO_ROOT: repoRoot },
     });
   } catch {
     return null; // the command is not on this machine

@@ -22,11 +22,14 @@ function tmpProject(): string {
 const pytestPresent: ToolDeps = { commandSucceeds: () => true };
 const pytestMissing: ToolDeps = { commandSucceeds: () => false };
 
+// Creates the file on the host and hands back the name a *command* carries:
+// relative to the project root, because that is the one form that means the same
+// thing wherever the run happens (spec 36, §4.2).
 function withExecutable(projectRoot: string, ...segments: string[]): string {
   const path = join(projectRoot, ...segments);
   mkdirSync(join(path, '..'), { recursive: true });
   writeFileSync(path, '', { mode: 0o755 });
-  return path;
+  return segments.join('/');
 }
 
 test('pytest: a sidecar interpreter is preferred over the machine\'s own', () => {

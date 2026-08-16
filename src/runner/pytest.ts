@@ -1,9 +1,9 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runProcess } from '../proc.ts';
 import { GUARDRAILS_DIR } from '../files/guardrails.ts';
+import { projectRootAsSeenByThePlace, runInProject } from './place.ts';
 import { locateRunner } from './toolchain.ts';
-import { readReport, type RunnerResult } from './types.ts';
+import { clearReport, readFreshReport, type RunnerResult } from './types.ts';
 
 export const PYTEST_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -42,17 +42,17 @@ export async function runPytestSuite(projectRoot: string, suitePaths: string[]):
     `--junit-xml=${PYTEST_RESULT_FILE}`,
   ];
 
-  const result = await runProcess(command, args, {
-    cwd: projectRoot,
+  const reportPath = join(projectRoot, PYTEST_RESULT_FILE);
+  const survivor = clearReport(reportPath);
+
+  const run = await runInProject(projectRoot, command, args, {
     timeoutMs: PYTEST_TIMEOUT_MS,
-    env: { ...process.env, ...located?.env, UNITBOB_REPO_ROOT: projectRoot },
+    env: { ...located?.env, UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot) },
   });
 
   return {
-    ...result,
-    command,
-    args,
+    ...run,
     resultPath: PYTEST_RESULT_FILE,
-    report: readReport(join(projectRoot, PYTEST_RESULT_FILE)),
+    report: readFreshReport(reportPath, survivor),
   };
 }

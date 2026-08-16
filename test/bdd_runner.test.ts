@@ -66,10 +66,12 @@ test('cucumber strategy reports a missing sidecar instead of falling back to the
 test('cucumber-js strategy runs the provisioned sidecar with the message formatter', async () => {
   const projectRoot = tmpProject();
   const report = '{"testCaseStarted":{"id":"s2"}}';
-  const sidecarBin = join(projectRoot, '.unitbob', 'behavioral', 'node_modules', '.bin', 'cucumber-js');
-  writeExecutable(sidecarBin, `mkdir -p .unitbob/behavioral; printf '${report}' > .unitbob/behavioral/cucumber_messages.ndjson`);
+  const sidecarBin = '.unitbob/behavioral/node_modules/.bin/cucumber-js';
+  writeExecutable(join(projectRoot, sidecarBin), `mkdir -p .unitbob/behavioral; printf '${report}' > .unitbob/behavioral/cucumber_messages.ndjson`);
 
   const result = await runBddSuite(projectRoot, 'cucumber-js', '.unitbob/behavioral/features/surface_contracts.feature');
+  // Named relative to the project root, which is what lets the same command run
+  // wherever this project's dependencies live (spec 36, §4.2).
   assert.equal(result.command, sidecarBin);
   assert.equal(result.report, report);
   assert.ok(result.args.some((arg) => arg.startsWith('message:')), 'uses the message formatter to a file');
@@ -85,8 +87,8 @@ test('cucumber-js strategy reports a missing sidecar instead of invoking npx', a
 test('pytest-bdd strategy writes its ini + plugin and reads the connector report', async () => {
   const projectRoot = tmpProject();
   const report = '{"version":1,"scenarios":[]}';
-  const sidecarPytest = join(projectRoot, '.unitbob', 'behavioral', '.venv', 'bin', 'pytest');
-  writeExecutable(sidecarPytest, `printf '%s' '${report}' > "$UNITBOB_PYTEST_BDD_REPORT"`);
+  const sidecarPytest = '.unitbob/behavioral/.venv/bin/pytest';
+  writeExecutable(join(projectRoot, sidecarPytest), `printf '%s' '${report}' > "$UNITBOB_PYTEST_BDD_REPORT"`);
 
   const result = await runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/surface_contracts.feature');
   assert.equal(result.command, sidecarPytest);
@@ -255,7 +257,10 @@ test('the pytest run keeps the two arguments that make the connector-owned conft
   const result = await runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/x.feature');
 
   assert.ok(result.args.includes(STEPS_DIR), `collected directory missing from ${result.args.join(' ')}`);
-  assert.deepEqual(result.args.slice(-2), ['--rootdir', projectRoot]);
+  // `.`, not the absolute root: the working directory is the project root in
+  // every place a run can happen, and an absolute host path would name a
+  // directory that does not exist inside a container (spec 36, §4.2).
+  assert.deepEqual(result.args.slice(-2), ['--rootdir', '.']);
   // And the harness path stays below the rootdir and above the collected
   // directory — the only place pytest would pick it up from.
   assert.equal(behavioralWorldFor('pytest-bdd')?.path, '.unitbob/behavioral/conftest.py');

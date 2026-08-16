@@ -1,7 +1,8 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runProcess, type ProcResult } from '../proc.ts';
+import type { ProcResult } from '../proc.ts';
 import { BEHAVIORAL_WORLD_PATH } from '../files/behavioral.ts';
+import { projectRootAsSeenByThePlace, runInProject } from './place.ts';
 import { PROVISION_TIMEOUT_MS } from './provision.ts';
 
 export interface WorldProbeResult {
@@ -18,34 +19,33 @@ const PROBE_ROOT = '.unitbob/suite-build/world-probe';
 export async function probeBehavioralWorld(
   projectRoot: string,
   deps: WorldProbeDeps = {
-    runCmd: (command, args, options) => runProcess(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      timeoutMs: PROVISION_TIMEOUT_MS,
-    }),
+    runCmd: (command, args, options) =>
+      runInProject(options.cwd, command, args, { env: options.env, timeoutMs: PROVISION_TIMEOUT_MS }),
   },
 ): Promise<WorldProbeResult> {
+  // Written on the host, named to the run relative to the project root — the
+  // same shape `bdd.ts` has always had, and the reason nothing here needs a path
+  // rewritten when the run happens somewhere else (spec 36, §4.2).
+  const feature = `${PROBE_ROOT}/world.feature`;
+  const steps = `${PROBE_ROOT}/world_steps.rb`;
   const probeRoot = join(projectRoot, PROBE_ROOT);
-  const feature = join(probeRoot, 'world.feature');
-  const steps = join(probeRoot, 'world_steps.rb');
   mkdirSync(probeRoot, { recursive: true });
-  writeFileSync(feature, PROBE_FEATURE);
-  writeFileSync(steps, PROBE_STEPS);
+  writeFileSync(join(projectRoot, feature), PROBE_FEATURE);
+  writeFileSync(join(projectRoot, steps), PROBE_STEPS);
 
   try {
     const result = await deps.runCmd('bundle', [
       'exec', 'cucumber', feature,
-      '--require', join(projectRoot, BEHAVIORAL_WORLD_PATH),
+      '--require', BEHAVIORAL_WORLD_PATH,
       '--require', steps,
       '--format', 'progress',
     ], {
       cwd: projectRoot,
       env: {
-        ...process.env,
         RAILS_ENV: 'test',
         CUCUMBER_PUBLISH_QUIET: 'true',
-        UNITBOB_REPO_ROOT: projectRoot,
-        BUNDLE_GEMFILE: join(projectRoot, '.unitbob', 'behavioral', 'Gemfile'),
+        UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
+        BUNDLE_GEMFILE: '.unitbob/behavioral/Gemfile',
       },
     });
     if (result.code === 0) return { status: 'ok' };

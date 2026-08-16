@@ -191,7 +191,9 @@ test('ensureStructuralRunner installs the application\'s packages and pytest int
   const result = await ensureStructuralRunner(projectRoot, 'pytest', deps);
   assert.equal(result.status, 'provisioned');
 
-  const venvPython = join(projectRoot, '.unitbob', 'runners', '.venv', 'bin', 'python');
+  // Relative: the interpreter is built and then started by whichever place
+  // holds this project's dependencies (spec 36, §4.2).
+  const venvPython = '.unitbob/runners/.venv/bin/python';
   // The standard-library builder before uv: it is the one that puts pip in the
   // environment, and an environment with no pip cannot be installed into.
   // No `--system-site-packages`: the environment holds the requirements file
@@ -383,7 +385,7 @@ test('the behavioral Python sidecar installs the application, not just the BDD r
   const result = await ensureRunner(projectRoot, 'pytest-bdd', deps);
 
   assert.equal(result.status, 'provisioned');
-  const venvPython = join(projectRoot, '.unitbob', 'behavioral', '.venv', 'bin', 'python');
+  const venvPython = '.unitbob/behavioral/.venv/bin/python';
   assert.ok(
     deps.calls.includes(`${venvPython} -m pip install -r requirements.txt`),
     `expected the application's own packages to be installed, got:\n${deps.calls.join('\n')}`,

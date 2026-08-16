@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { executable, runProcess, type ProcResult } from '../proc.ts';
-import { readReport, type RunnerResult } from './types.ts';
+import { executable } from '../proc.ts';
+import { projectRootAsSeenByThePlace, runInProject, type ProjectRun } from './place.ts';
+import { commandFileOnHost } from './toolchain.ts';
+import { clearReport, readFreshReport, type RunnerResult } from './types.ts';
 import { PYTEST_BDD_PLUGIN } from './pytestBddPlugin.ts';
 
 export const BDD_TIMEOUT_MS = 10 * 60 * 1000;
@@ -171,21 +173,18 @@ async function runCucumberRuby(projectRoot: string): Promise<RunnerResult> {
 
   const command = 'bundle';
   const args = ['exec', 'cucumber', features, '--require', steps, '--format', 'message', '--out', CUCUMBER_REPORT];
+  const survivor = clearReport(join(projectRoot, CUCUMBER_REPORT));
 
-  const env: Record<string, string> = {
-    ...process.env,
-    RAILS_ENV: 'test',
-    UNITBOB_REPO_ROOT: projectRoot,
-  };
-  env.BUNDLE_GEMFILE = join(BEHAVIORAL_ROOT, 'Gemfile');
-
-  const result = await runProcess(command, args, {
-    cwd: projectRoot,
+  const run = await runInProject(projectRoot, command, args, {
     timeoutMs: BDD_TIMEOUT_MS,
-    env,
+    env: {
+      RAILS_ENV: 'test',
+      UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
+      BUNDLE_GEMFILE: join(BEHAVIORAL_ROOT, 'Gemfile'),
+    },
   });
 
-  return finalize(result, command, args, projectRoot, CUCUMBER_REPORT);
+  return finalize(run, projectRoot, CUCUMBER_REPORT, survivor);
 }
 
 function missingRunner(name: string): Error {
@@ -199,12 +198,11 @@ function missingRunner(name: string): Error {
 async function runCucumberJs(projectRoot: string): Promise<RunnerResult> {
   const features = join(BEHAVIORAL_ROOT, 'features');
   const steps = join(BEHAVIORAL_ROOT, STEP_DEFINITIONS, '**', '*');
-  const sidecarBin = join(projectRoot, BEHAVIORAL_ROOT, 'node_modules', '.bin', 'cucumber-js');
-  if (!executable(sidecarBin)) {
+  const command = `${BEHAVIORAL_ROOT}/node_modules/.bin/cucumber-js`;
+  if (!executable(commandFileOnHost(projectRoot, command))) {
     throw missingRunner('Cucumber JS');
   }
 
-  const command = sidecarBin;
   const args = [
     features,
     '--require',
@@ -212,14 +210,14 @@ async function runCucumberJs(projectRoot: string): Promise<RunnerResult> {
     '--format',
     `message:${CUCUMBER_REPORT}`,
   ];
+  const survivor = clearReport(join(projectRoot, CUCUMBER_REPORT));
 
-  const result = await runProcess(command, args, {
-    cwd: projectRoot,
+  const run = await runInProject(projectRoot, command, args, {
     timeoutMs: BDD_TIMEOUT_MS,
-    env: { ...process.env, NODE_ENV: 'test', UNITBOB_REPO_ROOT: projectRoot },
+    env: { NODE_ENV: 'test', UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot) },
   });
 
-  return finalize(result, command, args, projectRoot, CUCUMBER_REPORT);
+  return finalize(run, projectRoot, CUCUMBER_REPORT, survivor);
 }
 
 // Python: pytest driving pytest-bdd, with the connector's reporter plugin. The
@@ -233,22 +231,31 @@ async function runPytestBdd(projectRoot: string, mainPath: string): Promise<Runn
   const command = await pickPython(projectRoot);
   const stepsDir = join(BEHAVIORAL_ROOT, STEP_DEFINITIONS);
   const isVenvPytest = command.endsWith('/pytest');
+  // `--rootdir .`, not the absolute root: the working directory is the project
+  // root in every place, and an absolute host path would name a directory that
+  // does not exist wherever the run actually happens.
   const args = isVenvPytest
-    ? ['-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', projectRoot]
-    : ['-m', 'pytest', '-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', projectRoot];
+    ? ['-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', '.']
+    : ['-m', 'pytest', '-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', '.'];
+  const survivor = clearReport(join(projectRoot, PYTEST_BDD_REPORT));
 
-  const result = await runProcess(command, args, {
-    cwd: projectRoot,
+  const run = await runInProject(projectRoot, command, args, {
     timeoutMs: BDD_TIMEOUT_MS,
     env: {
-      ...process.env,
-      UNITBOB_REPO_ROOT: projectRoot,
-      UNITBOB_PYTEST_BDD_REPORT: join(projectRoot, PYTEST_BDD_REPORT),
-      PYTHONPATH: [join(projectRoot, BEHAVIORAL_ROOT), process.env.PYTHONPATH ?? ''].filter(Boolean).join(':'),
+      UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
+      // Relative, and the plugin makes it absolute the moment it is imported —
+      // before any fixture has had a chance to change directory. Sent as a host
+      // path it would name a directory the run cannot see.
+      UNITBOB_PYTEST_BDD_REPORT: PYTEST_BDD_REPORT,
+      // The connector's own plugin directory, and only it. The host's own
+      // PYTHONPATH used to be appended here; it names host directories, which
+      // mean nothing where the run happens, and passing on the connector's
+      // environment is exactly what a place must not do.
+      PYTHONPATH: BEHAVIORAL_ROOT,
     },
   });
 
-  return finalize(result, command, args, projectRoot, PYTEST_BDD_REPORT);
+  return finalize(run, projectRoot, PYTEST_BDD_REPORT, survivor);
   // mainPath is accepted for symmetry with the structural runners; pytest-bdd
   // discovers scenarios from the step-definition modules, not the .feature path.
 }
@@ -258,24 +265,21 @@ function pluginModule(): string {
 }
 
 function finalize(
-  result: ProcResult,
-  command: string,
-  args: string[],
+  run: ProjectRun,
   projectRoot: string,
   reportRel: string,
+  survivor: number | null,
 ): RunnerResult {
   return {
-    ...result,
-    command,
-    args,
+    ...run,
     resultPath: reportRel,
-    report: readReport(join(projectRoot, reportRel)),
+    report: readFreshReport(join(projectRoot, reportRel), survivor),
   };
 }
 
 async function pickPython(projectRoot: string): Promise<string> {
-  const sidecarVenvPytest = join(projectRoot, BEHAVIORAL_ROOT, '.venv', 'bin', 'pytest');
-  if (executable(sidecarVenvPytest)) {
+  const sidecarVenvPytest = `${BEHAVIORAL_ROOT}/.venv/bin/pytest`;
+  if (executable(commandFileOnHost(projectRoot, sidecarVenvPytest))) {
     return sidecarVenvPytest;
   }
   throw missingRunner('pytest-bdd');
