@@ -10,7 +10,17 @@ export const BDD_TIMEOUT_MS = 10 * 60 * 1000;
 
 // The behavioral suite lives under one root; the report is written inside it so
 // the app under test cannot pollute it and it travels with the suite.
+//
+// Spelled here rather than imported from `files/behavioral.ts`, which spells it
+// too: that module imports this one, and an import back would be a cycle whose
+// only symptom is a use-before-initialization at load time.
 const BEHAVIORAL_ROOT = '.unitbob/behavioral';
+
+// The sidecar Gemfile bundler is pointed at, in one place — the world probe
+// needs the same value and used to carry its own copy. A plain string rather
+// than `join`: this path is read where the run happens, whose separator is not
+// necessarily this machine's.
+export const BEHAVIORAL_GEMFILE = `${BEHAVIORAL_ROOT}/Gemfile`;
 
 const CUCUMBER_REPORT_NAME = 'cucumber_messages.ndjson';
 const PYTEST_BDD_REPORT_NAME = 'pytest_bdd_report.json';
@@ -166,7 +176,7 @@ function strategyFor(runner: string): BddStrategy | null {
 async function runCucumberRuby(projectRoot: string): Promise<RunnerResult> {
   const features = join(BEHAVIORAL_ROOT, 'features');
   const steps = join(BEHAVIORAL_ROOT, STEP_DEFINITIONS);
-  const sidecarGemfile = join(projectRoot, BEHAVIORAL_ROOT, 'Gemfile');
+  const sidecarGemfile = join(projectRoot, BEHAVIORAL_GEMFILE);
   if (!existsSync(sidecarGemfile)) {
     throw missingRunner('Cucumber');
   }
@@ -179,8 +189,8 @@ async function runCucumberRuby(projectRoot: string): Promise<RunnerResult> {
     timeoutMs: BDD_TIMEOUT_MS,
     env: {
       RAILS_ENV: 'test',
-      UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
-      BUNDLE_GEMFILE: join(BEHAVIORAL_ROOT, 'Gemfile'),
+      UNITBOB_REPO_ROOT: projectRootAsSeenByThePlace(projectRoot),
+      BUNDLE_GEMFILE: BEHAVIORAL_GEMFILE,
     },
   });
 
@@ -214,7 +224,7 @@ async function runCucumberJs(projectRoot: string): Promise<RunnerResult> {
 
   const run = await runInProject(projectRoot, command, args, {
     timeoutMs: BDD_TIMEOUT_MS,
-    env: { NODE_ENV: 'test', UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot) },
+    env: { NODE_ENV: 'test', UNITBOB_REPO_ROOT: projectRootAsSeenByThePlace(projectRoot) },
   });
 
   return finalize(run, projectRoot, CUCUMBER_REPORT, survivor);
@@ -242,7 +252,7 @@ async function runPytestBdd(projectRoot: string, mainPath: string): Promise<Runn
   const run = await runInProject(projectRoot, command, args, {
     timeoutMs: BDD_TIMEOUT_MS,
     env: {
-      UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
+      UNITBOB_REPO_ROOT: projectRootAsSeenByThePlace(projectRoot),
       // Relative, and the plugin makes it absolute the moment it is imported —
       // before any fixture has had a chance to change directory. Sent as a host
       // path it would name a directory the run cannot see.

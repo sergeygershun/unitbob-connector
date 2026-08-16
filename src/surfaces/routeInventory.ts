@@ -310,7 +310,7 @@ async function askRouterOnce(
   const [command, args] = executable(join(projectRoot, 'bin', 'rails'))
     ? ['bin/rails', ['runner', ROUTES_SCRIPT]]
     : ['bundle', ['exec', 'rails', 'runner', ROUTES_SCRIPT]];
-  const repoRoot = await projectRootAsSeenByThePlace(projectRoot);
+  const repoRoot = projectRootAsSeenByThePlace(projectRoot);
 
   try {
     return await deps.runCmd(command, args, {

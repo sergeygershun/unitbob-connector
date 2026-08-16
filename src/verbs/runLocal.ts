@@ -9,6 +9,7 @@ import {
 import { digestOf, failureSet, readRunState, rememberFailures } from '../runner/failureDigest.ts';
 import { placeProblem } from '../runner/place.ts';
 import { placeAdvice } from '../runner/placeAdvice.ts';
+import { runnerEnvironmentPlaceProblem } from '../runner/placeEnvironment.ts';
 import { validateStack } from '../runner/precheck.ts';
 import { runBddSuite } from '../runner/bdd.ts';
 import { runStructuralByRunner } from './run.ts';
@@ -58,9 +59,11 @@ export async function runLocal(
     ...deps,
   };
 
-  // Spec 36, criterion 7. A run that cannot reach the place its dependencies
-  // live in has nothing to report but noise, so it is stopped by name here.
-  const unusable = placeProblem(config.projectRoot);
+  // Spec 36, criteria 7 and 6. A run that cannot reach the place its
+  // dependencies live in has nothing to report but noise — and neither has one
+  // whose runner was installed somewhere else, which looks ready because
+  // readiness here is a file existing.
+  const unusable = placeProblem(config.projectRoot) ?? runnerEnvironmentPlaceProblem(config.projectRoot);
   if (unusable) throw new Error(unusable);
 
   const request = readSuiteBuildRequest(config.projectRoot);

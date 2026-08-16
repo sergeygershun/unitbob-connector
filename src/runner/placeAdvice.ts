@@ -30,7 +30,15 @@ export function placeAdvice(projectRoot: string): string | null {
   if (place.kind === 'docker') {
     return (
       `This project's tests run inside the container \`${place.container}\`, so any command suggested above ` +
-      `has to be run in there, not here: \`docker exec -it ${place.container} <command>\`.`
+      `has to be run in there, not here: \`docker exec -it ${place.container} <command>\`.\n` +
+      // The two edge cases the spec asks to be named rather than solved. Both
+      // look like an ordinary install failure and neither is: nothing in the
+      // output says "the mount is read-only" or "these files belong to someone
+      // else", so the reader is left staring at a permission error with no
+      // reason to suspect the container is why.
+      'If it failed on permissions rather than on a missing package, two things are worth checking: that ' +
+      'the project is not mounted read-only, and — on a Linux host — that the files under `.unitbob/` are ' +
+      'still yours, since a container writing there creates them as `root`.'
     );
   }
 

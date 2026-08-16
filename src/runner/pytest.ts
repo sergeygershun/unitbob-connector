@@ -47,7 +47,7 @@ export async function runPytestSuite(projectRoot: string, suitePaths: string[]):
 
   const run = await runInProject(projectRoot, command, args, {
     timeoutMs: PYTEST_TIMEOUT_MS,
-    env: { ...located?.env, UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot) },
+    env: { ...located?.env, UNITBOB_REPO_ROOT: projectRootAsSeenByThePlace(projectRoot) },
   });
 
   return {

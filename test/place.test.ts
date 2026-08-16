@@ -6,7 +6,8 @@ import { delimiter, join } from 'node:path';
 import { readLocalExecContainer, writeConfigFile } from '../src/config.ts';
 import { commandSucceedsInProject, placeProblem, runInProject } from '../src/runner/place.ts';
 import { placeAdvice } from '../src/runner/placeAdvice.ts';
-import { alignRunnerEnvironmentWithPlace } from '../src/runner/placeEnvironment.ts';
+import { alignRunnerEnvironmentWithPlace, runnerEnvironmentPlaceProblem } from '../src/runner/placeEnvironment.ts';
+import { run } from '../src/verbs/run.ts';
 
 // Spec 36. The place a project's own processes run in: this machine, or a
 // container the project names. Everything here is proved against a stand-in
@@ -228,6 +229,22 @@ test('a dead end on this machine names every container that already holds the pr
   assert.match(advice, /"exec": \{"docker": \{"container": "already-has-it"\}\}/);
 });
 
+// Criterion 10, last line but one: several candidates are all listed and none is
+// chosen. Guessing between `web` and `worker` is wrong on the first project that
+// has both, and a wrong guess is silent — the suite runs somewhere nobody meant.
+test('several candidates are all named and none is picked', () => {
+  const projectRoot = tmpProject();
+  fakeDocker({
+    running_containers: ['app-web-2', 'app-worker-2'],
+    mounts: [{ Source: projectRoot, Destination: '/srv/app' }],
+  });
+
+  const advice = placeAdvice(projectRoot) ?? '';
+  assert.match(advice, /`app-web-2`/);
+  assert.match(advice, /`app-worker-2`/);
+  assert.equal((advice.match(/"exec": /g) ?? []).length, 2);
+});
+
 // Criterion 11. Once the place *is* a container, every "run this yourself"
 // above is a command for in there — one sentence, and none of them rewritten.
 test('with a container configured, the advice says where to run things by hand', () => {
@@ -250,4 +267,37 @@ test('writing the link keeps every other key in the config file', () => {
   const written = JSON.parse(readFileSync(join(projectRoot, '.unitbob.json'), 'utf8'));
   assert.equal(written.server, 'http://new');
   assert.equal(written.repo_id, 9);
+});
+
+// Criterion 6, the half that lives outside `suite-prepare`. `check` and
+// `run-local` cannot install anything, so they refuse rather than clear — but
+// they must not accept a foreign environment as ready either, which is exactly
+// what they would do, since readiness here is a file being on disk.
+test('a command that installs nothing refuses an environment built somewhere else', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'runners', '.venv'), { recursive: true });
+  writeFileSync(join(projectRoot, '.unitbob', '.place'), 'local\n');
+  withExec(projectRoot, 'moved-here');
+  fakeDocker({ mounts: [{ Source: projectRoot, Destination: '/app' }] });
+
+  let asked = false;
+  await assert.rejects(
+    () => run({ server: 'https://host', repoId: 1, projectRoot }, [], {
+      getSuites: async () => { asked = true; return []; },
+      stdout: { write: () => true },
+    }),
+    /built for this machine.*suite-prepare/s,
+  );
+  // And it stops before the server is touched: nothing was run, so nothing may
+  // be filed.
+  assert.equal(asked, false);
+});
+
+// The peer case, and the one that must stay quiet: a fresh checkout has no
+// installed environment to be stale, so `check` has nothing to say about places.
+test('a project with nothing installed yet is not refused', () => {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, '.unitbob.json'), JSON.stringify({ server: 'http://x', repo_id: 1, token: 't' }));
+
+  assert.equal(runnerEnvironmentPlaceProblem(projectRoot), null);
 });

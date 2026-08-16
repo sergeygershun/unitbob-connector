@@ -2,6 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProcResult } from '../proc.ts';
 import { BEHAVIORAL_WORLD_PATH } from '../files/behavioral.ts';
+import { BEHAVIORAL_GEMFILE } from './bdd.ts';
 import { projectRootAsSeenByThePlace, runInProject } from './place.ts';
 import { PROVISION_TIMEOUT_MS } from './provision.ts';
 
@@ -44,8 +45,8 @@ export async function probeBehavioralWorld(
       env: {
         RAILS_ENV: 'test',
         CUCUMBER_PUBLISH_QUIET: 'true',
-        UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
-        BUNDLE_GEMFILE: '.unitbob/behavioral/Gemfile',
+        UNITBOB_REPO_ROOT: projectRootAsSeenByThePlace(projectRoot),
+        BUNDLE_GEMFILE: BEHAVIORAL_GEMFILE,
       },
     });
     if (result.code === 0) return { status: 'ok' };

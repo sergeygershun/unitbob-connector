@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { executable, type ProcResult } from '../proc.ts';
+import { BEHAVIORAL_DIR } from '../files/behavioral.ts';
 import { runInProject } from './place.ts';
 import {
+  commandFileOnHost,
   defaultToolDeps,
   projectProvidesRunner,
   runnerAvailable,
@@ -22,10 +24,6 @@ export const PROVISION_TIMEOUT_MS = 120_000;
 // package index. Two minutes is a normal figure for it, so it gets its own
 // budget instead of borrowing one sized for a single install.
 export const DEPENDENCY_INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
-
-// Where the behavioral runner's own environment is installed, written the way
-// every path that reaches a command is written: relative to the project root.
-const BEHAVIORAL_DIR = '.unitbob/behavioral';
 
 export interface ProvisionResult {
   status: 'provisioned' | 'fixable';
@@ -493,9 +491,13 @@ async function provisionPython(
   behavioralDir: string,
   deps: ProvisionDeps,
 ): Promise<ProvisionResult> {
+  // Two forms of one path, and the split is the rule of spec 36, §4.2: what a
+  // command names is relative, because the command runs where the dependencies
+  // live; what we test for existence is the host's, because that is where the
+  // files are.
   const venvDir = `${BEHAVIORAL_DIR}/.venv`;
   const venvPython = `${venvDir}/bin/python`;
-  const venvPytest = join(projectRoot, venvDir, 'bin', 'pytest');
+  const venvPytest = commandFileOnHost(projectRoot, `${venvDir}/bin/pytest`);
 
   // The behavioral suite drives the application, so its environment needs the
   // application in it — the same requirement, and now the same treatment, as the

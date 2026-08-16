@@ -180,7 +180,7 @@ async function loadRubyHelper(
       env: {
         ...located?.env,
         RAILS_ENV: 'test',
-        UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
+        UNITBOB_REPO_ROOT: projectRootAsSeenByThePlace(projectRoot),
       },
     }),
     // A clean load says nothing on stdout and exits 0. Anything else is the
@@ -507,7 +507,7 @@ async function prepareTestDatabase(projectRoot: string, deps: BootCheckDeps): Pr
 
   const result = await attempt(deps, command, args, {
     cwd: projectRoot,
-    env: { RAILS_ENV: 'test', UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot) },
+    env: { RAILS_ENV: 'test', UNITBOB_REPO_ROOT: projectRootAsSeenByThePlace(projectRoot) },
   });
   return result !== null && result.code === 0;
 }

@@ -44,8 +44,18 @@ export function placeOf(projectRoot: string): Place {
 
 // How this place is written down in `.unitbob/.place`, so a runner environment
 // built by one place is never mistaken for one built by another.
+const DOCKER_MARK = 'docker:';
+
 export function placeId(place: Place): string {
-  return place.kind === 'docker' ? `docker:${place.container}` : 'local';
+  return place.kind === 'docker' ? `${DOCKER_MARK}${place.container}` : 'local';
+}
+
+// The same mark in words, for the one message that has to name both the place an
+// environment was built in and the place this run happens in. It lives beside
+// `placeId` because a format written in one file and taken apart in another is a
+// format that drifts.
+export function describePlaceId(id: string): string {
+  return id.startsWith(DOCKER_MARK) ? `the container \`${id.slice(DOCKER_MARK.length)}\`` : 'this machine';
 }
 
 // The project root as the place sees it.
@@ -54,16 +64,19 @@ export function placeId(place: Place): string {
 // `UNITBOB_REPO_ROOT`, which the generated Ruby joins `config/environment` onto.
 // It is built from the place rather than rewritten from a host path, so on the
 // local place it is byte for byte the path it has always been.
-export async function projectRootAsSeenByThePlace(projectRoot: string): Promise<string> {
+export function projectRootAsSeenByThePlace(projectRoot: string): string {
   const place = placeOf(projectRoot);
   if (place.kind === 'local') return projectRoot;
 
   const lookup = containerProjectRoot(place.container, projectRoot);
-  // The commands that matter have all been through `ensurePlaceIsUsable` by the
-  // time they get here. Falling back to the host path keeps a lookup that failed
-  // in some later moment from throwing out of a getter: whatever runs next will
-  // fail for its own reason, in its own words.
-  return lookup.status === 'ok' ? lookup.projectRoot : projectRoot;
+  if (lookup.status === 'ok') return lookup.projectRoot;
+
+  // Every command that must not run blind has been through `placeProblem`
+  // first. The one that has not is `map-prepare`, which asks the router and is
+  // allowed to fail — it degrades to one line and the map is built from source
+  // as it always was. So this returns something rather than throwing out of what
+  // reads like a getter: the command it belongs to is not going to run anyway.
+  return projectRoot;
 }
 
 // What actually got spawned, alongside the usual result. The wrapper (if there
@@ -198,6 +211,13 @@ const CONFIG_HINT = '`.unitbob.json`';
 // check that asks this machine while the run happens somewhere else is a check
 // that predicts the wrong thing. It is the same reason `runnerAvailable` already
 // asks the same interpreters, in the same order, that the run itself asks.
+// One known limitation, written down rather than hidden: the answer is a
+// boolean, so a container that died between the preflight and this question
+// comes back as "no, that cannot be started" — the same conflation `place_failed`
+// was added to the boot check to stop making. It stays a boolean because every
+// caller of `locateRunner` is synchronous and takes yes or no; what keeps it from
+// being the ordinary case is `placeProblem`, which runs first for every command
+// that would act on the answer.
 export function commandSucceedsInProject(projectRoot: string, command: string, args: string[]): boolean {
   const place = placeOf(projectRoot);
   const shaped =
@@ -207,7 +227,12 @@ export function commandSucceedsInProject(projectRoot: string, command: string, a
 
   const result = spawnSync(shaped.command, shaped.args, {
     cwd: projectRoot,
-    timeout: 10_000,
+    // A round trip through the docker daemon is not the same wait as starting a
+    // local binary: the client has to reach the daemon, and the daemon has to
+    // start a process in a container that may be busy running the application.
+    // Ten seconds is right for `python3 -m pytest --version` here and is the
+    // kind of budget that turns a slow machine into "no runner available".
+    timeout: place.kind === 'local' ? 10_000 : 60_000,
     env: { ...process.env },
   });
   return result.status === 0;

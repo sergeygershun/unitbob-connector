@@ -19,12 +19,11 @@
 // nothing else in the tree has to know about it.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { RUNNER_ENVIRONMENT_ENTRIES } from '../files/behavioral.ts';
-import { placeId, placeOf } from './place.ts';
+import { BEHAVIORAL_DIR, RUNNER_ENVIRONMENT_ENTRIES } from '../files/behavioral.ts';
+import { describePlaceId, placeId, placeOf } from './place.ts';
 import { SIDECAR_DIR } from './toolchain.ts';
 
 const PLACE_FILE = '.unitbob/.place';
-const BEHAVIORAL_DIR = '.unitbob/behavioral';
 
 // Throw away any runner environment that was built somewhere else, and record
 // where this one is being built. Returns a line worth printing when something
@@ -49,14 +48,38 @@ export function alignRunnerEnvironmentWithPlace(projectRoot: string): string | n
   if (removed.length === 0) return null;
 
   return (
-    `The test runner installed under \`.unitbob/\` was built for ${describe(previous)}, and this run happens ` +
-    `${describe(current)}. An installed package is not portable between the two, so it was removed and will ` +
-    `be installed again here (${removed.join(', ')}). Your generated suite was not touched.`
+    `The test runner installed under \`.unitbob/\` was built for ${describePlaceId(previous)}, and this run ` +
+    `happens in ${describePlaceId(current)}. An installed package is not portable between the two, so it was ` +
+    `removed and will be installed again here (${removed.join(', ')}). Your generated suite was not touched.`
   );
 }
 
-function describe(id: string): string {
-  return id === 'local' ? 'this machine' : `the container \`${id.slice('docker:'.length)}\``;
+// The same question, asked by a command that cannot install anything — `check`
+// and `run-local`. It refuses instead of clearing: throwing the environment away
+// here would leave the run with no runner and no way to get one, which is a
+// worse answer than naming the one command that fixes it.
+//
+// Criterion 6 is about not *accepting* a foreign environment as ready, and this
+// is the half of it that lives outside `suite-prepare`. Without it, adding
+// `exec` to a project whose suite already exists and running `check` starts a
+// macOS interpreter inside a Linux container and reports whatever comes out.
+export function runnerEnvironmentPlaceProblem(projectRoot: string): string | null {
+  const current = placeId(placeOf(projectRoot));
+  const previous = readMark(projectRoot) ?? 'local';
+  if (previous === current) return null;
+
+  // Nothing installed, nothing stale. A project whose runner has never been
+  // built has an honest reason to be here — `check` on a fresh checkout — and
+  // the missing runner is reported by the runner, in its own words.
+  const installed = installedRunnerEnvironment(projectRoot);
+  if (installed.length === 0) return null;
+
+  return (
+    `The test runner installed under \`.unitbob/\` was built for ${describePlaceId(previous)}, and this run ` +
+    `happens in ${describePlaceId(current)} (${installed.join(', ')}). An installed package is not portable ` +
+    'between the two, and this command installs nothing. Run `unitbob suite-prepare` to build the runner ' +
+    'where the run now happens, then try this again.'
+  );
 }
 
 function readMark(projectRoot: string): string | null {
@@ -77,21 +100,24 @@ function writeMark(projectRoot: string, id: string): void {
 // that are an installed environment. That list already exists and already means
 // exactly "this was installed, it is not generated text", so the suite the host
 // wrote survives.
-function removeRunnerEnvironment(projectRoot: string): string[] {
-  const removed: string[] = [];
+//
+// One list, read by both the command that clears and the command that only
+// complains, so the two can never disagree about what an installed environment
+// is.
+function installedRunnerEnvironment(projectRoot: string): string[] {
+  const found: string[] = [];
 
-  const sidecar = join(projectRoot, SIDECAR_DIR);
-  if (existsSync(sidecar)) {
-    rmSync(sidecar, { recursive: true, force: true });
-    removed.push(`${SIDECAR_DIR}/`);
-  }
+  if (existsSync(join(projectRoot, SIDECAR_DIR))) found.push(`${SIDECAR_DIR}/`);
 
   for (const entry of new Set(Object.values(RUNNER_ENVIRONMENT_ENTRIES).flatMap((set) => [...set]))) {
-    const path = join(projectRoot, BEHAVIORAL_DIR, entry);
-    if (!existsSync(path)) continue;
-    rmSync(path, { recursive: true, force: true });
-    removed.push(`${BEHAVIORAL_DIR}/${entry}`);
+    if (existsSync(join(projectRoot, BEHAVIORAL_DIR, entry))) found.push(`${BEHAVIORAL_DIR}/${entry}`);
   }
 
-  return removed.sort();
+  return found.sort();
+}
+
+function removeRunnerEnvironment(projectRoot: string): string[] {
+  const installed = installedRunnerEnvironment(projectRoot);
+  for (const entry of installed) rmSync(join(projectRoot, entry), { recursive: true, force: true });
+  return installed;
 }

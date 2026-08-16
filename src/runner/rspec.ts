@@ -67,7 +67,7 @@ async function invokeRspec(projectRoot: string, rspecArgs: string[]): Promise<Pr
     env: {
       ...located?.env,
       RAILS_ENV: 'test',
-      UNITBOB_REPO_ROOT: await projectRootAsSeenByThePlace(projectRoot),
+      UNITBOB_REPO_ROOT: projectRootAsSeenByThePlace(projectRoot),
     },
   });
 }

@@ -32,10 +32,19 @@ interface Container {
   Mounts?: Mount[];
 }
 
-// Asked once per container per process. A single run asks where the project
-// lives dozens of times — every provision step, every check, every run — and
-// `docker inspect` is a round trip to the daemon each time.
-const inspected = new Map<string, Container>();
+// Asked once per container per process, answer *and* refusal alike. A single run
+// asks where the project lives dozens of times — every provision step, every
+// check, every run — and each ask is a round trip to the daemon. Caching only
+// the successes would leave the expensive case uncached: with no daemon running,
+// every one of those asks waits for `docker` to give up, on the one path that
+// has no preflight in front of it (`map-prepare`).
+//
+// Within one command that is safe by construction: a container that starts or
+// stops halfway through does not retroactively change where the work should have
+// happened, and every command that must not run blind has already refused.
+type Inspection = { container: Container } | { failure: ContainerLookup };
+
+const inspected = new Map<string, Inspection>();
 
 // Where this container sees the project root, or why it cannot.
 //
@@ -51,10 +60,9 @@ const inspected = new Map<string, Container>();
 // covering the root means the code was copied into the image, which means files
 // written here are invisible there and reports written there are invisible here.
 export function containerProjectRoot(container: string, projectRoot: string): ContainerLookup {
-  const cached = inspected.get(container);
-  const found = cached ? { container: cached } : inspect(container);
+  const found = inspected.get(container) ?? inspect(container);
+  inspected.set(container, found);
   if ('failure' in found) return found.failure;
-  inspected.set(container, found.container);
 
   if (found.container.State?.Running === false) return { status: 'not_running' };
 
@@ -62,7 +70,7 @@ export function containerProjectRoot(container: string, projectRoot: string): Co
   return mounted === null ? { status: 'not_mounted' } : { status: 'ok', projectRoot: mounted };
 }
 
-function inspect(container: string): { container: Container } | { failure: ContainerLookup } {
+function inspect(container: string): Inspection {
   const result = spawnSync('docker', ['container', 'inspect', container, '--format', '{{json .}}'], {
     timeout: 30_000,
     encoding: 'utf8',
