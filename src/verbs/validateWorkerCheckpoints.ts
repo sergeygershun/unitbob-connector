@@ -6,6 +6,7 @@ import {
   requestDigest,
   validateWorkerPlanFiles,
   workerPlanDigest,
+  type WorkerPlanItem,
 } from '../files/workerPlan.ts';
 
 export async function validateWorkerCheckpoints(
@@ -59,6 +60,7 @@ export async function validateWorkerCheckpoints(
       errors.push(`${label}: written path ${pathValue} is not an owned path`);
     }
     validateCompactFacts(checkpoint.facts, label, errors);
+    validateSurfaceCoverage(checkpoint.surface_coverage, item, label, errors);
     stringArray(checkpoint.decisions, `${label}: decisions`, errors);
     stringArray(checkpoint.known_problems, `${label}: known_problems`, errors);
   }
@@ -77,6 +79,17 @@ function stringArray(value: unknown, label: string, errors: string[]): string[] 
   return value;
 }
 
+// A fact says how it was established, and the vocabulary is two words wide:
+// `read` when the `source_refs` are what establishes it, `ran: <command>` when
+// something was executed and its result observed.
+//
+// a2time, 2026-08-17. A seeded fact claimed a dismissed employee cannot sign in.
+// It came from reading one method and remembering another, it reached sixteen
+// workers marked as verified, and it was false. Every fact that run established
+// by running the application held; the one that was not, did not — and nothing in
+// the checkpoint told the two apart, so no reader could weigh them differently.
+const ESTABLISHED_BY = /^(read|ran: \S.*)$/;
+
 function validateCompactFacts(value: unknown, label: string, errors: string[]): void {
   if (!Array.isArray(value)) {
     errors.push(`${label}: facts must be an array`);
@@ -84,7 +97,7 @@ function validateCompactFacts(value: unknown, label: string, errors: string[]): 
   }
   for (const [index, entry] of value.entries()) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      errors.push(`${label}: $.facts[${index}] must be an object with fact and source_refs; got ${jsonType(entry)}`);
+      errors.push(`${label}: $.facts[${index}] must be an object with fact, source_refs and established_by; got ${jsonType(entry)}`);
       continue;
     }
     const fact = entry as Record<string, unknown>;
@@ -92,8 +105,52 @@ function validateCompactFacts(value: unknown, label: string, errors: string[]): 
     if (!Array.isArray(fact.source_refs) || fact.source_refs.some((ref) => typeof ref !== 'string' || !ref.trim())) {
       errors.push(`${label}: facts[${index}].source_refs must be compact source references`);
     }
+    if (typeof fact.established_by !== 'string' || !ESTABLISHED_BY.test(fact.established_by)) {
+      errors.push(`${label}: facts[${index}].established_by must be "read" or "ran: <command>"`);
+    }
     if ('source' in fact || 'transcript' in fact || 'suite' in fact) {
       errors.push(`${label}: facts[${index}] may not embed source, transcript, or suite copies`);
+    }
+  }
+}
+
+// Which addresses a Scenario drives is knowable in one place — the step file the
+// worker just wrote — and until now it travelled nowhere. The coordinator owes
+// the server one `surface_coverage` entry per Scenario, so on a2time, 2026-08-17,
+// it assembled that join out of the workers' closing prose and its own plan. The
+// independent reviewer read the step code instead, the two disagreed on six
+// Scenarios, and the server refused the publication. The join now rides with the
+// work that produced it, and the coordinator copies it instead of interpreting.
+//
+// Behavioral only: this is a join between Gherkin Scenarios and surfaces, and the
+// structural branch has neither. Requiring the key there would refuse honest
+// slices over a field that would mean nothing if they filled it in.
+function validateSurfaceCoverage(
+  value: unknown,
+  item: Pick<WorkerPlanItem, 'branch' | 'capability_ids'>,
+  label: string,
+  errors: string[],
+): void {
+  if (value === undefined && item.branch !== 'behavioral') return;
+  if (!Array.isArray(value)) {
+    errors.push(`${label}: surface_coverage must be an array of {capability_id, scenario, surfaces} entries, one per Scenario written`);
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(`${label}: surface_coverage[${index}] must be an object with capability_id, scenario and surfaces; got ${jsonType(entry)}`);
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.capability_id !== 'string' || !item.capability_ids.includes(record.capability_id)) {
+      errors.push(`${label}: surface_coverage[${index}].capability_id ${String(record.capability_id)} is not in this plan item`);
+    }
+    if (typeof record.scenario !== 'string' || !record.scenario.trim()) {
+      errors.push(`${label}: surface_coverage[${index}].scenario must name the exact Scenario it covers`);
+    }
+    if (!Array.isArray(record.surfaces) || record.surfaces.length === 0
+      || record.surfaces.some((surface) => typeof surface !== 'string' || !surface.trim())) {
+      errors.push(`${label}: surface_coverage[${index}].surfaces must name at least one surface the Scenario drives`);
     }
   }
 }

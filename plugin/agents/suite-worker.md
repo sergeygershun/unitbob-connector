@@ -23,21 +23,46 @@ nothing to put in them: `written_paths` (only your own `owned_paths`),
 unresolved harness problems). A missing array is not an empty one — the gate
 that reads this checkpoint refuses it either way.
 
-Facts are short statements with source references.
-The normative JSON shape of one facts entry is:
+Facts are short statements with source references, and each one says how it was
+established. The normative JSON shape of one facts entry is:
 ```json
-{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}
+{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"],"established_by":"read"}
 ```
-Every facts entry is an object in that shape, never a string. Never embed source
-files, suite copies, or transcript.
+Every facts entry is an object in that shape, never a string. `established_by` is
+`read` when the references are what establishes it, or `ran: <command>` when
+something was executed and its result observed. You run nothing, so every fact
+you add yourself is `read`; a `ran:` fact is one the coordinator established
+before fan-out, and that is exactly what makes it worth more than a fact anybody
+read. Never embed source files, suite copies, or transcript.
+
+On the behavioral branch your checkpoint also carries `surface_coverage`: one
+entry per Scenario you write, recorded as you write it.
+```json
+{"capability_id":"<one of your plan item's ids>","scenario":"<exact Scenario name>","surfaces":["POST /orders"]}
+```
+`surfaces` names the addresses and jobs the Scenario's `When` really reaches — not
+the ones its capability was assigned, and not the ones you meant to reach. Only
+you can know this: the coordinator publishes this join and never reopens your step
+files. On a2time, 2026-08-17, it had to reconstruct the join from what the workers
+said about their work; the independent reviewer read the steps instead, six
+Scenarios claimed addresses their steps never drove, and the server refused the
+publication.
 
 Write first, then find out. Start with the planned cases your seeded facts
 already support and get them onto disk; go reading only for what you still lack
 after that. The opposite order — survey the sources, then write — is what spent
 seven of eight workers' entire ceilings on a2time, 2026-08-10, and produced no
-file at all. A fact already in your checkpoint is settled: do not establish it a
-second time. Nothing mechanical enforces that rule; it holds because you keep
-it.
+file at all.
+
+A fact already in your checkpoint is settled: do not establish it a second time.
+A `read` fact is settled the same way — until a file you had to open anyway says
+otherwise. Then check that one fact against its own `source_refs`, which is two
+or three lines and not a fresh survey; if it is wrong, correct the entry and say
+so in `known_problems`. On a2time, 2026-08-17, a seeded fact said a dismissed
+employee cannot sign in — one method read, another remembered — and sixteen
+workers got it as verified. One of them looked, disagreed, and kept its scenario
+honest, which is the only reason that access hole came back red instead of green.
+Nothing mechanical enforces any of this; it holds because you keep it.
 
 Read only the `source_paths` and dependencies your finite planned cases need.
 Ask closed questions with the files to look in. For a closed missing fact, use

@@ -292,8 +292,14 @@ test('the suite workflow groups failures and keeps the shared file for the coord
 test('the suite workflow mechanically gates plan before fan-out and checkpoints before repair', () => {
   const planGate = flat.indexOf('validate-worker-plan');
   const fanOut = flat.indexOf("Start a branch's workers together");
-  const checkpointGate = flat.indexOf('validate-worker-checkpoints');
+  // The checkpoint gate is run twice now, and both runs are asserted: once on the
+  // seeds, where a refusal costs seconds rather than sixteen already-launched
+  // workers, and once after fan-out, which is the run standing between a stale
+  // checkpoint and repair.
+  const seedGate = flat.indexOf('validate-worker-checkpoints');
+  const checkpointGate = flat.lastIndexOf('validate-worker-checkpoints');
   assert.ok(planGate >= 0 && fanOut > planGate);
+  assert.ok(seedGate >= 0 && seedGate < fanOut);
   assert.ok(checkpointGate > fanOut);
   assert.match(flat, /If validation exits non-zero.*stop before fan-out/i);
 });

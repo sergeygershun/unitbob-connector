@@ -161,11 +161,11 @@ after its bounded phase.
    ```json
    {
      "request_digest": "<exact>", "plan_digest": "<exact>",
-     "branch": "structural", "worker_id": "w1",
+     "branch": "behavioral", "worker_id": "w1",
      "unresolved_promises": ["<every assigned promise>"],
      "completed_promises": [], "written_paths": [],
-     "decisions": [], "known_problems": [],
-     "facts": [{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}]
+     "decisions": [], "known_problems": [], "surface_coverage": [],
+     "facts": [{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"],"established_by":"read"}]
    }
    ```
 
@@ -176,11 +176,33 @@ after its bounded phase.
    in a row spent themselves on rejected checkpoints, about thirty of them on
    one run, which then got a hand-written normalizer to work around it.
 
+   `surface_coverage` is the behavioral branch's fourth such array, and the shape
+   above is a behavioral slice. Its workers fill it in as they write — one entry
+   per Scenario, naming the addresses that Scenario actually drives — and step 9
+   publishes exactly what they wrote. A structural slice is the same object
+   without that key: the join is between Gherkin Scenarios and addresses, and the
+   structural branch has no Scenarios.
+
    Everything every worker on the branch would otherwise discover alone belongs
    here: how a session is opened, which factory builds a paying customer, what
    the runner setup already does. On 2026-08-10 that list was assembled by hand
    halfway through the run, and the packets that received it finished
    completely.
+
+   Every fact says how you established it: `"established_by": "read"` with the
+   references you actually opened, or `"established_by": "ran: <command>"` when
+   you ran that command in this session and read its output. **Nothing you
+   remember about this project is a fact.** On a2time, 2026-08-17, nine facts
+   established by running the application held all run and saved sixteen workers
+   the same discoveries; the one written from memory — that a dismissed employee
+   cannot sign in, one method confused with another — was false, and went to all
+   sixteen packets marked as verified.
+
+   When every seed is written, run
+   `npx -y --loglevel=error unitbob@0.6.0 validate-worker-checkpoints` here,
+   before fan-out. It is step 8's gate, it costs seconds, and it reads every
+   checkpoint against the plan — so a seed it would refuse is refused now, rather
+   than after sixteen workers have been launched on it.
 
 7. Use the same named role on both Claude Code and Codex: `unitbob:suite-worker`
    on Claude Code and `suite-worker` on Codex. For every plan item launch that
@@ -260,6 +282,20 @@ after its bounded phase.
    contents, or use `render_template`; use only the World's status and redirect
    API. Application and FactoryBot-specific login/domain setup belongs in
    host-owned shared steps.
+
+   `test_metadata` comes from the checkpoints step 8 accepted, not from the files
+   and not from what a worker said about its work: a capability is `covered` when
+   its slice completed the promises and wrote the cases, and its
+   `surface_coverage` is that slice's entries for that `capability_id`, each one
+   copied through as `{scenario, surfaces}` — the id groups them and does not
+   travel. **Never search the generated files for a marker to decide any of
+   this.** On a2time, 2026-08-17, the coordinator wrote itself a check that
+   looked for the marker anywhere in the file text, so a marker sitting in a
+   comment that explained why an interface was *not* covered counted as coverage,
+   and `usage_export` went up `covered` with nothing exercising it. The behavioral
+   server catches that at publish, because it parses Gherkin and reads tags; the
+   structural server deliberately does not, and a green lamp with nothing behind
+   it is the one outcome this entire workflow exists to prevent.
 
    Write strict JSON only to the request's `output_path`, one entry for every
    requested branch. Each branch names one main file and every other file it

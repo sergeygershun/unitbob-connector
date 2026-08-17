@@ -46,6 +46,22 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   [join('verbs', 'suitePrepare.ts')]: [/manifest/i],
   [join('verbs', 'validateBuild.ts')]: [/manifest/i],
 
+  // a2time, 2026-08-17. `validate-worker-checkpoints` gates the shape of a local
+  // scratch file that passes from a worker to the coordinator, and that file now
+  // carries `surface_coverage`: the Scenario names a worker wrote and the
+  // addresses its steps drive. The gate asks three mechanical questions — is the
+  // capability one this plan item was given, is the Scenario named, is there at
+  // least one surface — and it is the same kind of check the neighbouring
+  // `facts` and `owned_paths` already get.
+  //
+  // An exemption is a word let into a file, not a word let into one line — the
+  // guard matches text, and cannot tell the field from a variable named after it.
+  // So the narrowness is in what stays forbidden: `covered`, `unguarded` and
+  // `retired` still fail here, and the day this file starts deciding *which*
+  // capabilities are covered — the server's job, and the rule spec 43 tore out of
+  // `validateBuild.ts` — the guard fires again.
+  [join('verbs', 'validateWorkerCheckpoints.ts')]: [/\bcoverage\b/i],
+
   // Spec 43, §7. `put-suite-build` prints the server's own `unguarded_by_review`
   // list: capabilities the publish stored unguarded because the review objected
   // to every Scenario guarding them. Relaying the server's words is what this

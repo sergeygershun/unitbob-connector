@@ -48,9 +48,13 @@ No strict JSON handoff is required.
 Update the same checkpoint as promises complete. Keep facts compact and
 source-referenced. The normative JSON shape of one facts entry is:
 ```json
-{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"]}
+{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"],"established_by":"read"}
 ```
-Every facts entry is an object in that shape, never a string. Before handoff,
+Every facts entry is an object in that shape, never a string; `established_by` is
+`read` or `ran: <command>`, and a failure you reproduced is the second kind. On
+the behavioral branch, when you rename a Scenario or change what its steps drive,
+update that Scenario's `surface_coverage` entry in the same breath — the
+coordinator publishes those entries and does not reread your steps. Before handoff,
 make one final read of the checkpoint and confirm every `facts` entry is an
 object in the normative shape above. Do not delegate repair or auto-resume after
 the fuse. Preserve files and checkpoint for the coordinator's existing

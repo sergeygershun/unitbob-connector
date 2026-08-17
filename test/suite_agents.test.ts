@@ -27,6 +27,11 @@ test('suite-worker has an emergency 150-turn Sonnet fuse and one plan-item contr
   assert.match(body, /never initialize it again/i);
   assert.match(body, /Write first, then find out/i);
   assert.match(body, /fact already in your checkpoint is settled/i);
+  // …and the one exception, without which "settled" reads as "true". a2time,
+  // 2026-08-17: a seeded fact read from memory went to sixteen workers as
+  // verified, and the run was saved by the one worker that checked it anyway.
+  assert.match(body, /`read` fact/i);
+  assert.match(body, /`known_problems`/);
   assert.match(body, /emergency fuse, not a budget/i);
   assert.match(body, /preserve the supplied checkpoint and completed files/i);
   assert.match(body, /only.*owned_paths/i);
@@ -57,6 +62,42 @@ test('every place a checkpoint is written names the keys the gate requires', () 
     assert.match(text, /`known_problems`/);
   }
   assert.match(workflow, /"decisions": \[\], "known_problems": \[\]/);
+});
+
+// a2time, 2026-08-17. The published metadata owes the server one entry per
+// Scenario naming the addresses that Scenario drives, and nothing in the handoff
+// carried it: the coordinator wrote it from the workers' closing prose and from
+// its own plan, the reviewer read the step files, and the two disagreed on six
+// Scenarios. The worker writes the steps, so the worker records what they drive —
+// and the coordinator copies rather than interprets.
+test('the worker records what its Scenarios drive, and the coordinator copies that', () => {
+  const { body } = agent('suite-worker');
+  const text = workflow('suite');
+  const stepNine = text.slice(text.indexOf('\n9. '), text.indexOf('\n10. '));
+
+  assert.match(body, /`surface_coverage`/);
+  assert.match(body, /exact Scenario name/i);
+  assert.match(body, /capability_id/);
+  assert.match(stepNine, /`surface_coverage`/);
+  assert.match(stepNine, /from the checkpoints/i);
+  // The status half of the same rule: what a coordinator may not do instead.
+  assert.match(stepNine, /never search the generated files for a marker/i);
+});
+
+// The seeded checkpoint is where both halves start, so the shape is stated where
+// it is written — the lesson `decisions` and `known_problems` already taught,
+// and the seed example is the part a reader copies.
+test('the seed names the behavioral join and says how a seeded fact was established', () => {
+  const text = workflow('suite');
+  const stepSix = text.slice(text.indexOf('\n6. '), text.indexOf('\n7. '));
+
+  assert.match(stepSix, /"surface_coverage": \[\]/);
+  assert.match(stepSix, /"established_by"/);
+  assert.match(stepSix, /ran: /);
+  assert.match(stepSix, /Nothing you\s+remember about this project is a fact/i);
+  // And the gate runs here, where a rejected seed costs seconds — not after
+  // fan-out, where it costs every worker the run just launched.
+  assert.match(stepSix, /validate-worker-checkpoints/);
 });
 
 // Spec 44, §1.1–1.5. Two runs out of four lost an hour each to roles the session
