@@ -161,13 +161,19 @@ const noTools: ToolDeps = { commandSucceeds: () => false };
 const everythingInstalled: ToolDeps = { commandSucceeds: () => true };
 
 // Records what was asked to run, and answers everything with success.
-function recorder(): ProvisionDeps & { calls: string[] } {
+function recorder(): ProvisionDeps & { calls: string[]; envs: Record<string, string>[] } {
   const calls: string[] = [];
+  // What each command was *given*, not just what it was. Since spec 36 the
+  // connector states every variable it sets on purpose, so the variables are
+  // part of the command's meaning rather than something inherited.
+  const envs: Record<string, string>[] = [];
   return {
     tools: noTools,
     calls,
-    runCmd: async (command, args) => {
+    envs,
+    runCmd: async (command, args, options) => {
       calls.push(`${command} ${args.join(' ')}`);
+      envs.push(options.env ?? {});
       return { code: 0, stdout: '', stderr: '' };
     },
   };
@@ -392,4 +398,28 @@ test('the behavioral Python sidecar installs the application, not just the BDD r
   );
   assert.ok(deps.calls.includes(`${venvPython} -m pip install pytest-bdd`));
   assert.ok(!deps.calls.some((call) => call.includes('system-site-packages')), 'the environment stays hermetic');
+});
+
+// Spec 36, task 2.6, measured on `ruby:3.3-slim` 2026-08-17. A sidecar Gemfile
+// adds a gem the project's lockfile has never heard of — that is its whole job —
+// and under `frozen` or `deployment` bundler refuses exactly that. The project's
+// own `.bundle/config` does not reach here (bundler reads app config relative to
+// the Gemfile it was given), but the environment does, and a dev or production
+// image setting `BUNDLE_DEPLOYMENT=1` is ordinary.
+test('the sidecar install turns frozen bundler off for its own Gemfile, and only there', async () => {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, 'Gemfile'), "gem 'rails'\n");
+  const deps = recorder();
+
+  await ensureStructuralRunner(projectRoot, 'rspec', deps);
+  await ensureRunner(projectRoot, 'cucumber', deps);
+
+  for (const env of deps.envs) {
+    if (!env.BUNDLE_GEMFILE) continue;
+    assert.match(env.BUNDLE_GEMFILE, /^\.unitbob\//, 'only ever our own Gemfile');
+    assert.equal(env.BUNDLE_FROZEN, 'false');
+    assert.equal(env.BUNDLE_DEPLOYMENT, 'false');
+  }
+  // And it is scoped: nothing that is not a sidecar install carries it.
+  assert.equal(deps.envs.some((env) => !env.BUNDLE_GEMFILE && env.BUNDLE_FROZEN !== undefined), false);
 });

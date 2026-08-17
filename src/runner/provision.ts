@@ -356,6 +356,24 @@ async function provisionVitest(projectRoot: string, deps: ProvisionDeps): Promis
   return { status: 'provisioned' };
 }
 
+// Frozen bundler, turned off for our own Gemfile and for nothing else
+// (spec 36, task 2.6).
+//
+// The sidecar Gemfile adds a gem the project's lockfile has never heard of —
+// that is its entire job — and under `frozen` or `deployment` bundler refuses
+// exactly that: "the dependencies in your gemfile changed, but the lockfile
+// can't be updated because frozen mode is set". Nothing installs, and the
+// vibecoder is told to commit a file the connector wrote.
+//
+// Measured, not reasoned about (2026-08-17, `ruby:3.3-slim`). The project's own
+// `.bundle/config` does *not* reach here: bundler reads app config relative to
+// the Gemfile it was given, which is `.unitbob/runners/`. The environment does,
+// and a dev or production image setting `BUNDLE_DEPLOYMENT=1` is ordinary. So
+// the override is scoped to the one install whose Gemfile we wrote; the
+// project's own bundler settings are never touched, and no other bundler
+// invocation carries this.
+const UNFROZEN_SIDECAR = { BUNDLE_FROZEN: 'false', BUNDLE_DEPLOYMENT: 'false' };
+
 // A sidecar Gemfile that inherits the project's own, plus rspec-rails. Bundler
 // resolves the two together, so the application's gems come with it — the same
 // arrangement the Cucumber sidecar has used since spec 32-1, and the reason the
@@ -378,7 +396,7 @@ async function provisionRspec(projectRoot: string, deps: ProvisionDeps): Promise
   const result = await deps
     .runCmd(command, ['install'], {
       cwd: projectRoot,
-      env: { BUNDLE_GEMFILE: `${SIDECAR_DIR}/Gemfile` },
+      env: { BUNDLE_GEMFILE: `${SIDECAR_DIR}/Gemfile`, ...UNFROZEN_SIDECAR },
       timeoutMs: DEPENDENCY_INSTALL_TIMEOUT_MS,
     })
     .catch((err) => ({ code: 1, stdout: '', stderr: String(err) }));
@@ -462,8 +480,10 @@ async function provisionRuby(
     writeFileSync(join(behavioralDir, 'Gemfile.lock'), readFileSync(projectLock, 'utf8'));
   }
 
-  const gemfileRel = '.unitbob/behavioral/Gemfile';
-  const env = { BUNDLE_GEMFILE: gemfileRel };
+  // The Cucumber sidecar has the same shape and the same problem as the rspec
+  // one: it adds gems the project's lockfile does not carry. See UNFROZEN_SIDECAR.
+  const gemfileRel = `${BEHAVIORAL_DIR}/Gemfile`;
+  const env = { BUNDLE_GEMFILE: gemfileRel, ...UNFROZEN_SIDECAR };
 
   // Try project local bin/bundle, then bundle. Relative with a slash: the
   // working directory is the project root, and a bare name would be looked up on
