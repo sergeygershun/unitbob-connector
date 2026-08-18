@@ -30,6 +30,17 @@ Do this:
 
 1. Run `npx -y --loglevel=error unitbob@0.6.1 map-prepare`. It refreshes the code
    graph and writes the build request.
+
+   **The environment is never yours to repair.** Building an interpreter,
+   installing the project's dependencies, pulling a base image, editing a
+   `.ruby-version` or a lockfile — none of that is this workflow's work, and no
+   failure turns it into it. On a2time, 2026-08-17, a run met a project pinned to
+   a Ruby the machine did not have and spent itself on `rbenv install` and a
+   search for a base image instead of the map. `map-prepare` needs none of it: it
+   reads the source. When it says the project's own router could not be asked for
+   its addresses, that is one line of degraded input, not a task — the recipe
+   already covers reading the routes from source. Whatever else it says,
+   say it to the user in its own words and stop.
 2. Read `.unitbob/map-build/request.json`. It gives you `project_root`,
    `graph_path`, `output_path`, `surfaces_path`, `surface_output_path`, and the
    fetched recipes. It also carries `route_inventory_path` **when this project's

@@ -12,6 +12,13 @@ Do this:
    error and the other still runs — regenerate the suites by following
    `suite.md` next to this file.
 
+   **The environment is never yours to repair.** If the run cannot start this
+   project's toolchain, do not install an interpreter, dependencies or an image
+   to make it start: report what the command said and stop. One thing it may say
+   is that this project's tests run inside a container, and then it prints the
+   exact line to add to `.unitbob.json` — add that line and run this again,
+   using the container it named and never one you chose.
+
 Then report both summaries to the user in plain business language: on each map,
 which subsystems are healthy (green) and which broke (red), and for a red one,
 what business behaviour the broken seam protected. Print the server's summaries

@@ -396,3 +396,102 @@ test('an unknown recipe still says so by name', async () => {
     },
   );
 });
+
+// a2time, 2026-08-17. The sandbox answered `403 Forbidden — Host not in
+// allowlist` and the connector relayed the status as it stands, which reads as
+// "the Unitbob server refused you". It never does: the brain answers 404 where a
+// stranger might expect 403, precisely so a 403 can never confirm a project
+// exists (`access_control.rb`). So a 403 on this wire was written by something
+// between this machine and the brain, and saying which end refused is the whole
+// difference between checking your proxy and re-reading your token.
+test('a 403 on the wire is named as an intermediary, not as the brain', async () => {
+  await withServer(
+    (_hit, res) => {
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      res.end('Host not in allowlist');
+    },
+    async (config) => {
+      await assert.rejects(
+        new Wire(config).getSuites(),
+        (err: Error) =>
+          err instanceof WireError &&
+          /never answers 403/.test(err.message) &&
+          // The intermediary's own words are the most useful part of it.
+          /Host not in allowlist/.test(err.message),
+      );
+    },
+  );
+});
+
+// The same failure, on a machine whose environment says how it reaches the
+// network. The cure was found by guessing on a2time; here it is in the message.
+//
+// The server is a name that does not resolve rather than the local test server:
+// a loopback brain never travels through a proxy, and this is the failure of a
+// remote one.
+test('a failure on a proxied machine names the proxy and the way to use it', async () => {
+  await withProxyEnv('http://proxy.internal:3128', async () => {
+    const remote: Config = {
+      server: 'https://unitbob.invalid',
+      repoId: 3,
+      token: 'secret-token',
+      projectRoot: '/project',
+    };
+    await assert.rejects(
+      () => new Wire(remote).getLamps(),
+      (err: Error) => err instanceof WireError && /NODE_USE_ENV_PROXY=1/.test(err.message),
+    );
+  });
+});
+
+// Measured on Node 25.2.1: with `NODE_USE_ENV_PROXY=1` set, Node tunnels
+// loopback through the proxy as readily as any public host. So this advice, to
+// somebody whose brain is on their own machine and merely down, would break the
+// one setup that works.
+test('a brain on this machine is never blamed on the proxy', async () => {
+  await withProxyEnv('http://proxy.internal:3128', async () => {
+    // Port 1 is reserved and nothing listens there → connection refused.
+    const local: Config = {
+      server: 'http://127.0.0.1:1',
+      repoId: 3,
+      token: 'secret-token',
+      projectRoot: '/project',
+    };
+    await assert.rejects(
+      () => new Wire(local).getLamps(),
+      (err: Error) =>
+        err instanceof WireError &&
+        /Cannot reach the Unitbob server/.test(err.message) &&
+        !/NODE_USE_ENV_PROXY/.test(err.message),
+    );
+  });
+});
+
+// Every other status keeps the message it has always had: a hint that appears on
+// a 422 would send somebody to their network settings over a validation error.
+test('an ordinary rejection carries no proxy advice', async () => {
+  await withProxyEnv('http://proxy.internal:3128', async () => {
+    await withServer(
+      (_hit, res) => json(res, 422, { error: 'surface: bad' }),
+      async (config) => {
+        await assert.rejects(
+          new Wire(config).getSuites(),
+          (err: Error) => err instanceof WireError && !/NODE_USE_ENV_PROXY/.test(err.message),
+        );
+      },
+    );
+  });
+});
+
+// Run `fn` with a proxy in the environment, and put the environment back
+// afterwards — these tests share one process with every other test file.
+async function withProxyEnv(proxy: string, fn: () => Promise<void>): Promise<void> {
+  const restore = process.env.HTTPS_PROXY;
+  process.env.HTTPS_PROXY = proxy;
+  try {
+    await fn();
+  } finally {
+    if (restore === undefined) delete process.env.HTTPS_PROXY;
+    else process.env.HTTPS_PROXY = restore;
+  }
+}

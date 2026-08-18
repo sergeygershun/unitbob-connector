@@ -10,6 +10,7 @@
 // not something it reasons about.
 import type { Config } from './config.ts';
 import type { SuiteBlob } from './files/guardrails.ts';
+import { proxyHint } from './proxyHint.ts';
 
 export interface Recipe {
   name: string;
@@ -196,8 +197,11 @@ export async function registerRepo(server: string, name: string): Promise<RepoRe
     });
   } catch (err) {
     throw new WireError(
-      `Cannot reach the Unitbob server at ${server} (${(err as Error).message}). ` +
-        'Check that the server is running.',
+      withProxyHint(
+        `Cannot reach the Unitbob server at ${server} (${(err as Error).message}). ` +
+          'Check that the server is running.',
+        server,
+      ),
     );
   }
 
@@ -208,7 +212,7 @@ export async function registerRepo(server: string, name: string): Promise<RepoRe
     } catch {
       // ignore — the status alone is actionable enough
     }
-    throw new WireError(`POST ${url} failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`);
+    throw new WireError(statusRefusal(`POST ${url}`, res, detail, server));
   }
 
   const payload = (await res.json()) as { id?: unknown; token?: unknown };
@@ -430,9 +434,12 @@ export class Wire {
       });
     } catch (err) {
       throw new WireError(
-        `Cannot reach the Unitbob server at ${this.config.server} ` +
-          `(${(err as Error).message}). Check that the server is running and that ` +
-          `"server" in .unitbob.json is correct.`,
+        withProxyHint(
+          `Cannot reach the Unitbob server at ${this.config.server} ` +
+            `(${(err as Error).message}). Check that the server is running and that ` +
+            `"server" in .unitbob.json is correct.`,
+          this.config.server,
+        ),
         { unreachable: true },
       );
     }
@@ -458,6 +465,48 @@ export class Wire {
     } catch {
       // ignore — the status alone is actionable enough
     }
-    throw new WireError(`${what} failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`);
+    throw new WireError(statusRefusal(what, res, detail, this.config.server));
   }
+}
+
+// The two statuses that prove somebody else answered.
+//
+// a2time, 2026-08-17: a sandbox refused the host with `403 Forbidden — Host not
+// in allowlist`, and the run read the 403 as Unitbob's own verdict. It cannot be
+// one. The brain answers 404 even to a caller holding the wrong token — a 403
+// would confirm the project exists — so 403 never comes from it, and 407 is a
+// proxy demanding credentials, which the brain has never heard of.
+const NOT_FROM_THE_BRAIN: Record<number, string> = {
+  403: 'The Unitbob server never answers 403 — it answers 404 even to a caller holding the wrong token — so ' +
+    'this was written by something between this machine and it: a proxy, a gateway, or a sandbox that has ' +
+    'not been told this host is allowed.',
+  407: 'A 407 is a proxy asking this machine to authenticate. It did not come from the Unitbob server.',
+};
+
+// One failing status, written the same way wherever it was collected.
+//
+// Registration and every tokened call compose this identically on purpose: they
+// used to disagree, and the disagreement was invisible — a 422 from `register`
+// carried network advice while the same 422 from a repo call did not, so which
+// sentence a person got depended on which endpoint they happened to hit.
+function statusRefusal(what: string, res: Response, detail: string, server: string): string {
+  const line = `${what} failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`;
+
+  // A status the brain cannot have written. Relaying it as it stands reads as
+  // "Unitbob refused you" and sends the reader to their token; the refusal came
+  // from the network in between, and only they can clear it. Every other status
+  // is the server's own verdict and keeps the message it has always had — a
+  // proxy sentence on a 422 sends somebody to their network settings over a
+  // validation error.
+  const notOurs = NOT_FROM_THE_BRAIN[res.status];
+  return notOurs ? withProxyHint(`${line}\n${notOurs}`, server) : line;
+}
+
+// Every wire failure that the network could explain ends with the same sentence
+// about it — see `proxyHint`, which decides whether there is one to say. Here
+// rather than inside `WireError` so that a message composed for some other
+// reason never picks it up by accident.
+function withProxyHint(message: string, server: string): string {
+  const hint = proxyHint(server);
+  return hint ? `${message}\n${hint}` : message;
 }

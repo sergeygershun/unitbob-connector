@@ -57,6 +57,34 @@ after its bounded phase.
    its message to the user as it stands and stop.** Do not work around a
    `fixable` profile failure or start fan-out without a request.
 
+   **The environment is never yours to repair.** Building an interpreter,
+   installing the project's dependencies, pulling a base image, editing a
+   `.ruby-version` or a lockfile — none of that is this workflow's work, and no
+   failure turns it into it. On a2time, 2026-08-17, a run met a project pinned to
+   a Ruby the machine did not have and set out to supply one: `rbenv install`,
+   then a search for a base image, then a survey of which package hosts were
+   reachable. It never ran this step at all, so nothing was generated, nothing
+   was uploaded, and the user got a report about openssl instead of a suite.
+   `suite-prepare` is the only thing that finds out what this machine can run.
+   Whatever it answers, say it to the user in its own words and stop.
+
+   **One of its answers is that the tests do not run on this machine.** A project
+   whose interpreter, packages and database live in a container says so in
+   `.unitbob.json`, and then every command that needs them runs in there:
+
+   ```json
+   "exec": {"docker": {"container": "myapp-web-1"}}
+   ```
+
+   Files stay on the host either way — only the processes travel — so nothing
+   about the rest of this workflow changes. When `suite-prepare` cannot start the
+   toolchain it lists the running containers that already have this project
+   mounted and prints the line to add; add the one you run your tests in, and run
+   the command again. Never write a container name it did not name: it is
+   reporting what is actually running, and choosing between a `web` and a
+   `worker` by their names is how a suite comes to run somewhere nobody meant it
+   to.
+
 2. Read `.unitbob/suite-build/request.json`. It names `project_root`,
    `output_path`, and the requested `branches`. Copy each branch's
    `runner_manifest` verbatim. Never invent or edit one and never add a branch

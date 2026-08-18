@@ -10,6 +10,13 @@ Do this:
    (the business behaviour, the latest failure, the constraints, and where the
    contract lives locally) and prints it. If it reports the check is not failing,
    the version is no longer current, or the suite is stale, report that and stop.
+
+   **The environment is never yours to repair.** Running the suite here is the
+   same work as anywhere else: if it cannot start, do not install an interpreter,
+   dependencies or an image to make it start — report what the command said and
+   stop. One thing it may say is that this project's tests run inside a
+   container, and then it prints the exact line to add to `.unitbob.json` — add
+   that line and run this again, using the container it named.
 2. Use the printed `prompt` as your brief. The whole suite is already on disk —
    structural under `.unitbob/structural/`, behavioral under
    `.unitbob/behavioral/` (the `.feature` plus its step definitions). Read it to
