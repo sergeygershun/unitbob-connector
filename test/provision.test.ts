@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,11 +35,15 @@ test('ensureRunner for Ruby generates sidecar Gemfile and does not touch root Ge
   assert.ok(existsSync(sidecarGemfile));
   const sidecarContent = readFileSync(sidecarGemfile, 'utf8');
   assert.match(sidecarContent, /eval_gemfile/);
-  assert.match(sidecarContent, /gem "cucumber"/);
+  // Both gems are asked for conditionally. `eval_gemfile` runs the project's own
+  // Gemfile in this same Dsl object, so an unconditional second `gem` line for
+  // something the project already names is a duplicate declaration — and bundler
+  // refuses to parse one whose requirement differs from the first.
+  assert.match(sidecarContent, /gem "cucumber", "~> 9\.0", require: false unless dependencies\.any\?/);
   // Spec 35-1, criterion 2: the World file blocks outgoing HTTP, and it can only
   // do that if webmock resolves. Promising it in the World and hoping the project
   // happens to carry the gem is the same silence this spec removes.
-  assert.match(sidecarContent, /gem "webmock"/);
+  assert.match(sidecarContent, /gem "webmock", require: false unless dependencies\.any\?/);
 
   // Verify root Gemfile remains untouched byte-for-byte
   const rootGemfileAfter = readFileSync(join(projectRoot, 'Gemfile'), 'utf8');
@@ -92,6 +97,74 @@ test('ensureRunner for Ruby provisions a project that has no lock at all', async
   const result = await ensureRunner(projectRoot, 'cucumber', mockDeps);
   assert.equal(result.status, 'provisioned');
   assert.equal(existsSync(join(projectRoot, '.unitbob', 'behavioral', 'Gemfile.lock')), false);
+});
+
+// The bug this file could not have caught before: every Ruby test here mocks
+// bundler, so nothing ever asked bundler whether the Gemfile we generate is one
+// it will accept. A2.Time (Rails 5.0 / Ruby 2.7.8) answered that for us on
+// 2026-08-20 — it pins `webmock "~> 3.23"`, our sidecar asked for `webmock
+// (>= 0)`, and bundler stopped at the parse:
+//
+//   You cannot specify the same gem twice with different version requirements.
+//   You specified: webmock (~> 3.23) and webmock (>= 0). Bundler cannot continue.
+//
+// Its behavioral branch could not be generated at all, and `suite-prepare` wrote
+// the same conflicting file again on every retry. So this one test spends a real
+// bundler, and skips itself where there is none rather than pretending to pass.
+test('the sidecar Gemfile parses under a real bundler when the project pins the same gems', async (t) => {
+  if (spawnSync('ruby', ['-rbundler', '-e', 'exit 0']).status !== 0) {
+    t.skip('no ruby with bundler on this machine');
+    return;
+  }
+
+  const projectRoot = tmpProject();
+  writeFileSync(
+    join(projectRoot, 'Gemfile'),
+    'source "https://rubygems.org"\n' +
+      'gem "rails", "5.2.0"\n' +
+      'group :test do\n' +
+      '  gem "webmock", "~> 3.23"\n' +
+      '  gem "cucumber", "~> 8.0"\n' +
+      'end\n',
+  );
+
+  await ensureRunner(projectRoot, 'cucumber', {
+    runCmd: async () => ({ code: 0, stdout: '', stderr: '' }),
+  });
+
+  // The Dsl rather than `bundle install` or `bundle check`: parsing is the step
+  // that used to fail, and it is the only one that needs neither the network nor
+  // a single installed gem. A green here is a real green — a Gemfile that is
+  // missing, unreadable or malformed exits non-zero exactly as the duplicate did.
+  const bundler = spawnSync('ruby', ['-rbundler', '-e', 'Bundler::Dsl.evaluate(ENV["BUNDLE_GEMFILE"], nil, {})'], {
+    cwd: projectRoot,
+    env: { ...process.env, BUNDLE_GEMFILE: '.unitbob/behavioral/Gemfile' },
+    encoding: 'utf8',
+  });
+
+  assert.equal(bundler.status, 0, `bundler could not parse the sidecar Gemfile:\n${bundler.stderr}`);
+  assert.doesNotMatch(bundler.stderr ?? '', /same gem twice/, 'the duplicate declaration is what this test exists for');
+});
+
+// The other half of the same failure. The message is what a vibecoder acts on,
+// and until 2026-08-20 it was a constant: the `GemfileError` above was captured
+// into `result` and then dropped, so the run reported "Bundler failed to
+// provision Cucumber sidecar gem" and nothing else. The cause had to be
+// reconstructed afterwards by asking the user to run bundler by hand — for an
+// error the connector had already been told.
+test('a failed Ruby provision reports what bundler actually said', async () => {
+  const projectRoot = tmpProject();
+  const gemfileError =
+    '[!] There was an error parsing `Gemfile`: You cannot specify the same gem twice ' +
+    'with different version requirements.\nYou specified: webmock (~> 3.23) and webmock (>= 0).';
+
+  const result = await ensureRunner(projectRoot, 'cucumber', {
+    runCmd: async () => ({ code: 1, stdout: '', stderr: gemfileError }),
+  });
+
+  assert.equal(result.status, 'fixable');
+  assert.match(result.message ?? '', /same gem twice/);
+  assert.match(result.message ?? '', /webmock \(~> 3\.23\)/);
 });
 
 test('ensureRunner for JS generates sidecar package.json and leaves root package.json untouched', async () => {
@@ -281,11 +354,31 @@ test('ensureStructuralRunner for Ruby adds rspec-rails beside the project Gemfil
 
   const sidecar = readFileSync(join(projectRoot, '.unitbob', 'runners', 'Gemfile'), 'utf8');
   assert.match(sidecar, /eval_gemfile/);
-  assert.match(sidecar, /gem "rspec-rails"/);
+  // Unconditional, unlike its Cucumber peer, and that difference is the point:
+  // bundler replaces a `:development` dependency (how a gemspec carries
+  // rspec-rails) with ours instead of refusing it, so this line is what puts the
+  // structural runner in `:default`, where no `BUNDLE_WITHOUT` can reach it.
+  assert.match(sidecar, /gem "rspec-rails", require: false\n/);
+  assert.doesNotMatch(sidecar, /unless dependencies/, 'the rspec sidecar must not inherit the project groups');
   // Bundler resolves the two together, so the application's own gems come with
   // it — the same arrangement the Cucumber sidecar has used since spec 32-1.
   assert.match(deps.calls[0], /^bundle install$/);
   assert.equal(readFileSync(join(projectRoot, 'Gemfile'), 'utf8'), before);
+});
+
+// The structural half of the "say what bundler said" change. Same reasoning as
+// its behavioral peer: this message is the only place the reason can appear.
+test('a failed Ruby structural provision reports what bundler actually said', async () => {
+  const projectRoot = tmpProject();
+  const deps = {
+    ...recorder(),
+    runCmd: async () => ({ code: 1, stdout: '', stderr: 'Could not find gem \'rails (= 5.2.0)\' in rubygems repository.' }),
+  };
+
+  const result = await ensureStructuralRunner(projectRoot, 'rspec', deps);
+
+  assert.equal(result.status, 'fixable');
+  assert.match(result.message ?? '', /Could not find gem/);
 });
 
 test('ensureStructuralRunner for JS installs vitest and says what it cannot install', async () => {

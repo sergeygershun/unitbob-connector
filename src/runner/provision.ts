@@ -374,6 +374,95 @@ async function provisionVitest(projectRoot: string, deps: ProvisionDeps): Promis
 // invocation carries this.
 const UNFROZEN_SIDECAR = { BUNDLE_FROZEN: 'false', BUNDLE_DEPLOYMENT: 'false' };
 
+// One gem line for the sidecar, asked for only if the project has not asked for
+// it already.
+//
+// `eval_gemfile` runs the project's own Gemfile inside *this* Dsl object — that
+// is the whole point of it, and it is also the trap. Every `gem` line we add
+// afterwards lands in the same dependency list the project just filled, so a gem
+// the project already names is declared twice, and bundler's rules for that are
+// strict: identical requirements warn, differing ones raise `GemfileError` while
+// the Gemfile is still being parsed.
+//
+// Measured on bundler 2.4.22 and 4.0.1 after A2.Time (Rails 5.0, Ruby 2.7.8)
+// could not generate a behavioral suite at all, 2026-08-20. It pins
+// `webmock "~> 3.23"`; we asked for `webmock (>= 0)`:
+//
+//   You cannot specify the same gem twice with different version requirements.
+//   You specified: webmock (~> 3.23) and webmock (>= 0). Bundler cannot continue.
+//
+// Parsing fails before resolution begins, so there is no lock and no versions to
+// negotiate — and `suite-prepare` rewrote the same conflicting file on every
+// retry, which left the vibecoder with nothing to patch either. The comment that
+// used to sit on the webmock line had this exactly backwards: it promised the
+// project's own version would win "because bundler starts from the project's own
+// resolution". True of resolution. Parsing never reached it.
+//
+// `dependencies` is Bundler::Dsl's own reader and the Gemfile is instance_eval'd
+// on the Dsl, so the list is in scope and already holds everything the project
+// declared. Checked in the dsl.rb of 2.1.4, 2.2.33, 2.3.27, 2.4.22 and 4.0.1 —
+// 2.1.4 because it is what Ruby 2.7.8 ships, and Ruby 2.7.8 is what the
+// application that found this bug runs.
+//
+// What we would have added is dropped rather than merged, version and all: a
+// project pinning `cucumber "~> 8.0"` gets a sidecar on cucumber 8 instead of a
+// hard failure. The suite then runs on the version that project already trusts,
+// which is the bargain the rest of this sidecar strikes anyway — it inherits the
+// project's Gemfile precisely so the two cannot drift apart.
+//
+// One thing this does give up, measured on 2.1.4 and 4.0.1 rather than assumed.
+// Where the requirements happened to match, bundler used to keep *both*
+// declarations — the project's and ours — so a gem the project had confined to
+// `group :test` also arrived ungrouped through us, and no `BUNDLE_WITHOUT` could
+// drop it. Skipping our line leaves only the project's, groups and all. That is
+// the honest arrangement, and it is not silent: the World probe of spec 35-1
+// asserts against a live `WebMock::NetConnectNotAllowedError`, so a webmock that
+// did not come along stops `suite-prepare` with a fixable probe failure instead
+// of letting a suite run with the block it advertises quietly missing.
+function gemLineUnlessTheProjectHasIt(name: string, requirement?: string): string {
+  const pin = requirement ? `, "${requirement}"` : '';
+  return `gem "${name}"${pin}, require: false unless dependencies.any? { |d| d.name == "${name}" }\n`;
+}
+
+const BUNDLER_OUTPUT_LINES = 20;
+const BUNDLER_OUTPUT_CHARS = 2000;
+
+// What bundler said, kept instead of thrown away. Reads as the sentence after
+// "Bundler failed to ...", whichever of its three shapes it takes.
+//
+// Both Ruby sidecars used to capture `result` and then return a fixed line, so a
+// provisioning failure reached the vibecoder as "Bundler failed to provision ..."
+// and nothing else. On A2.Time that hid the `GemfileError` above completely: the
+// run reported a blocked behavioral branch, the reason was already in this
+// process's memory, and it still took a round trip through the user — run bundler
+// by hand, paste the output — to find out what it was. An error we have been told
+// is not one to make somebody fetch again.
+//
+// The tail, because bundler puts the reason last on failures long enough to
+// scroll (a resolution conflict prints its whole search first), and a Gemfile
+// that will not parse is short enough that the tail is all of it. Not
+// `installerComplaint`, which is next door and does the opposite on purpose: it
+// picks the single line pip labelled an error out of hundreds of lines of
+// compiler noise. Bundler's verdict carries no such label — the one that matters
+// here opens with `[!]` and runs over three lines — so filtering by line would
+// drop exactly the sentence worth keeping.
+function whatBundlerSaid(result: ProcResult): string {
+  const text = [result.stdout, result.stderr].map((part) => part.trim()).filter(Boolean).join('\n');
+  // A null code is a process this connector killed, not one that decided
+  // anything. No number is named with it: the two callers run under different
+  // budgets — `provisionRspec` asks for `DEPENDENCY_INSTALL_TIMEOUT_MS`,
+  // `provisionRuby` takes the `PROVISION_TIMEOUT_MS` default — and a message
+  // that states the wrong one is worse than a message that states none.
+  if (!text) {
+    return result.code === null
+      ? 'It said nothing: it was stopped before it could, having run past its timeout or lost the place it was running in.'
+      : `It said nothing, and exited ${result.code}.`;
+  }
+  const lines = text.split('\n');
+  const tail = lines.slice(-BUNDLER_OUTPUT_LINES).join('\n').slice(-BUNDLER_OUTPUT_CHARS);
+  return `It said:\n${tail.length < text.length ? `...\n${tail}` : tail}`;
+}
+
 // A sidecar Gemfile that inherits the project's own, plus rspec-rails. Bundler
 // resolves the two together, so the application's gems come with it — the same
 // arrangement the Cucumber sidecar has used since spec 32-1, and the reason the
@@ -384,6 +473,20 @@ async function provisionRspec(projectRoot: string, deps: ProvisionDeps): Promise
     sidecarGemfile,
     '# Sidecar Gemfile written by the unitbob connector — do not edit.\n' +
       'eval_gemfile File.expand_path("../../../Gemfile", __FILE__)\n' +
+      // Deliberately *not* guarded the way the Cucumber sidecar below is.
+      // `ensureStructuralRunner` only reaches here when the project does not
+      // supply rspec itself, so the duplicate that stopped A2.Time has almost no
+      // way in — and the guard would cost something real where it does. Measured
+      // 2026-08-20 on a gem project that carries rspec-rails as a gemspec
+      // development dependency: bundler replaces a `:development` dependency with
+      // ours rather than refusing it, so today the runner lands in `:default` and
+      // is always installed. Guarded, we would skip our line and leave it in
+      // `:development`, where a `BUNDLE_WITHOUT=development` would take the
+      // structural runner away from a project that had it working.
+      //
+      // That leaves one narrow hole: rspec-rails reached through an eval'd
+      // sub-Gemfile does raise the duplicate error here. It is now a legible one
+      // — see the message below, which no longer swallows what bundler said.
       'gem "rspec-rails", require: false\n',
   );
 
@@ -405,7 +508,7 @@ async function provisionRspec(projectRoot: string, deps: ProvisionDeps): Promise
 
   return {
     status: 'fixable',
-    message: `Bundler failed to provision rspec-rails under ${SIDECAR_DIR}.`,
+    message: `Bundler failed to provision rspec-rails under ${SIDECAR_DIR}. ${whatBundlerSaid(result)}`,
     checklist: [
       'Ensure bundler is installed (`gem install bundler`), then run ' +
         `\`BUNDLE_GEMFILE=${SIDECAR_DIR}/Gemfile bundle install\` from the project root.`,
@@ -448,13 +551,14 @@ async function provisionRuby(
   const sidecarContent =
     '# Sidecar Gemfile generated by Unitbob (Spec 32-1)\n' +
     'eval_gemfile File.expand_path("../../../Gemfile", __FILE__)\n' +
-    'gem "cucumber", "~> 9.0", require: false\n' +
+    gemLineUnlessTheProjectHasIt('cucumber', '~> 9.0') +
     // The connector-owned World blocks outgoing HTTP (spec 35-1), and it can only
-    // do that if webmock resolves here. A project that already carries the gem
-    // keeps its own version, because bundler starts from the project's own
-    // resolution. A project that does not would otherwise get a World promising a
-    // block it silently never performs — the exact shape of failure 35-1 closes.
-    'gem "webmock", require: false\n';
+    // do that if webmock resolves here. A project that does not carry the gem
+    // would otherwise get a World promising a block it silently never performs —
+    // the exact shape of failure 35-1 closes. A project that does carry it keeps
+    // its own version, and now actually gets to: see the comment on the helper
+    // for what asking twice cost A2.Time.
+    gemLineUnlessTheProjectHasIt('webmock');
 
   if (!existsSync(sidecarGemfile) || readFileSync(sidecarGemfile, 'utf8') !== sidecarContent) {
     writeFileSync(sidecarGemfile, sidecarContent);
@@ -501,7 +605,7 @@ async function provisionRuby(
 
   return {
     status: 'fixable',
-    message: 'Bundler failed to provision Cucumber sidecar gem.',
+    message: `Bundler failed to provision Cucumber sidecar gem. ${whatBundlerSaid(result)}`,
     checklist: ['Ensure bundler is installed (`gem install bundler`) and run `bundle install` manually inside `.unitbob/behavioral/`.'],
   };
 }
