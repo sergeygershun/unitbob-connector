@@ -2,11 +2,13 @@ import type { Config } from '../config.ts';
 import { clearRunState } from '../runner/failureDigest.ts';
 import { materializeHelper } from '../files/guardrails.ts';
 import { materializeBehavioralWorld } from '../files/behavioral.ts';
+import { PACKETS_DIR, writeSuitePackets, type SuitePacketsSummary } from '../files/packets.ts';
 import {
   recipeNameFor,
   writeSuiteBuildRequest,
   type KnownDefectContext,
   type SuiteBuildBranch,
+  type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
 import { bddStepLoading, type BddStepLoading } from '../runner/bdd.ts';
 import { bootCheck, SIGNAL_STRENGTH, type BootCheck } from '../runner/bootcheck.ts';
@@ -281,6 +283,16 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
 
   const request = writeSuiteBuildRequest(config.projectRoot, branches, defectContext);
 
+  // Spec 37-1. The assignment names entrypoints; the packets are the files
+  // behind them, resolved from this machine's own graph and copied where a
+  // worker can open them. Built here because the entrypoints are known from the
+  // request and the workers are not yet — a packet belongs to an entrypoint,
+  // not to whoever ends up guarding it.
+  //
+  // Not written into `request.json`: the coordinator reads that file whole and
+  // pays for it on every turn of the longest-lived context in the run.
+  const sourcePackets = buildPackets(config.projectRoot, request);
+
   // A new request is a new build, and a new build has no previous run to be
   // stuck against (spec 34-6, criterion 3). Re-running this verb is a documented
   // step of the loop, so a failure set remembered from the build before it would
@@ -293,6 +305,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     : '`unitbob put-suite-build`';
 
   actual.stdout.write(`Suite build request written to ${request.project_root}/.unitbob/suite-build/request.json\n`);
+  actual.stdout.write(packetNotice(request.project_root, sourcePackets));
   actual.stdout.write(
     `Next: build ${branches.length === 1 ? 'the' : 'both'} peer ${branches.length === 1 ? 'suite' : 'suites'} (${kinds}) following each branch's \`recipe\` and \`assignment\`, ` +
       `write your answer to ${request.output_path} as a branches array — one entry per branch named above, and a branch you cannot ` +
@@ -354,6 +367,49 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
         '\n',
     );
   }
+}
+
+// A checkout we cannot write packets into is a run without packets, not a
+// failed build: the workers search the source themselves, exactly as they did
+// before this spec. The same rule the route inventory follows for the same
+// reason — a read-only checkout or a full disk must not take a build down.
+function buildPackets(projectRoot: string, request: SuiteBuildRequest): SuitePacketsSummary | string {
+  try {
+    return writeSuitePackets(projectRoot, request);
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+function packetNotice(projectRoot: string, packets: SuitePacketsSummary | string): string {
+  if (typeof packets === 'string') {
+    return (
+      `\nNo packets were written this run (${packets}). Workers find their own source, as before.\n`
+    );
+  }
+  if (packets.targets === 0) return '';
+
+  const where = `${projectRoot}/${PACKETS_DIR}`;
+  const head =
+    packets.files === 0
+      ? `\nNo packet was written this run, so ${where} holds only its index.\n`
+      : `\n${packets.files} ${packets.files === 1 ? 'packet' : 'packets'} (${packets.bytes.toLocaleString('en-US')} bytes) ` +
+        `written to ${where}: the source behind ${packets.resolved} of ${packets.targets} entrypoints, resolved from this ` +
+        `machine's own graph and route inventory without asking a model. Hand each worker the paths of its packets, ` +
+        'never their contents — `unitbob validate-worker-plan` prints them per worker.\n';
+
+  // Two different outcomes, never merged: a file that was found and not carried
+  // still saves the worker the search, and a name nothing answered to does not.
+  const carried = packets.located - packets.resolved;
+  const unknown = packets.targets - packets.located;
+  if (carried === 0 && unknown === 0) return head;
+  return (
+    head +
+    `${carried + unknown} of ${packets.targets} entrypoints have no packet` +
+    (carried > 0 ? `; ${carried} name a file that was found but not carried` : '') +
+    ` (${packets.notes.join('; ')}). ` +
+    `Each says why in ${where}/index.json.\n`
+  );
 }
 
 // The runner's own rule for which step files it will load, in the words of the

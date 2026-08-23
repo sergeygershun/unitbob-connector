@@ -928,3 +928,72 @@ test('an unusable execution place stops suite-prepare before anything is written
   assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build')), false);
   assert.equal(existsSync(join(projectRoot, '.unitbob', 'structural')), false);
 });
+
+// Spec 37-1. The packets are built right after the request, from the same
+// assignment, before any worker exists. `suite_packets.test.ts` owns the
+// resolving itself; these two own the wiring and what the coordinator is told.
+test('suite-prepare resolves the assignment entrypoints and writes their packets', async () => {
+  const projectRoot = railsProject();
+  writeFileSync(join(projectRoot, 'app_models.rb'), "class User\n  def get_token; end\nend\n");
+  mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
+  writeFileSync(
+    join(projectRoot, 'graphify-out', 'graph.json'),
+    JSON.stringify({ nodes: [
+      { id: 'n0', label: 'User', source_file: 'app_models.rb' },
+      { id: 'n1', label: 'get_token()', source_file: 'app_models.rb' },
+    ], links: [] }),
+  );
+  const written: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => [{
+      suite_kind: 'structural',
+      source_digest: 'map-d',
+      path_root: '.unitbob/structural/',
+      assignment: { blocks: [{ block_id: 'billing', interfaces: [
+        { interface_id: 'i1', entrypoints: ['User#get_token'] },
+      ] }] },
+    }],
+    stdout: { write: (chunk) => { written.push(chunk); return true; } },
+  });
+
+  const packetPath = join(projectRoot, '.unitbob', 'suite-build', 'packets', 'app_models.rb');
+  assert.equal(readFileSync(packetPath, 'utf8'), readFileSync(join(projectRoot, 'app_models.rb'), 'utf8'));
+  const text = written.join('');
+  assert.match(text, /1 packet \(\d+ bytes\) written to/);
+  assert.match(text, /Hand each worker the paths of its packets, never their contents/);
+  // The source stays where it was: spec 22 is not touched by a local copy.
+  assert.doesNotMatch(text, /uploaded/);
+});
+
+test('a run whose entrypoints resolve to nothing says so and still prepares the build', async () => {
+  const projectRoot = railsProject();
+  const written: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => [{
+      suite_kind: 'structural',
+      source_digest: 'map-d',
+      path_root: '.unitbob/structural/',
+      assignment: { blocks: [{ block_id: 'billing', interfaces: [
+        { interface_id: 'i1', entrypoints: ['Nowhere#at_all'] },
+      ] }] },
+    }],
+    stdout: { write: (chunk) => { written.push(chunk); return true; } },
+  });
+
+  const text = written.join('');
+  assert.match(text, /No packet was written this run/);
+  assert.match(text, /1 of 1 entrypoints have no packet/);
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'request.json')), true);
+});

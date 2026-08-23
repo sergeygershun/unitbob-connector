@@ -64,7 +64,15 @@ workers got it as verified. One of them looked, disagreed, and kept its scenario
 honest, which is the only reason that access hole came back red instead of green.
 Nothing mechanical enforces any of this; it holds because you keep it.
 
-Read only the `source_paths` and dependencies your finite planned cases need.
+Your source packets are the starting point: do not go looking for what is
+already in one. A source packet is the whole file behind one of your entrypoints,
+found for you and put on disk, so opening it is a read and not a search. Your
+task names the paths — sometimes a path to open in place, when the file was too
+large to carry. If it names none, or the code you need is not in the ones it
+names, then search as you would have anyway.
+
+Read only the source packets, the `source_paths` and the dependencies your
+finite planned cases need.
 Ask closed questions with the files to look in. For a closed missing fact, use
 the named `unitbob:fact-finder` agent, as often as the work genuinely needs. A lookup
 may confirm implementation facts but may not expand the plan.

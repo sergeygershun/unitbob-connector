@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { executable, type ProcResult } from '../proc.ts';
 import { firstErrorLine } from '../runner/bootcheck.ts';
 import { projectRootAsSeenByThePlace, runInProject } from '../runner/place.ts';
 import { detectStructuralRunner } from '../runner/precheck.ts';
-import { graphPath } from '../files/mapBuild.ts';
+import { type GraphNode, graphNodes, methodNameOf, pathsMatch } from './graph.ts';
 
 // Spec 32-7. An address is a fact the application declares about itself. The
 // router holds every one of them, in machine-readable form, and hands them over
@@ -380,27 +380,6 @@ function rowsFrom(record: Record<string, unknown>): RouteRow[] {
   }));
 }
 
-interface GraphNode {
-  id: string;
-  label?: string;
-  source_file?: string;
-}
-
-function graphNodes(projectRoot: string): GraphNode[] {
-  const path = graphPath(projectRoot);
-  if (!existsSync(path)) return [];
-
-  try {
-    const graph = JSON.parse(readFileSync(path, 'utf8')) as { nodes?: unknown };
-    if (!Array.isArray(graph.nodes)) return [];
-    return graph.nodes.filter(
-      (node): node is GraphNode => !!node && typeof (node as GraphNode).id === 'string',
-    );
-  } catch {
-    return []; // an unreadable graph costs us the links, not the addresses
-  }
-}
-
 function toSurface(projectRoot: string, row: RouteRow, nodes: GraphNode[]): RouteSurface {
   const surface: RouteSurface = { kind: 'route', id: `${row.verb} ${row.path}` };
   if (!row.controller || !row.action) return surface;
@@ -474,24 +453,6 @@ function findNode(nodes: GraphNode[], file: string, action: string): GraphNode |
   // cannot tell which file the router meant, so we say nothing — the address
   // still ships, without a link.
   return candidates.length === 1 ? candidates[0] : undefined;
-}
-
-function pathsMatch(candidate: string, file: string): 'exact' | 'suffix' | 'no' {
-  const normalised = candidate.replace(/\\/g, '/').replace(/^\.\//, '');
-  const wanted = file.replace(/\\/g, '/');
-  if (normalised === wanted) return 'exact';
-  return normalised.endsWith(`/${wanted}`) ? 'suffix' : 'no';
-}
-
-// Real graphify labels a Ruby method `.send_to_fsa()` and a JS one
-// `initButtons()`; a qualified `CheckoutController#create` also turns up. All of
-// them are read the same way — drop the call parentheses, then take the last
-// name — so the match survives the decoration without depending on which form
-// this release of graphify happens to use. The id itself is never rebuilt from
-// any of this; it is copied.
-function methodNameOf(label: string): string {
-  const parts = label.replace(/\(.*\)\s*$/, '').split(/::|[#./]/).filter(Boolean);
-  return parts[parts.length - 1] ?? '';
 }
 
 // What `surfaces.json` must contain for every address the router declared, and

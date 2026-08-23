@@ -181,6 +181,16 @@ after its bounded phase.
    assignment; that is what step 3 decided. Do not replace this gate with a
    receipt, hook, or home-grown orchestrator.
 
+   It also prints each worker's source packets and what they weigh. A source
+   packet is the file behind one entrypoint, resolved from this machine's own
+   `graphify-out/graph.json` and `.unitbob/map-build/surfaces.json` and copied by
+   `suite-prepare` into `.unitbob/suite-build/packets/`. It has nothing to do
+   with the failure and repair packets of steps 11-13. Keep that output: step 7
+   hands each worker its own paths out of it. The sizes are there to be read, not
+   obeyed — nothing is refused for being large. An entrypoint whose file was
+   found but was too large to carry is printed as a path to open in place; one
+   that resolved to nothing says so, and that worker searches as before.
+
 6. Seed every planned slice's checkpoint before fan-out. Write
    `.unitbob/suite-build/checkpoints/<branch>-<worker-id>.json` yourself, with
    every key the gate in step 8 checks — all of them, the two empty arrays
@@ -234,7 +244,9 @@ after its bounded phase.
 
 7. Use the same named role on both Claude Code and Codex: `unitbob:suite-worker`
    on Claude Code and `suite-worker` on Codex. For every plan item launch that
-   role with only the plan item and referenced request paths. The host-specific
+   role with only the plan item, the source packet paths step 5 printed for that
+   worker, and referenced request paths. Paths, never contents: a packet pasted
+   into a task is paid for again on every turn of your own context. The host-specific
    definition owns the cheaper model and the emergency turn fuse; never launch a
    generic subagent and never continue an exhausted context. Start a branch's
    workers together, in one go.
@@ -264,7 +276,10 @@ after its bounded phase.
    `.unitbob/suite-build/checkpoints/<branch>-<worker-id>.json`. They start by
    writing what the seeded facts already support and go looking only for what
    they still lack, and they update the checkpoint after every completed
-   promise. Ask closed questions with the files to look in. They may ask the
+   promise. Their source packets are the starting point of that looking, not an
+   extra place to check: whatever is in a packet has already been found. A worker
+   whose line in step 5 said "no packets" searches the way workers did before it.
+   Ask closed questions with the files to look in. They may ask the
    named fact-finder role (`unitbob:fact-finder` on Claude Code, `fact-finder`
    on Codex) as many closed lookups as the work needs; a generic lookup agent
    has no ceiling on model, turn count, or answer length. Workers never run the
