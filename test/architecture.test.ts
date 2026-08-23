@@ -36,7 +36,7 @@ const FORBIDDEN = [
 // why no table of languages or result formats appears in either file.
 const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   // `wire.ts` types the response shape it relays, `unguarded_by_review` and all
-  // (spec 43, §7). Typing a field is transport; the connector never computes one.
+  // (spec one-place-per-rule, §7). Typing a field is transport; the connector never computes one.
   'wire.ts': [/manifest/i, /\bunguarded\b/i],
   [join('files', 'guardrails.ts')]: [/manifest/i],
   [join('files', 'suiteBuild.ts')]: [/manifest/i],
@@ -58,7 +58,7 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   // guard matches text, and cannot tell the field from a variable named after it.
   // So the narrowness is in what stays forbidden: `covered`, `unguarded` and
   // `retired` still fail here, and the day this file starts deciding *which*
-  // capabilities are covered — the server's job, and the rule spec 43 tore out of
+  // capabilities are covered — the server's job, and the rule spec one-place-per-rule tore out of
   // `validateBuild.ts` — the guard fires again.
   [join('verbs', 'validateWorkerCheckpoints.ts')]: [/\bcoverage\b/i],
 

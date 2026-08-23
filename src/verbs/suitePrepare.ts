@@ -413,7 +413,7 @@ function packetNotice(projectRoot: string, packets: SuitePacketsSummary | string
 }
 
 // The runner's own rule for which step files it will load, in the words of the
-// side that loads them (spec 44, §3.2). The same object is in `request.json`, on
+// side that loads them (spec ask-before-you-spend, §3.2). The same object is in `request.json`, on
 // the behavioral branch; this is the copy the coordinator sees without opening a
 // file.
 //

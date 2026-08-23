@@ -195,7 +195,7 @@ test('suite-repair-worker validates its owned slice within a 150-turn fuse', () 
   assert.match(body, /final read.*confirm every `facts` entry.*object/i);
 });
 
-// Spec 35-1, criterion 4, under spec 43's one-place-per-rule. The full scope of
+// Spec 35-1, criterion 4, under spec one-place-per-rule. The full scope of
 // verdicts — including the capabilities the finite plan left outside the chosen
 // scope — is stated in the brain prompt that owns this review. A copy here would
 // be a second home for a rule with one owner, which is how the local marker

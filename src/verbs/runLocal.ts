@@ -263,7 +263,7 @@ function outputTail(result: RunnerResult): string {
 
 // The suite blob's own project-relative paths, exactly as the runners expect
 // them: the main file first, then every other file of the branch. The main file
-// stopped being the whole suite in spec 43, §6 — a branch is one file per
+// stopped being the whole suite in spec one-place-per-rule, §6 — a branch is one file per
 // assignment now — and running it alone would exercise a fraction of what the
 // answer claims to guard.
 //

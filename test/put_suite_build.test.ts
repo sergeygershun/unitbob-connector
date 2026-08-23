@@ -475,7 +475,7 @@ test('put-suite-build asks the server for nothing when every branch is blocked',
   assert.deepEqual(classifyPublication(results), { digests: [], unpublished: ['behavioral', 'structural'] });
 });
 
-// Spec 32-6 Phase 3, narrowed by spec 43: the local checks are now only the ones
+// Spec 32-6 Phase 3, narrowed by spec one-place-per-rule: the local checks are now only the ones
 // the server cannot make, so a branch fails locally when its files or its review
 // will not come together. The rule under test is the same one, and it is why
 // these exist — one branch's local failure never sinks the peer beside it.

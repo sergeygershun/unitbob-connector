@@ -432,7 +432,7 @@ after its bounded phase.
     briefly names the violated business contract, reason, and production source
     references. There is no strict JSON handoff. Ambiguous owned failures, an
     unusable runner, unfinished promises, and `Stop` after a ceiling are
-    `build_error`, never product red; this supersedes spec 41's ambiguous-red
+    `build_error`, never product red; this supersedes spec 42's ambiguous-red
     fallback. Shared harness that is still broken when you have run out of
     corrections to make is also `build_error` and has no repair feedback loop in
     this MVP.

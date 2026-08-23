@@ -23,7 +23,7 @@ export interface SuiteBuildBranch {
   // the host then composes it from the recipe, as it always used to.
   runner_manifest?: RunnerEnvelope;
   // Which files this branch's runner will load, and what a step file has to be
-  // for it to execute (spec 44, §3.2). It rides on the branch because that is
+  // for it to execute (spec ask-before-you-spend, §3.2). It rides on the branch because that is
   // where the host already reads its assignment — the alternative was the recipe
   // retelling it, which is what put a name pytest does not collect into the
   // recipe for several releases. Behavioral only, and absent when the runner is
@@ -193,7 +193,7 @@ export function branchRunner(output: HostBranchOutput): string {
 }
 
 // What the reviewer actually read: the suite files, and the manifest that runs
-// them. Nothing else (spec 43, §4).
+// them. Nothing else (spec one-place-per-rule, §4).
 //
 // `test_metadata` used to be in here, and the server's copy of this formula
 // stripped the review's own keys back out to match — two lists that had to stay

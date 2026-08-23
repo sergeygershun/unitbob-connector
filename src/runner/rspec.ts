@@ -22,7 +22,7 @@ export const RSPEC_RESULT_FILE = join(GUARDRAILS_DIR, 'rspec_result.json');
 // corrupt it.
 //
 // `suitePaths` is every file of the branch in the suite blob's own
-// project-relative form (spec 43, §6.5). Named one by one rather than as a
+// project-relative form (spec one-place-per-rule, §6.5). Named one by one rather than as a
 // directory: the artifact already says exactly which files it is, while a
 // directory would also collect whatever else happens to be sitting under the
 // root.

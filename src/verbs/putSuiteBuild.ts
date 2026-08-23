@@ -63,7 +63,7 @@ export async function putSuiteBuild(
   // skipped by going straight to the upload — but reported the way every other
   // local failure here is reported: against the branch it belongs to.
   //
-  // Since spec 43 that check is exactly one question, and it is about a branch
+  // Since spec one-place-per-rule that check is exactly one question, and it is about a branch
   // the answer has *no* entry for: everything else it used to ask is now asked
   // of the server, by a dry run, before this command runs at all. So its
   // problems can never land on a branch this loop visits, and they are reported

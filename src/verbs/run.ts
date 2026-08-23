@@ -57,7 +57,7 @@ function resolve(config: Config, deps?: Partial<Deps>): Deps {
     getSuites: () => wire.getSuites(),
     postRunsBatch: (runs) => wire.postRunsBatch(runs),
     // The whole envelope, support files and all: a branch is a set of files
-    // since spec 43, §6, and picking `path` and `content` out of it here was
+    // since spec one-place-per-rule, §6, and picking `path` and `content` out of it here was
     // where the rest of them used to be lost.
     materializeStructural: (projectRoot, item) =>
       materializeGuardrails(projectRoot, {
@@ -188,7 +188,7 @@ export function runStructuralByRunner(
 }
 
 // Every file of the branch, in the order the envelope carries them. A structural
-// branch is one file per assignment since spec 43, §6, and running only the main
+// branch is one file per assignment since spec one-place-per-rule, §6, and running only the main
 // one would execute a fraction of what the map says is guarded.
 function artifactPaths(file: SuiteArtifact): string[] {
   return [file.path, ...(file.support_files ?? []).map((entry) => entry.path)];

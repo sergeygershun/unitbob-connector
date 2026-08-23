@@ -10,7 +10,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 export interface SuiteFile {
   path: string;
   content: string;
-  // The rest of the branch's files. Since spec 43, §6 a structural branch is
+  // The rest of the branch's files. Since spec one-place-per-rule, §6 a structural branch is
   // one file per assignment rather than one file for the whole branch, and all
   // of them are the suite. Dropping them here meant a published multi-file suite
   // could not be reproduced on the machine it came from.
@@ -99,7 +99,7 @@ abort 'unitbob_helper: refusing to run against a non-test environment' unless Ra
 // runs need no connector-written support files here (the runtime pytest.ini
 // lives outside this directory and is written by the pytest runner).
 //
-// Every file, not just the main one (spec 43, §6.4). The directory is wiped
+// Every file, not just the main one (spec one-place-per-rule, §6.4). The directory is wiped
 // first and only the main file was written back, so a published suite of four
 // files came back as one and the run that followed it silently protected a
 // quarter of what the map claimed.
