@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { branchWidth, branchWorkloads } from '../src/files/fanOut.ts';
+import { branchWidth, branchWorkloads, turnsAt } from '../src/files/fanOut.ts';
 import { readWorkerPlan, takenIds, validateWorkerPlanFiles, workerPlanPath } from '../src/files/workerPlan.ts';
 import { MAX_PACKET_BYTES, PACKETS_DIR, packetIndexPath, type PacketTarget } from '../src/files/packets.ts';
 
@@ -94,23 +94,27 @@ const onlyError = (root: string): string => {
 
 // What the rule says about the run it was measured on.
 
-test('the cheapest width for the measured behavioral branch is four, not eight', () => {
+test('the cheapest width for the measured behavioral branch is four', () => {
   const width = branchWidth('behavioral', 35)!;
 
   assert.equal(width.workers, 4);
-  assert.deepEqual([width.fewest, width.most], [2, 6]);
-  // Eight ran. The band excludes it, and one worker too — 216 turns into a
-  // 150-turn fuse is the other way this goes wrong.
-  assert.ok(8 > width.most);
-  assert.ok(1 < width.fewest);
+  // The cheapest width is also the narrowest allowed. Nothing above it is
+  // refused: wall clock only improves with width, and a run is waited on.
+  assert.equal(width.fewest, 4);
 });
 
-test('the cheapest width for the measured structural branch is two, not seven', () => {
+test('the cheapest width for the measured structural branch is two', () => {
   const width = branchWidth('structural', 91)!;
 
   assert.equal(width.workers, 2);
-  assert.deepEqual([width.fewest, width.most], [1, 3]);
-  assert.ok(7 > width.most);
+  assert.equal(width.fewest, 2);
+});
+
+test('a worker gets shorter as the fan gets wider, which is why wide is never refused', () => {
+  // On the bench, six workers of 53 turns took 13 minutes where fifteen of 38
+  // took 8 — a longer conversation is both more turns and slower turns.
+  assert.ok(turnsAt('behavioral', 35, 8) < turnsAt('behavioral', 35, 4));
+  assert.ok(turnsAt('behavioral', 35, 4) < turnsAt('behavioral', 35, 1));
 });
 
 test('a branch is measured in the turns its cases take, not in the bytes it reads', () => {
@@ -122,29 +126,27 @@ test('a branch is measured in the turns its cases take, not in the bytes it read
 
 // What the gate does with it.
 
-test('a fan wider than the band is refused, and told what the band is', () => {
-  const error = onlyError(project({ branch: 'behavioral', slices: 8, cases: 35 }));
-
-  assert.match(error, /8 slices for 35 planned cases is too wide/);
-  assert.match(error, /2-6 is the band, 4 the cheapest/);
-  // Both halves of the reason, because either alone reads as an arbitrary cap.
-  assert.match(error, /opening context/);
-  assert.match(error, /square of its\s+length/);
+test('a fan wider than the cheapest width is never refused', () => {
+  // Eight ran on the bench and cost 43% more than four would have. It is still
+  // accepted, and deliberately: it finished in half the wall clock.
+  assert.deepEqual(validateWorkerPlanFiles(project({ branch: 'behavioral', slices: 8, cases: 35 })), []);
 });
 
-test('a fan narrower than the band is refused too', () => {
-  const error = onlyError(project({ branch: 'behavioral', slices: 1, cases: 35 }));
-
-  assert.match(error, /1 slices for 35 planned cases is too narrow/);
-  assert.match(error, /runs about \d+ turns/);
-});
-
-test('anywhere inside the band passes', () => {
-  for (const slices of [2, 3, 4, 5, 6]) {
+test('everything at or above the cheapest width passes', () => {
+  for (const slices of [4, 5, 6, 7, 8]) {
     assert.deepEqual(
       validateWorkerPlanFiles(project({ branch: 'behavioral', slices, cases: 35 })), [],
       `${slices} slices for 35 cases should pass`,
     );
+  }
+});
+
+test('everything below it is refused, and told how much longer that worker runs', () => {
+  for (const slices of [1, 2, 3]) {
+    const error = onlyError(project({ branch: 'behavioral', slices, cases: 35 }));
+    assert.match(error, /is too narrow/);
+    assert.match(error, /4 is the cheapest width and the fewest worth planning/);
+    assert.match(error, /Wider than 4 is allowed and finishes sooner/);
   }
 });
 

@@ -242,9 +242,11 @@ test('the suite workflow sizes the fan by the work and creates only non-empty sl
   // Both ends of the curve, because naming only the ceiling is what produced the
   // first draft of this rule — which would have collapsed the behavioral branch
   // to one 216-turn worker against a 150-turn fuse.
-  assert.match(flat, /both sides of it are expensive/i);
-  assert.match(flat, /no "as few as possible" here, and no "as many as the map lists" either/i);
-  assert.match(flat, /refuses a plan outside a band around it/i);
+  assert.match(flat, /the fewest worth planning, not the target/i);
+  assert.match(flat, /Then plan wider than that, because a run is waited on/i);
+  assert.match(flat, /One slice per capability is a fine answer/i);
+  // Only the narrow end is refused; wall clock only ever improves with width.
+  assert.match(flat, /That is the one end `accept-worker-plan` refuses/i);
   // Bytes are measured and printed, and deliberately do not set the width.
   assert.match(flat, /Not by how much source there is to read/i);
   assert.match(flat, /never create an empty slice/i);

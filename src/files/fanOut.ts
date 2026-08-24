@@ -13,8 +13,8 @@ import { readPacketIndex, type PacketTarget } from './packets.ts';
 //   - each worker's conversation is shorter, and a conversation's cost grows
 //     with the square of its length, so this falls with the width.
 //
-// There is therefore a minimum, and it is neither end. Measured on that bench,
-// against what the fifteen workers actually cost:
+// There is therefore a cheapest width, and it is neither end. Measured on that
+// bench, against what the fifteen workers actually cost:
 //
 //   workers     1      2      3      5      8     15     20
 //   input   51.2M  34.6M  29.9M  27.7M  28.8M  35.6M  41.3M
@@ -22,7 +22,10 @@ import { readPacketIndex, type PacketTarget } from './packets.ts';
 // Fifteen was 28% over the cheapest width. One worker — which is what "the work
 // fits in one context" would have said, and what the first draft of this rule
 // enforced — is 85% over it, and would have run a 216-turn worker into a
-// 150-turn fuse. The floor is as expensive a mistake as the ceiling.
+// 150-turn fuse.
+//
+// Only the narrow end is refused. Wall clock is what a waiting vibecoder judges
+// a run on, and wall clock only ever improves with width — see NARROWEST.
 //
 // See ai/specs/37-3-fan-out-by-workload/after-2026-08-24.md in the brain repo.
 
@@ -30,8 +33,8 @@ import { readPacketIndex, type PacketTarget } from './packets.ts';
 // source were 7.8 on the behavioral branch and 1.4 on the structural one of the
 // same run — 5.6× apart — and per assigned id, 8× apart. Bytes measure how much
 // there is to read, which turns out not to be what a worker spends its turns on.
-// They stay here for the printout and for the record in `fan_out`; they do not
-// set the width.
+// They stay here for the printout, because "how much is there" is a fair
+// question; they do not set the width.
 const BYTES_PER_TOKEN = 4;
 const WRITTEN_PER_READ = 3;
 
@@ -59,24 +62,33 @@ const TURNS_PER_WORKER = 36;
 // 150-turn fuse.
 const WARMUP_TURNS: Record<string, number> = { behavioral: 22, structural: 28 };
 
-// Every case ends up at the same handful of widths, so the rule has to be a band
-// rather than a number: anywhere from three to eight workers cost within 10% of
-// the cheapest on the measured run. What the band excludes is what actually
-// costs — fifteen at one end, one at the other.
-const NARROWEST = 0.5;
-const WIDEST = 1.5;
+// The cheapest width is a floor, not a target, because money is not the only
+// axis and it is not the one that is being optimised here.
+//
+// A fan-out finishes when its slowest worker does, so its wall clock is roughly
+// the launch stagger plus one worker's run. Narrowing costs time twice over: a
+// worker gets more turns *and* each turn gets slower, because a longer
+// conversation is a bigger context to re-read. Measured 2026-08-24: fifteen
+// workers ran 38 turns each at 6.4 seconds a turn and the fan-out took 8
+// minutes; six ran 53 turns each at 8.5 seconds and it took 13.
+//
+// So going below the cheapest width loses on both axes — that is the floor, and
+// it is the only end this refuses. Above it, every extra worker buys wall clock
+// with money, and the run that is waited on is worth more than the difference.
+const NARROWEST = 1.0;
 
 export interface BranchWidth {
   branch: string;
   planned_cases: number;
-  // Turns one worker of this branch is expected to spend, at the chosen width.
+  // Turns one worker of this branch is expected to spend, at the cheapest width.
   turns_each: number;
+  // The width that costs least. Also the narrowest allowed: below it a run is
+  // both slower and dearer.
   workers: number;
   fewest: number;
-  most: number;
 }
 
-// How wide a branch should be, from the cases its plan intends to write.
+// The narrowest a branch may be, from the cases its plan intends to write.
 // Returns nothing for a branch this connector has no measured cost for: a rule
 // with no measurement behind it must not refuse anybody's plan.
 export function branchWidth(branch: string, plannedCases: number): BranchWidth | undefined {
@@ -90,8 +102,14 @@ export function branchWidth(branch: string, plannedCases: number): BranchWidth |
     turns_each: Math.round(turns / workers) + (WARMUP_TURNS[branch] ?? 0),
     workers,
     fewest: Math.max(1, Math.round(workers * NARROWEST)),
-    most: Math.max(1, Math.ceil(workers * WIDEST)),
   };
+}
+
+// How long one worker runs at a given width, in turns — the number that meets
+// the fuse, and the one a narrower plan is refused by.
+export function turnsAt(branch: string, plannedCases: number, workers: number): number {
+  const perCase = TURNS_PER_CASE[branch] ?? 0;
+  return Math.round((plannedCases * perCase) / Math.max(1, workers)) + (WARMUP_TURNS[branch] ?? 0);
 }
 
 export interface BranchWorkload {
@@ -106,8 +124,8 @@ export interface BranchWorkload {
 }
 
 // What each branch's source weighs. Kept because it is the honest answer to "how
-// much is there", printed before the plan exists and recorded in `fan_out` — but
-// it is not what decides the width. See TURNS_PER_CASE above.
+// much is there", printed before the plan exists — but it is not what decides
+// the width. See TURNS_PER_CASE above.
 //
 // `taken` narrows the count to the ids a plan actually took, which matters since
 // criterion 2 let the structural branch be narrowed too: the packets are built
@@ -164,9 +182,9 @@ function sizeOf(target: PacketTarget): number | undefined {
 export function widthLine(width: BranchWidth): string {
   return (
     `  ${width.branch} — ${width.planned_cases} planned ` +
-    `${width.planned_cases === 1 ? 'case' : 'cases'}: ${width.workers} ` +
-    `${width.workers === 1 ? 'worker' : 'workers'} of about ${width.turns_each} turns each ` +
-    `(${width.fewest}–${width.most} accepted).\n`
+    `${width.planned_cases === 1 ? 'case' : 'cases'}: at least ${width.fewest} ` +
+    `${width.fewest === 1 ? 'worker' : 'workers'}, which is the cheapest width and would run about ` +
+    `${width.turns_each} turns each. More finishes sooner; fewer is refused.\n`
   );
 }
 

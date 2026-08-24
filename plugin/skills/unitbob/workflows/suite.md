@@ -184,29 +184,30 @@ after its bounded phase.
    a World, a session, a fixture and an assertion; a structural example calls a
    method.
 
-   There is a cheapest width, and **both sides of it are expensive.** An agent's
-   cost is the sum of its context over its turns, so splitting pulls two ways:
-   the opening context is bought once per worker and re-read every turn, while
-   each conversation gets shorter, and a conversation costs with the square of
-   its length. What the fifteen workers of that run would have cost at other
-   widths:
+   There is a cheapest width, and it is **the fewest worth planning, not the
+   target.** An agent's cost is the sum of its context over its turns, so
+   splitting pulls two ways: the opening context is bought per worker while each
+   conversation shortens, and a conversation costs with the square of its length.
+   What the fifteen workers of that run would have cost at other widths:
 
    ```text
    workers     1      2      3      5      8     15     20
    input   51.2M  34.6M  29.9M  27.7M  28.8M  35.6M  41.3M
    ```
 
-   Fifteen was 28% over the cheapest. One worker is 85% over it — and would have
-   run a 216-turn worker into a 150-turn fuse. So there is no "as few as
-   possible" here, and no "as many as the map lists" either.
+   **Then plan wider than that, because a run is waited on.** A fan-out finishes
+   when its slowest worker does, and narrowing lengthens that worker twice over:
+   more turns, and each turn slower for the bigger context it re-reads. On that
+   same bench, fifteen workers ran 38 turns each at 6.4 seconds a turn and the
+   fan-out took 8 minutes; six ran 53 turns each at 8.5 seconds and it took 13.
+   One slice per capability is a fine answer wherever the work divides that far.
 
-   `accept-worker-plan` computes the cheapest width for each branch from the
-   cases your plan intends, and refuses a plan outside a band around it. The
-   bottom of that curve is flat, so the band is wide: anywhere inside it is
-   within about a tenth of the cheapest. Nothing is copied into the plan to prove
-   you did this — the cases are already in `planned_cases` and the width is
-   already the length of the branch's slice list, so a field restating them would
-   be two numbers copied by hand.
+   Below the cheapest width there is nothing to buy — it is slower *and* dearer,
+   and one worker per branch is 85% over the cheapest and 216 turns into a
+   150-turn fuse. That is the one end `accept-worker-plan` refuses. Nothing is
+   copied into the plan to prove you did this: the cases are already in
+   `planned_cases` and the width is already the length of the branch's slice
+   list, so a field restating them would be two numbers copied by hand.
 
    The rule here used to be that there was no ceiling at all — that an agent
    re-reads its context every turn, so splitting never costs more than keeping

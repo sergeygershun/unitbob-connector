@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join } from 'node:path';
 import { detectStructuralRunner } from '../runner/precheck.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
-import { branchWidth } from './fanOut.ts';
+import { branchWidth, turnsAt } from './fanOut.ts';
 
 export interface WorkerPlanItem {
   branch: string;
@@ -301,28 +301,25 @@ function fanOutErrors(branch: string, planned: number, cases: number): string[] 
   const width = branchWidth(branch, cases);
   if (!width || planned === 0) return [];
 
-  // A band, not a ceiling. Both ends are expensive and neither is safe: on the
-  // 2026-08-24 bench fifteen workers cost 28% more than the cheapest width, and
-  // one worker cost 85% more — and a single worker on the behavioral branch
-  // would have run 216 turns into a 150-turn fuse. Anywhere inside the band is
-  // within about a tenth of the cheapest, so this refuses only what costs.
+  // A floor, and only a floor. Both ends used to be refused; the upper one is
+  // gone because wall clock is what this run is judged on. A fan-out ends when
+  // its slowest worker does, and narrowing lengthens that worker twice over —
+  // more turns, and each turn slower for the bigger context it re-reads. On
+  // 2026-08-24 six workers took 13 minutes where fifteen took 8.
   //
-  // Nothing is restated in the plan to prove the coordinator did this division.
-  // Both halves are already in the file — the cases in `planned_cases`, the
-  // width as the length of the branch's slice list — so a `fan_out` record would
-  // be the same two numbers copied by hand, which is what spec 37-1 refused for
-  // `packet_paths`. The gate is the guarantee; `accept-worker-plan` prints the
-  // derivation next to it.
-  if (planned >= width.fewest && planned <= width.most) return [];
-  const way = planned > width.most ? 'wide' : 'narrow';
+  // Below the cheapest width there is nothing to buy: it is slower *and* dearer,
+  // and at one worker per branch it is 85% over the cheapest and 216 turns into
+  // a 150-turn fuse.
+  if (planned >= width.fewest) return [];
   return [
-    `${branch}: ${planned} slices for ${cases} planned cases is too ${way} — ` +
-      `${width.fewest}-${width.most} is the band, ${width.workers} the cheapest. ` +
-      `Each slice costs a whole opening context (26,065 tokens on that bench, re-read every turn), ` +
-      `and each slice fewer makes one conversation longer, which costs with the square of its ` +
-      `length. At ${width.workers} a worker of this branch runs about ${width.turns_each} turns.`,
+    `${branch}: ${planned} slices for ${cases} planned cases is too narrow — ` +
+      `${width.workers} is the cheapest width and the fewest worth planning. ` +
+      `A fan-out finishes when its slowest worker does, and at ${planned} that worker runs about ` +
+      `${turnsAt(branch, cases, planned)} turns instead of ${width.turns_each}. ` +
+      `Wider than ${width.workers} is allowed and finishes sooner.`,
   ];
 }
+
 
 function assignmentIds(value: unknown): string[] {
   const assignment = value as Record<string, unknown> | undefined;
