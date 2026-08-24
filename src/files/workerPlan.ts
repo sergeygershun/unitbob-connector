@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join } from 'node:path';
 import { detectStructuralRunner } from '../runner/precheck.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
-import { branchWidth, turnsAt } from './fanOut.ts';
 
 export interface WorkerPlanItem {
   branch: string;
@@ -268,58 +267,9 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
       }
     }
     for (const id of assigned.filter((id) => !expected.includes(id))) errors.push(`${branch}: capability ${id} was not assigned by the request`);
-    const cases = items.reduce((sum, item) => sum + (Array.isArray(item.planned_cases) ? item.planned_cases.length : 0), 0);
-    errors.push(...fanOutErrors(branch, items.length, cases));
   }
   return errors;
 }
-
-// Which assigned ids each branch of a plan actually took. Spec 37-3 weighs a
-// plan against the work it took on, never against the whole assignment: the
-// packets are built before anybody chooses a scope, and since criterion 2 both
-// branches may be narrowed, so the two are different jobs.
-export function takenIds(plan: WorkerPlan): Map<string, Set<string>> {
-  const taken = new Map<string, Set<string>>();
-  for (const item of Array.isArray(plan?.workers) ? plan.workers : []) {
-    if (!item || typeof item !== 'object' || Array.isArray(item) || !isNonEmptyString(item.branch)) continue;
-    const ids = taken.get(item.branch) ?? new Set<string>();
-    for (const id of Array.isArray(item.capability_ids) ? item.capability_ids : []) {
-      if (isNonEmptyString(id)) ids.add(id);
-    }
-    taken.set(item.branch, ids);
-  }
-  return taken;
-}
-
-// Spec 37-3, criterion 1. Two things are checked, and only when the packets
-// exist to measure against: that the plan says what it divided, and that it did
-// not divide work that already fits in one worker.
-//
-// A run without packets has no measured work, and a rule with no measurement
-// behind it refuses nobody — the same policy the packets themselves follow.
-function fanOutErrors(branch: string, planned: number, cases: number): string[] {
-  const width = branchWidth(branch, cases);
-  if (!width || planned === 0) return [];
-
-  // A floor, and only a floor. Both ends used to be refused; the upper one is
-  // gone because wall clock is what this run is judged on. A fan-out ends when
-  // its slowest worker does, and narrowing lengthens that worker twice over —
-  // more turns, and each turn slower for the bigger context it re-reads. On
-  // 2026-08-24 six workers took 13 minutes where fifteen took 8.
-  //
-  // Below the cheapest width there is nothing to buy: it is slower *and* dearer,
-  // and at one worker per branch it is 85% over the cheapest and 216 turns into
-  // a 150-turn fuse.
-  if (planned >= width.fewest) return [];
-  return [
-    `${branch}: ${planned} slices for ${cases} planned cases is too narrow — ` +
-      `${width.workers} is the cheapest width and the fewest worth planning. ` +
-      `A fan-out finishes when its slowest worker does, and at ${planned} that worker runs about ` +
-      `${turnsAt(branch, cases, planned)} turns instead of ${width.turns_each}. ` +
-      `Wider than ${width.workers} is allowed and finishes sooner.`,
-  ];
-}
-
 
 function assignmentIds(value: unknown): string[] {
   const assignment = value as Record<string, unknown> | undefined;

@@ -176,45 +176,28 @@ after its bounded phase.
    no others — the structural branch by the same rule as its peer, now that the
    question in step 3 covers both.
 
-   **How many workers a branch gets is decided by how many cases they will
-   write.** Not by how much source there is to read: on microblog, 2026-08-24,
-   the branch with three times the source spent half the turns. A planned case
-   is one intent somebody has to turn into a written example or Scenario, and
-   what it costs in turns is a property of the branch — a Gherkin Scenario needs
-   a World, a session, a fixture and an assertion; a structural example calls a
-   method.
+   **There is no ceiling on how many workers a branch gets, and the reason is
+   not the one this workflow used to give.** It said splitting never costs more
+   than keeping the work together, because an agent re-reads its context every
+   turn. That is false: a worker's opening context — its role, its recipe, its
+   plan item — is 26,065 tokens on microblog, 2026-08-24, and it is bought once
+   per worker rather than divided between them. Fifteen workers spent about
+   391,000 tokens on it to carry 39,652 tokens of work, and a run at six workers
+   came out 17% cheaper.
 
-   There is a cheapest width, and it is **the fewest worth planning, not the
-   target.** An agent's cost is the sum of its context over its turns, so
-   splitting pulls two ways: the opening context is bought per worker while each
-   conversation shortens, and a conversation costs with the square of its length.
-   What the fifteen workers of that run would have cost at other widths:
+   It came out 42% slower, which is why the ceiling is still not there. A
+   fan-out finishes when its slowest worker does, and narrowing lengthens that
+   worker twice over: more turns, and each turn slower for the bigger context it
+   re-reads. Six workers ran 53 turns each at 8.5 seconds a turn and the fan-out
+   took 13 minutes; fifteen ran 38 turns at 6.4 seconds and it took 8. Somebody
+   is waiting for this suite, and fifteen minutes is worth more than nine
+   dollars.
 
-   ```text
-   workers     1      2      3      5      8     15     20
-   input   51.2M  34.6M  29.9M  27.7M  28.8M  35.6M  41.3M
-   ```
-
-   **Then plan wider than that, because a run is waited on.** A fan-out finishes
-   when its slowest worker does, and narrowing lengthens that worker twice over:
-   more turns, and each turn slower for the bigger context it re-reads. On that
-   same bench, fifteen workers ran 38 turns each at 6.4 seconds a turn and the
-   fan-out took 8 minutes; six ran 53 turns each at 8.5 seconds and it took 13.
-   One slice per capability is a fine answer wherever the work divides that far.
-
-   Below the cheapest width there is nothing to buy — it is slower *and* dearer,
-   and one worker per branch is 85% over the cheapest and 216 turns into a
-   150-turn fuse. That is the one end `accept-worker-plan` refuses. Nothing is
-   copied into the plan to prove you did this: the cases are already in
-   `planned_cases` and the width is already the length of the branch's slice
-   list, so a field restating them would be two numbers copied by hand.
-
-   The rule here used to be that there was no ceiling at all — that an agent
-   re-reads its context every turn, so splitting never costs more than keeping
-   the work together. True of the work, false of everything else a worker
-   carries: 26,065 tokens of opening context on that run, the same to within
-   ±370 across fifteen workers, and bought once per worker rather than divided
-   between them.
+   So split freely — one slice per capability is a fine answer — and know what
+   you are buying. What is not fine is the far end: a branch collapsed into one
+   worker is both the slowest and the dearest, 85% over the cheapest width, and
+   on the behavioral branch of that run it would have been 216 turns against a
+   150-turn fuse.
 
    Never create an empty slice. Assign each planned capability exactly once and
    use globally unique worker ids and owned paths. Do not invent weights or a
@@ -230,8 +213,7 @@ after its bounded phase.
 5. Run `npx -y --loglevel=error unitbob@0.7.1 accept-worker-plan`. If it exits
    non-zero, fix the whole reported batch and run it again. If it remains
    non-zero, stop before fan-out. The gate checks that the plan is intact —
-   digests, ids, paths, capabilities that were actually assigned, and the
-   `fan_out` of step 4 against the packets on disk — and no longer
+   digests, ids, paths, capabilities that were actually assigned — and no longer
    requires it to cover every capability in the assignment; that is what step 3
    decided. Do not replace this gate with a receipt, hook, or home-grown
    orchestrator.
@@ -251,14 +233,11 @@ after its bounded phase.
    `graphify-out/graph.json` and `.unitbob/map-build/surfaces.json` and copied by
    `suite-prepare` into `.unitbob/suite-build/packets/`. It has nothing to do
    with the failure and repair packets of steps 11-13. Keep that output: step 7
-   hands each worker its own paths out of it. No packet is ever refused for being
-   large, and no worker is refused work for carrying a lot of it — the sizes bind
-   in exactly one place, the branch-wide `fan_out` of step 4, and never per
-   worker. An entrypoint whose file was
+   hands each worker its own paths out of it. The sizes are there to be read, not
+   obeyed — nothing is refused for being large, and nothing about them sets how
+   many workers a branch gets. An entrypoint whose file was
    found but was too large to carry is printed as a path to open in place; one
-   that resolved to nothing says so, and that worker searches as before. Both
-   still count as work: the branch's total prices a file it could not carry at
-   its real size, and an entrypoint nothing resolved at what the others average.
+   that resolved to nothing says so, and that worker searches as before.
 
 6. Add what you established about this project to the checkpoints step 5 seeded.
    That is the one thing in them no script can know, and it is the only thing in

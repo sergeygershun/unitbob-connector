@@ -192,8 +192,9 @@ test('the suite workflow states no budget, no worker ceiling and no lookup ceili
   // at all" with one measured from the work. What stays gone is the *budget* —
   // a number the server sent and nothing could check. This one is measured on
   // the vibecoder's own disk, by the same command that built the packets.
-  assert.doesNotMatch(flat, /no ceiling on how many workers a branch gets/i);
-  assert.match(flat, /decided by how many cases they will write/i);
+  // The worker ceiling is absent again, and the `budget` block stays gone.
+  assert.match(flat, /no ceiling on how many workers a branch gets/i);
+  assert.doesNotMatch(flat, /splitting the work never costs more/i);
 });
 
 // Criterion 4, and spec 37-2 criterion 1. Every checkpoint exists before fan-out
@@ -238,17 +239,17 @@ test('the suite workflow puts a bounded fan-out where the reading is', () => {
 // bought per worker rather than divided, and the entire run's work was 39,652
 // tokens — less than two of those preambles, spread over fifteen.
 test('the suite workflow sizes the fan by the work and creates only non-empty slices', () => {
-  assert.match(flat, /How many workers a branch gets is decided by how many cases they will write/i);
-  // Both ends of the curve, because naming only the ceiling is what produced the
-  // first draft of this rule — which would have collapsed the behavioral branch
-  // to one 216-turn worker against a 150-turn fuse.
-  assert.match(flat, /the fewest worth planning, not the target/i);
-  assert.match(flat, /Then plan wider than that, because a run is waited on/i);
+  // Spec 37-3 withdrew its own criterion 1 after the bench measured the clock.
+  // The ceiling is gone again — but the old justification for its absence
+  // ("splitting never costs more") was measured false, so the workflow now says
+  // what splitting really costs and why it is still worth it.
+  assert.match(flat, /no ceiling on how many workers a branch gets/i);
+  assert.match(flat, /the reason is not the one this workflow used to give/i);
+  assert.match(flat, /bought once per worker rather than divided/i);
+  assert.match(flat, /It came out 42% slower/i);
   assert.match(flat, /One slice per capability is a fine answer/i);
-  // Only the narrow end is refused; wall clock only ever improves with width.
-  assert.match(flat, /That is the one end `accept-worker-plan` refuses/i);
-  // Bytes are measured and printed, and deliberately do not set the width.
-  assert.match(flat, /Not by how much source there is to read/i);
+  // The far end stays named, because it is the one shape that loses both ways.
+  assert.match(flat, /both the slowest and the dearest/i);
   assert.match(flat, /never create an empty slice/i);
   // Judging the width by eye is the thing being replaced, so it is named.
   assert.match(flat, /do not judge the width by how complicated the business looks/i);

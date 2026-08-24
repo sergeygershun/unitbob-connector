@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { PACKETS_DIR, packetIndexPath, type PacketTarget } from '../src/files/packets.ts';
-import { branchWorkloads } from '../src/files/fanOut.ts';
 import { checkpointPath, workerPlanDigest, workerPlanPath } from '../src/files/workerPlan.ts';
 import { acceptWorkerPlan } from '../src/verbs/acceptWorkerPlan.ts';
 import { validateWorkerCheckpoints } from '../src/verbs/validateWorkerCheckpoints.ts';
@@ -36,30 +35,18 @@ function project(packets?: PacketTarget[]): string {
     writeFileSync(packetIndexPath(root), `${JSON.stringify({ targets: packets }, null, 2)}\n`);
   }
 
-  const workers = [
-    item('s1', ['b1'], '.unitbob/structural/s1_spec.rb'),
-    item('s2', ['b2'], '.unitbob/structural/s2_spec.rb'),
-  ];
-  const fan_out: Record<string, { work_tokens: number; workers: number }> = {};
-  for (const load of branchWorkloads(root)) {
-    const mine = workers.filter((worker) => worker.branch === load.branch).length;
-    if (mine > 0) fan_out[load.branch] = { work_tokens: load.work_tokens, workers: mine };
-  }
-
   writeFileSync(workerPlanPath(root), `${JSON.stringify({
     request_digest: createHash('sha256').update(bytes).digest('hex'),
-    ...(Object.keys(fan_out).length > 0 ? { fan_out } : {}),
-    workers,
+    workers: [
+      item('s1', ['b1'], '.unitbob/structural/s1_spec.rb'),
+      item('s2', ['b2'], '.unitbob/structural/s2_spec.rb'),
+    ],
   }, null, 2)}\n`);
   return root;
 }
 
-// Spec 37-3, criterion 1. These fixtures plan two slices, and two slices are now
-// only legal for work that does not fit in one — so the packets below have to
-// describe a project big enough to need two. Both halves stay under
-// MAX_PACKET_BYTES (200,000), because a single packet larger than that cannot
-// exist on disk: `copyPacket` refuses to write it. One file can therefore never
-// justify a second worker, which is the rule working, not a fixture problem.
+// Sizes stay under MAX_PACKET_BYTES (200,000): a single packet larger than that
+// cannot exist on disk, because `copyPacket` refuses to write it.
 const BIG_HALF = 160_000;
 const SMALL_HALF = 140_000;
 
