@@ -57,6 +57,13 @@ after its bounded phase.
    its message to the user as it stands and stop.** Do not work around a
    `fixable` profile failure or start fan-out without a request.
 
+   It also clears the ground for this build: an earlier run's `worker-plan.json`,
+   `checkpoints/` and `suite_output.json` are moved to
+   `.unitbob/suite-build/previous/` and it says so. Nothing from a previous run
+   is left where this one will look, and nothing was deleted — so never go
+   hunting for leftovers to reconcile or remove, and never read `previous/` as if
+   it belonged to this build.
+
    **The environment is never yours to repair.** Building an interpreter,
    installing the project's dependencies, pulling a base image, editing a
    `.ruby-version` or a lockfile — none of that is this workflow's work, and no
@@ -153,7 +160,6 @@ after its bounded phase.
        "source_paths": ["initial local paths"],
        "owned_paths": ["files only this worker may write"],
        "harness_path": ".unitbob/...connector-owned helper...",
-       "limits": { "planned_cases": 3 },
        "done_when": "all planned cases are written and checkpointed" }
    ] }
    ```
@@ -173,13 +179,23 @@ after its bounded phase.
    a different business outcome. `surface_budget` is a ceiling, never a quota;
    unselected assigned surfaces are `deferred_surfaces`, not `unreachable`.
 
-5. Run `npx -y --loglevel=error unitbob@0.6.3 validate-worker-plan`. If
-   validation exits non-zero, fix the whole reported batch and run the gate
-   again. If it remains non-zero, stop before fan-out. The gate checks that the
-   plan is intact — digests, ids, paths, capabilities that were actually
-   assigned — and no longer requires it to cover every capability in the
-   assignment; that is what step 3 decided. Do not replace this gate with a
-   receipt, hook, or home-grown orchestrator.
+5. Run `npx -y --loglevel=error unitbob@0.6.3 accept-worker-plan`. If it exits
+   non-zero, fix the whole reported batch and run it again. If it remains
+   non-zero, stop before fan-out. The gate checks that the plan is intact —
+   digests, ids, paths, capabilities that were actually assigned — and no longer
+   requires it to cover every capability in the assignment; that is what step 3
+   decided. Do not replace this gate with a receipt, hook, or home-grown
+   orchestrator.
+
+   Accepting a plan also files what that plan implies: it writes
+   `.unitbob/suite-build/checkpoints/<branch>-<worker-id>.json` for every slice,
+   with the digests, the branch, the worker id, every assigned promise in
+   `unresolved_promises`, and every other array the gate in step 8 checks. **Do
+   not write those files yourself and do not correct their shape** — the side
+   that checks the form is now the side that writes it, so a checkpoint refused
+   over a missing empty array has stopped being possible. A checkpoint that
+   already belongs to this plan is left exactly as it is, and the command says
+   which ones those were.
 
    It also prints each worker's source packets and what they weigh. A source
    packet is the file behind one entrypoint, resolved from this machine's own
@@ -191,10 +207,10 @@ after its bounded phase.
    found but was too large to carry is printed as a path to open in place; one
    that resolved to nothing says so, and that worker searches as before.
 
-6. Seed every planned slice's checkpoint before fan-out. Write
-   `.unitbob/suite-build/checkpoints/<branch>-<worker-id>.json` yourself, with
-   every key the gate in step 8 checks — all of them, the two empty arrays
-   included, or the gate rejects the checkpoint you have just written:
+6. Add what you established about this project to the checkpoints step 5 seeded.
+   That is the one thing in them no script can know, and it is the only thing in
+   them that is yours to write. A seeded behavioral slice arrives with everything
+   below already in it except the `facts` entry, which is what you are adding:
 
    ```json
    {
@@ -209,10 +225,11 @@ after its bounded phase.
 
    `decisions` and `known_problems` are arrays of short strings: what a worker
    chose, and what it knows is still wrong. Empty is a fine answer; absent is
-   not. They are named here, where the checkpoint is actually written, on
-   purpose — while the rule lived only inside the gate's own source, three runs
-   in a row spent themselves on rejected checkpoints, about thirty of them on
-   one run, which then got a hand-written normalizer to work around it.
+   not — and getting that right is no longer your job. While the rule lived only
+   inside the gate's own source, three runs in a row spent themselves on rejected
+   checkpoints, about thirty of them on one run, which then got a hand-written
+   normalizer to work around it. The gate's own side writes them now, so the
+   whole class of refusal is gone.
 
    `surface_coverage` is the behavioral branch's fourth such array, and the shape
    above is a behavioral slice. Its workers fill it in as they write — one entry
@@ -236,11 +253,17 @@ after its bounded phase.
    cannot sign in, one method confused with another — was false, and went to all
    sixteen packets marked as verified.
 
-   When every seed is written, run
+   When the facts are in, run
    `npx -y --loglevel=error unitbob@0.6.3 validate-worker-checkpoints` here,
    before fan-out. It is step 8's gate, it costs seconds, and it reads every
-   checkpoint against the plan — so a seed it would refuse is refused now, rather
-   than after sixteen workers have been launched on it.
+   checkpoint against the plan — so a fact it would refuse is refused now, rather
+   than after sixteen workers have been launched on it. Skip it only if you added
+   no facts at all: nothing else in those files came from you.
+
+   If it refuses a seeded checkpoint for anything other than a fact you wrote,
+   delete that one file and run `accept-worker-plan` again. Do not repair it by
+   hand — the seed is the machine's to write, and hand-repairing it is how the
+   normalizer above came to exist.
 
 7. Use the same named role on both Claude Code and Codex: `unitbob:suite-worker`
    on Claude Code and `suite-worker` on Codex. For every plan item launch that
@@ -394,6 +417,19 @@ after its bounded phase.
     for that branch, and do not build on that harness. A runner that starts and reaches production code may expose a
     real application failure. Application failures remain red. Let the lamp be red. Don't stop to repair the app before
     generating, and never weaken a check to get green.
+
+    A red `run-local` reads its own report out: every failed case with its name,
+    its file, the step it broke on where the runner has steps, and the error
+    text. **Never parse `pytest_bdd_report.json`, `pytest_result.xml` or any
+    other report file yourself, and never grep the step definitions to find out
+    which one failed.** The connector wrote those files and knows their shape; on
+    the microblog bench the repair stretch cost 79 coordinator turns and 47% of
+    the coordinator's input tokens, much of it inline `node -e` and `python3`
+    re-reading files this command has already read. If the read-out leaves one
+    thing unexplained — which factory, which signature, which role an endpoint
+    permits — send that one closed question to `unitbob:fact-finder` with the
+    files to look in, and read its answer. Deciding what the failures mean, and
+    who owns each of them, stays yours; finding the text they refer to does not.
 
     `run-local` also remembers each branch's set of failures between runs. When a
     branch comes back with exactly the set it came back with last time, it says

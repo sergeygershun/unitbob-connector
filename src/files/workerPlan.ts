@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { detectStructuralRunner } from '../runner/precheck.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
 
@@ -13,7 +13,6 @@ export interface WorkerPlanItem {
   source_paths: string[];
   owned_paths: string[];
   harness_path: string;
-  limits: { planned_cases: number };
   done_when: string;
 }
 
@@ -61,6 +60,94 @@ export function readWorkerPlan(projectRoot: string): WorkerPlan {
   return parsed as WorkerPlan;
 }
 
+// Spec 37-2, criterion 1. Everything in a seeded checkpoint is either copied
+// from the plan item or computed from two files on this disk, so writing it by
+// hand was eight identical documents' worth of the most expensive turns in the
+// run — and the gate refused them for a forgotten empty array often enough that
+// the workflow had to spell the shape out in prose. Written here, next to the
+// path and the digests it needs, and by the same side that checks it.
+//
+// The one thing the machine cannot supply is what the coordinator established
+// about this project. `facts` is seeded empty for it to add to.
+export interface SeededCheckpoints {
+  written: string[];
+  kept: string[];
+  superseded: string[];
+}
+
+export const SUPERSEDED_DIR = 'superseded';
+
+export function seedWorkerCheckpoints(projectRoot: string): SeededCheckpoints {
+  const plan = readWorkerPlan(projectRoot);
+  const request_digest = requestDigest(projectRoot);
+  const plan_digest = workerPlanDigest(projectRoot);
+  const written: string[] = [];
+  const kept: string[] = [];
+  const superseded: string[] = [];
+
+  for (const item of plan.workers) {
+    const path = checkpointPath(projectRoot, item);
+    const label = `${item.branch}:${item.worker_id}`;
+    // Left alone when it already belongs to this plan: the coordinator's facts
+    // and a worker's finished slice both live in this file, and a run costs
+    // hours.
+    if (belongsToPlan(path, plan_digest)) {
+      kept.push(label);
+      continue;
+    }
+
+    // Everything else needs a fresh seed — but the file being replaced is not
+    // necessarily worthless. `plan_digest` is a digest of the whole
+    // `worker-plan.json`, so editing one slice invalidates every checkpoint at
+    // once, including finished ones; and replanning after the first slice comes
+    // back is a documented, ordinary move. Overwriting in place would have made
+    // this verb the one thing in the build that destroys hours of work, on the
+    // most ordinary path there is. Moved for the same reason `suite-prepare`
+    // moves the previous run rather than deleting it.
+    if (existsSync(path)) {
+      const aside = join(dirname(path), SUPERSEDED_DIR, `${item.branch}-${item.worker_id}.json`);
+      mkdirSync(dirname(aside), { recursive: true });
+      rmSync(aside, { force: true });
+      renameSync(path, aside);
+      superseded.push(label);
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(seedFor(item, request_digest, plan_digest), null, 2)}\n`);
+    written.push(label);
+  }
+  return { written, kept, superseded };
+}
+
+function belongsToPlan(path: string, planDigest: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown> | null;
+    return parsed?.plan_digest === planDigest;
+  } catch {
+    return false;
+  }
+}
+
+function seedFor(item: WorkerPlanItem, request_digest: string, plan_digest: string): Record<string, unknown> {
+  return {
+    request_digest,
+    plan_digest,
+    branch: item.branch,
+    worker_id: item.worker_id,
+    // Every promise starts unresolved: the slice has not been worked yet, and
+    // the gate wants each one accounted for exactly once.
+    unresolved_promises: [...item.promises],
+    completed_promises: [],
+    written_paths: [],
+    decisions: [],
+    known_problems: [],
+    // Behavioral only, and absent rather than empty elsewhere — it joins Gherkin
+    // Scenarios to addresses, and the structural branch has no Scenarios.
+    ...(item.branch === 'behavioral' ? { surface_coverage: [] } : {}),
+    facts: [],
+  };
+}
+
 const RUBY_HARNESS: Record<string, string> = {
   behavioral: '.unitbob/behavioral/step_definitions/00_unitbob_world.rb',
   structural: '.unitbob/structural/unitbob_helper.rb',
@@ -96,6 +183,13 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
     }
     const label = workerLabel(item, index);
     if (!isNonEmptyString(item?.branch) || !expectedByBranch.has(item.branch)) errors.push(`${label}: branch is not in the request`);
+    // Both halves of the checkpoint filename, held to the same rule. `worker_id`
+    // has always been checked; `branch` never was, because it only ever came
+    // from `request.json` and was only ever read. Since spec 37-2 the pair is
+    // also a path this connector *writes*, and `request.json` is a file on the
+    // vibecoder's disk — so a `suite_kind` of `../../..` would have put a
+    // seeded checkpoint outside the project.
+    else if (!/^[a-zA-Z0-9_-]+$/.test(item.branch)) errors.push(`${label}: branch must be a filename-safe name`);
     if (!isNonEmptyString(item?.worker_id) || !/^[a-zA-Z0-9_-]+$/.test(item.worker_id)) errors.push(`${label}: worker_id must be a stable filename-safe id`);
     else if (seenWorkers.has(item.worker_id)) errors.push(`${label}: worker_id ${item.worker_id} appears more than once`);
     else seenWorkers.add(item.worker_id);
@@ -131,10 +225,6 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
     if (!expectedHarness && isNonEmptyString(item?.harness_path) && !item.harness_path.startsWith('.unitbob/')) {
       errors.push(`${label}: harness_path must be a connector-owned path under .unitbob/ (got "${item.harness_path}")`);
     }
-    if (!item?.limits || item.limits.planned_cases !== item.planned_cases?.length) {
-      errors.push(`${label}: limits.planned_cases must equal planned_cases.length`);
-    }
-
     for (const ownedPath of Array.isArray(item?.owned_paths) ? item.owned_paths : []) {
       if (!isNonEmptyString(ownedPath)) {
         errors.push(`${label}: owned path must be a non-empty string`);

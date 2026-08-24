@@ -4,6 +4,7 @@ import { materializeHelper } from '../files/guardrails.ts';
 import { materializeBehavioralWorld } from '../files/behavioral.ts';
 import { PACKETS_DIR, writeSuitePackets, type SuitePacketsSummary } from '../files/packets.ts';
 import {
+  movePreviousRunAside,
   recipeNameFor,
   writeSuiteBuildRequest,
   type KnownDefectContext,
@@ -299,12 +300,44 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   // stop a branch that has not run once yet.
   clearRunState(config.projectRoot);
 
+  // Spec 37-2, criterion 3. Same reasoning, applied to the papers that were left
+  // behind rather than cleared: a plan and its checkpoints outlive the
+  // `request.json` they were digested against, and every one of them is refused
+  // by its own gate from here on. Moved rather than removed — see
+  // `movePreviousRunAside`.
+  //
+  // Wrapped for the same reason `buildPackets` is: by this line the request is
+  // written and the build is real. A read-only checkout or a permission the move
+  // does not have is a note, not a build that dies after its own work landed
+  // and before it could say so.
+  let displaced: string[] = [];
+  let displaceProblem = '';
+  try {
+    displaced = movePreviousRunAside(config.projectRoot);
+  } catch (err) {
+    displaceProblem = (err as Error).message;
+  }
+
   const kinds = branches.map((branch) => branch.suite_kind).join(' and ');
   const nextCommand = branches.some((branch) => branch.suite_kind === 'behavioral')
     ? '`unitbob suite-review-prepare` before upload'
     : '`unitbob put-suite-build`';
 
   actual.stdout.write(`Suite build request written to ${request.project_root}/.unitbob/suite-build/request.json\n`);
+  if (displaced.length > 0) {
+    actual.stdout.write(
+      `The previous run's ${displaced.join(', ')} moved to ` +
+        `${request.project_root}/.unitbob/suite-build/previous/ — none of it is left where this build will ` +
+        'look, and none of it was deleted.\n',
+    );
+  }
+  if (displaceProblem) {
+    actual.stdout.write(
+      `\nThe previous run's files could not be moved out of the way (${displaceProblem}). This build is fine, ` +
+        'but a plan or checkpoint left over from it will be refused by its own gate — the digests belong to ' +
+        'the request that was just replaced.\n',
+    );
+  }
   actual.stdout.write(packetNotice(request.project_root, sourcePackets));
   actual.stdout.write(
     `Next: build ${branches.length === 1 ? 'the' : 'both'} peer ${branches.length === 1 ? 'suite' : 'suites'} (${kinds}) following each branch's \`recipe\` and \`assignment\`, ` +
@@ -396,7 +429,7 @@ function packetNotice(projectRoot: string, packets: SuitePacketsSummary | string
       : `\n${packets.files} ${packets.files === 1 ? 'packet' : 'packets'} (${packets.bytes.toLocaleString('en-US')} bytes) ` +
         `written to ${where}: the source behind ${packets.resolved} of ${packets.targets} entrypoints, resolved from this ` +
         `machine's own graph and route inventory without asking a model. Hand each worker the paths of its packets, ` +
-        'never their contents — `unitbob validate-worker-plan` prints them per worker.\n';
+        'never their contents — `unitbob accept-worker-plan` prints them per worker.\n';
 
   // Two different outcomes, never merged: a file that was found and not carried
   // still saves the worker the search, and a name nothing answered to does not.

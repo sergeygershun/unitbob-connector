@@ -27,6 +27,11 @@ _UNITBOB_OUT = os.path.abspath(_UNITBOB_OUT) if _UNITBOB_OUT else None
 def pytest_bdd_before_scenario(request, feature, scenario):
     _UNITBOB_CURRENT[id(scenario)] = {
         "name": scenario.name,
+        # Which .feature file this Scenario came from. Every hook here is handed
+        # the feature and none of them recorded it, so a red run named the
+        # Scenario and left the reader to find the file (spec 37-2, criterion 5).
+        # Project-relative where pytest-bdd offers it.
+        "file": getattr(feature, "rel_filename", None) or getattr(feature, "filename", None) or "",
         "tags": sorted(scenario.tags),
         "status": "passed",
         "failure": "",

@@ -55,7 +55,7 @@ function fixture(options: FixtureOptions = {}): string {
     harness_path: branch === 'behavioral'
       ? '.unitbob/behavioral/step_definitions/00_unitbob_world.rb'
       : '.unitbob/structural/unitbob_helper.rb',
-    limits: { planned_cases: 2, fact_finder_lookups: 8 }, done_when: 'done',
+    done_when: 'done',
   }] };
   writeFileSync(workerPlanPath(root), `${JSON.stringify(plan, null, 2)}\n`);
   const checkpoint: Record<string, unknown> = {

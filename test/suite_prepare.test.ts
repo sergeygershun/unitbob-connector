@@ -997,3 +997,84 @@ test('a run whose entrypoints resolve to nothing says so and still prepares the 
   assert.match(text, /1 of 1 entrypoints have no packet/);
   assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'request.json')), true);
 });
+
+// Spec 37-2, criterion 3. `suite-prepare` used to clear the cheap file and leave
+// the expensive ones: `run-state.json` went, while `worker-plan.json`,
+// `checkpoints/` and the answer itself stayed exactly where a restarted run
+// would trip over them with a digest from the build before. They are moved now,
+// not deleted — one interrupted run and one restart must not cost three hours of
+// work, and moving costs the same line as removing.
+test('a restarted build moves the previous run aside instead of leaving or deleting it', async () => {
+  const projectRoot = tmpProject();
+  const buildDir = join(projectRoot, '.unitbob', 'suite-build');
+  mkdirSync(join(buildDir, 'checkpoints'), { recursive: true });
+  writeFileSync(join(buildDir, 'worker-plan.json'), '{"request_digest":"old"}\n');
+  writeFileSync(join(buildDir, 'checkpoints', 'structural-w1.json'), '{"worker_id":"w1"}\n');
+  writeFileSync(join(buildDir, 'suite_output.json'), '{"branches":[]}\n');
+  const written: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { written.push(chunk); return true; } },
+  });
+
+  const previous = join(buildDir, 'previous');
+  assert.equal(existsSync(join(buildDir, 'worker-plan.json')), false);
+  assert.equal(existsSync(join(buildDir, 'checkpoints')), false);
+  assert.equal(existsSync(join(buildDir, 'suite_output.json')), false);
+  assert.equal(readFileSync(join(previous, 'worker-plan.json'), 'utf8'), '{"request_digest":"old"}\n');
+  assert.equal(readFileSync(join(previous, 'checkpoints', 'structural-w1.json'), 'utf8'), '{"worker_id":"w1"}\n');
+  assert.equal(readFileSync(join(previous, 'suite_output.json'), 'utf8'), '{"branches":[]}\n');
+  assert.match(written.join(''), /previous run.*moved to.*\.unitbob\/suite-build\/previous/s);
+});
+
+test('a first build has nothing to move and says nothing about it', async () => {
+  const projectRoot = tmpProject();
+  const written: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { written.push(chunk); return true; } },
+  });
+
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'previous')), false);
+  assert.doesNotMatch(written.join(''), /moved to/);
+});
+
+// Each artifact is replaced on its own. A restart that displaces only some of
+// them must not take the rest of an earlier, finished run with it.
+test('moving aside twice replaces only what was displaced this time', async () => {
+  const projectRoot = tmpProject();
+  const buildDir = join(projectRoot, '.unitbob', 'suite-build');
+  mkdirSync(join(buildDir, 'previous'), { recursive: true });
+  writeFileSync(join(buildDir, 'previous', 'suite_output.json'), '{"from":"two runs ago"}\n');
+  mkdirSync(buildDir, { recursive: true });
+  writeFileSync(join(buildDir, 'worker-plan.json'), '{"request_digest":"last"}\n');
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: () => true },
+  });
+
+  assert.equal(readFileSync(join(buildDir, 'previous', 'worker-plan.json'), 'utf8'), '{"request_digest":"last"}\n');
+  // The answer from two runs ago survives, because this restart had no answer of
+  // its own to put there. Clearing `previous/` wholesale would have been tidier
+  // and would have cost a finished run: a build interrupted between writing the
+  // plan and seeding its checkpoints displaces only `worker-plan.json`.
+  assert.equal(readFileSync(join(buildDir, 'previous', 'suite_output.json'), 'utf8'), '{"from":"two runs ago"}\n');
+});

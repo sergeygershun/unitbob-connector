@@ -21,6 +21,8 @@ test('ensureRunner for Ruby generates sidecar Gemfile and does not touch root Ge
 
   const mockDeps: ProvisionDeps = {
     runCmd: async (cmd, args) => {
+      // `ruby -v` first (spec 37-2, criterion 4), then the install itself.
+      if (cmd === 'ruby') return { code: 0, stdout: 'ruby 3.2.2 (2023-03-30 revision e51014f9c0)', stderr: '' };
       assert.equal(cmd, 'bundle');
       assert.deepEqual(args, ['install']);
       return { code: 0, stdout: 'Bundle complete', stderr: '' };
@@ -515,4 +517,107 @@ test('the sidecar install turns frozen bundler off for its own Gemfile, and only
   }
   // And it is scoped: nothing that is not a sidecar install carries it.
   assert.equal(deps.envs.some((env) => !env.BUNDLE_GEMFILE && env.BUNDLE_FROZEN !== undefined), false);
+});
+
+// Spec 37-2, criterion 4. On a2time the behavioral branch came back as "Bundler
+// failed to provision Cucumber sidecar gem", and the reason — the host's Ruby is
+// older than the cucumber this connector pins — was something the connector
+// could have read in one command and instead left the agent to rediscover by
+// running `bundle install` by hand. Said before the install, not out of its
+// wreckage.
+test('a Ruby older than the pinned cucumber is named before bundler is asked', async () => {
+  const projectRoot = tmpProject();
+  const ran: string[] = [];
+
+  const result = await ensureRunner(projectRoot, 'cucumber', {
+    runCmd: async (cmd, args) => {
+      ran.push([cmd, ...args].join(' '));
+      if (cmd === 'ruby') return { code: 0, stdout: 'ruby 2.6.10p210 (2022-04-12 revision 5b8c0e2b5e) [x86_64-darwin24]', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  assert.equal(result.status, 'fixable');
+  assert.match(result.message ?? '', /needs Ruby 2\.7 or newer/);
+  assert.match(result.message ?? '', /2\.6\.10/);
+  assert.deepEqual(ran, ['ruby -v'], 'bundler is never asked');
+  // The way out is named, and it is the one the sidecar already supports: a
+  // project that declares cucumber itself keeps its own pin.
+  assert.match((result.checklist ?? []).join('\n'), /declare .?cucumber.? in/i);
+});
+
+test('a project that pins cucumber itself is left to its own version', async () => {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, 'Gemfile'), 'source "https://rubygems.org"\ngem "rails"\ngem "cucumber", "~> 3.1"\n');
+  const ran: string[] = [];
+
+  const result = await ensureRunner(projectRoot, 'cucumber', {
+    runCmd: async (cmd, args) => {
+      ran.push([cmd, ...args].join(' '));
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  assert.equal(result.status, 'provisioned');
+  assert.deepEqual(ran, ['bundle install'], 'our pin does not apply, so neither does its Ruby floor');
+});
+
+test('a Ruby that cannot be read stops nothing', async () => {
+  const projectRoot = tmpProject();
+
+  const result = await ensureRunner(projectRoot, 'cucumber', {
+    runCmd: async (cmd) => (cmd === 'ruby'
+      ? { code: 127, stdout: '', stderr: 'command not found' }
+      : { code: 0, stdout: '', stderr: '' }),
+  });
+
+  assert.equal(result.status, 'provisioned');
+});
+
+test('a Ruby new enough is not mentioned at all', async () => {
+  const projectRoot = tmpProject();
+
+  const result = await ensureRunner(projectRoot, 'cucumber', {
+    runCmd: async (cmd) => (cmd === 'ruby'
+      ? { code: 0, stdout: 'ruby 3.2.2 (2023-03-30 revision e51014f9c0) [arm64-darwin23]', stderr: '' }
+      : { code: 0, stdout: '', stderr: '' }),
+  });
+
+  assert.equal(result.status, 'provisioned');
+});
+
+// The Gemfile is read as text; the line that drops our pin asks bundler's own
+// resolved dependency list. Where the two can disagree — `gemspec`,
+// `eval_gemfile` — the check stays quiet rather than refusing a build that
+// works over a floor it never had to meet.
+test('a gemspec or an eval_gemfile keeps the Ruby floor out of it', async () => {
+  for (const line of ['gemspec\n', 'eval_gemfile "shared/Gemfile"\n']) {
+    const projectRoot = tmpProject();
+    writeFileSync(join(projectRoot, 'Gemfile'), `source "https://rubygems.org"\n${line}`);
+    const ran: string[] = [];
+
+    const result = await ensureRunner(projectRoot, 'cucumber', {
+      runCmd: async (cmd, args) => {
+        ran.push([cmd, ...args].join(' '));
+        if (cmd === 'ruby') return { code: 0, stdout: 'ruby 2.6.10p210', stderr: '' };
+        return { code: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    assert.equal(result.status, 'provisioned', line);
+    assert.deepEqual(ran, ['bundle install'], line);
+  }
+});
+
+test('a commented-out cucumber line is not a declaration', async () => {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, 'Gemfile'), 'source "https://rubygems.org"\n# gem "cucumber", "~> 3.1"\n');
+
+  const result = await ensureRunner(projectRoot, 'cucumber', {
+    runCmd: async (cmd) => (cmd === 'ruby'
+      ? { code: 0, stdout: 'ruby 2.6.10p210', stderr: '' }
+      : { code: 0, stdout: '', stderr: '' }),
+  });
+
+  assert.equal(result.status, 'fixable');
 });

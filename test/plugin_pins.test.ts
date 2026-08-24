@@ -84,7 +84,7 @@ test('the local release carries the bounded-suite runtime contract', () => {
   const suite = readFileSync(join(root, 'plugin', 'skills', 'unitbob', 'workflows', 'suite.md'), 'utf8');
   const behavioralSource = readFileSync(join(root, 'src', 'files', 'behavioral.ts'), 'utf8');
 
-  assert.match(suite, /validate-worker-plan/);
+  assert.match(suite, /accept-worker-plan/);
   assert.match(suite, /validate-worker-checkpoints/);
   assert.match(suite, /unitbob:suite-worker/);
   assert.match(suite, /unitbob:suite-repair-worker/);

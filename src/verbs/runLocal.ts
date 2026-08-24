@@ -6,7 +6,14 @@ import {
   type HostBranchOutput,
   type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
-import { digestOf, failureSet, readRunState, rememberFailures } from '../runner/failureDigest.ts';
+import {
+  digestOf,
+  failureSet,
+  readRunState,
+  rememberFailures,
+  reportedFailures,
+  type ReportedFailure,
+} from '../runner/failureDigest.ts';
 import { placeProblem } from '../runner/place.ts';
 import { placeAdvice } from '../runner/placeAdvice.ts';
 import { runnerEnvironmentPlaceProblem } from '../runner/placeEnvironment.ts';
@@ -223,7 +230,74 @@ async function runOneBranch(
   }
 
   d.stdout.write(report(result));
+  d.stdout.write(failureLines(runner, result));
   return { runner, result };
+}
+
+// How many lines of one failure's message are worth printing here. Enough for an
+// assertion diff and the frame under it; not the whole backtrace, which is in
+// the report file the line above names.
+const DETAIL_LINES = 6;
+const DETAIL_CHARS = 600;
+
+// Spec 37-2, criterion 5. The report is read by the side that knows its format.
+//
+// Both behavioral report shapes and all three structural ones are already parsed
+// in this connector, for the stall comparison — and the coordinator still opened
+// `pytest_bdd_report.json` with an inline `node -e` and `pytest_result.xml` with
+// an inline `python3`, because nothing printed what it found. That happened on
+// the most expensive turns of the run: the repair stretch of the microblog bench
+// cost 79 coordinator turns and 47% of its input, each turn re-reading a 300,000
+// token conversation.
+//
+// Every failure, up to a budget on the whole block — this list is what the
+// repair packets of step 12 are cut from, so a top-N would send the coordinator
+// back to the file for the rest, which is the cost this removes. But the run
+// this most exists for is the first red one, where the harness is not wired yet
+// and every case fails: unbounded, that is half a megabyte into the very context
+// this spec is trying to make cheaper. What does not fit says so, by count, and
+// the report file is named on the line above.
+const FAILURE_BLOCK_CHARS = 40_000;
+
+function failureLines(runner: string, result: RunnerResult): string {
+  const failures = reportedFailures(runner, result.report);
+  if (!failures || failures.length === 0) return '';
+
+  const head = `\n${failures.length} ${failures.length === 1 ? 'case' : 'cases'} failed, read out of ` +
+    `${result.resultPath}. Do not open that file to find this again:\n`;
+
+  const printed: string[] = [];
+  let spent = 0;
+  for (const [index, failure] of failures.entries()) {
+    const line = one(failure, index);
+    if (spent + line.length > FAILURE_BLOCK_CHARS && printed.length > 0) break;
+    printed.push(line);
+    spent += line.length;
+  }
+
+  const left = failures.length - printed.length;
+  const tail = left === 0
+    ? ''
+    : `\n  …and ${left} more failed ${left === 1 ? 'case' : 'cases'}, not printed to keep this readable. ` +
+      `They are in ${result.resultPath}; a branch failing this widely is usually one harness problem, ` +
+      'not that many repairs.\n';
+  return head + printed.join('') + tail;
+}
+
+function one(failure: ReportedFailure, index: number): string {
+  const where = failure.file ? ` — ${failure.file}` : '';
+  const lines = [`\n  ${index + 1}. ${failure.name || failure.marker || '(the runner named no case)'}${where}`];
+  if (failure.marker && failure.name.includes(failure.marker) === false) lines.push(`     ${failure.marker}`);
+  if (failure.step) lines.push(`     step: ${failure.step}`);
+  for (const line of trimmed(failure.detail)) lines.push(`     ${line}`);
+  return `${lines.join('\n')}\n`;
+}
+
+function trimmed(detail: string): string[] {
+  const lines = detail.split('\n').slice(0, DETAIL_LINES);
+  const kept = lines.join('\n').slice(0, DETAIL_CHARS).split('\n');
+  const complete = kept.join('\n') === detail;
+  return complete ? kept : [...kept, '…'];
 }
 
 // The command first, and always — including on a green run. It is the answer to

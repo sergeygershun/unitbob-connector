@@ -170,7 +170,7 @@ test('a planned candidate uploads a complete digest-bound selection review', asy
     planned_cases: ['successful checkout'], source_paths: ['app/checkout.rb'],
     owned_paths: ['.unitbob/behavioral/features/checkout.feature'],
     harness_path: '.unitbob/behavioral/step_definitions/00_unitbob_world.rb',
-    limits: { planned_cases: 1, fact_finder_lookups: 8 }, done_when: 'done',
+    done_when: 'done',
   };
   writeFileSync(workerPlanPath(projectRoot), JSON.stringify({ request_digest: requestDigest(projectRoot), workers: [worker] }));
   const behavioral = behavioralBranch();
@@ -218,7 +218,7 @@ test('a planned candidate is blocked when selection review is missing', async ()
     planned_cases: ['successful checkout'], source_paths: ['app/checkout.rb'],
     owned_paths: ['.unitbob/behavioral/features/checkout.feature'],
     harness_path: '.unitbob/behavioral/step_definitions/00_unitbob_world.rb',
-    limits: { planned_cases: 1, fact_finder_lookups: 8 }, done_when: 'done',
+    done_when: 'done',
   };
   writeFileSync(workerPlanPath(projectRoot), JSON.stringify({ request_digest: requestDigest(projectRoot), workers: [worker] }));
   const behavioral = behavioralBranch();

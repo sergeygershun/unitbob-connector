@@ -29,7 +29,7 @@ import { validateBuild } from './verbs/validateBuild.ts';
 import { fixPrepare } from './verbs/fixPrepare.ts';
 import { contractPrompt } from './verbs/contractPrompt.ts';
 import { suiteReviewPrepare } from './verbs/suiteReviewPrepare.ts';
-import { validateWorkerPlan } from './verbs/validateWorkerPlan.ts';
+import { acceptWorkerPlan } from './verbs/acceptWorkerPlan.ts';
 import { validateWorkerCheckpoints } from './verbs/validateWorkerCheckpoints.ts';
 import { installCodexAgents } from './verbs/codexInstall.ts';
 
@@ -56,7 +56,8 @@ Verbs:
   suite-review-prepare Internal: bind an independent BDD quality review to the built behavioral candidate.
   validate-build       Internal: check the host's suite answer against the request, locally, before
                        uploading. Reports every problem at once; put-suite-build runs it too.
-  validate-worker-plan Internal: validate the exact request-bound worker plan before fan-out.
+  accept-worker-plan   Internal: check the exact request-bound worker plan and seed a checkpoint for
+                       every slice it names, before fan-out.
   validate-worker-checkpoints
                        Internal: validate every worker checkpoint before assembly or repair.
   put-suite-build      Internal: upload the host-built guardrail suite (whole spec file + test_metadata),
@@ -131,8 +132,8 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
       case 'validate-build':
         await validateBuild(await linked(), args);
         return 0;
-      case 'validate-worker-plan':
-        await validateWorkerPlan(await linked(), args);
+      case 'accept-worker-plan':
+        await acceptWorkerPlan(await linked(), args);
         return 0;
       case 'validate-worker-checkpoints':
         await validateWorkerCheckpoints(await linked(), args);

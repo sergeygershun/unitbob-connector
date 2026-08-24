@@ -59,7 +59,7 @@ test('a planned candidate gives the reviewer its original assignment and exact b
     planned_cases: ['successful charge'], source_paths: ['app/payments.rb'],
     owned_paths: ['.unitbob/behavioral/features/billing.feature'],
     harness_path: '.unitbob/behavioral/step_definitions/00_unitbob_world.rb',
-    limits: { planned_cases: 1, fact_finder_lookups: 8 }, done_when: 'done',
+    done_when: 'done',
   };
   writeFileSync(workerPlanPath(projectRoot), JSON.stringify({ request_digest: requestDigest(projectRoot), workers: [worker] }));
   const behavioral = {

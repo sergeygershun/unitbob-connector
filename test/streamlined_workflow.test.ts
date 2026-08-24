@@ -183,14 +183,16 @@ test('the suite workflow states no budget, no worker ceiling and no lookup ceili
   assert.match(flat, /no ceiling on how many workers a branch gets/i);
 });
 
-// Criterion 4. The checkpoint is written by the coordinator before fan-out and
-// carries the facts it has already verified — on 2026-08-10 the same list was
-// assembled by hand halfway through the run, and the packets that received it
-// finished completely.
-test('the coordinator seeds every checkpoint with verified facts before fan-out', () => {
-  assert.match(flat, /Seed every planned slice's checkpoint before fan-out/i);
+// Criterion 4, and spec 37-2 criterion 1. Every checkpoint exists before fan-out
+// and carries the facts the coordinator verified — on 2026-08-10 the same list
+// was assembled by hand halfway through the run, and the packets that received
+// it finished completely. The document itself is seeded by `accept-worker-plan`
+// now; what the coordinator adds to it is the facts, and only the facts.
+test('every checkpoint is seeded before fan-out, and the coordinator adds only its facts', () => {
+  assert.match(flat, /Do not write those files yourself/i);
+  assert.match(flat, /Add what you established about this project to the checkpoints step 5 seeded/i);
   assert.match(flat, /source_refs/);
-  const seeding = flat.indexOf("Seed every planned slice's checkpoint");
+  const seeding = flat.indexOf('accept-worker-plan');
   const fanOut = flat.indexOf("Start a branch's workers together");
   assert.ok(seeding >= 0 && fanOut > seeding, 'checkpoints are seeded before the fan-out');
 });
@@ -290,7 +292,7 @@ test('the suite workflow groups failures and keeps the shared file for the coord
 });
 
 test('the suite workflow mechanically gates plan before fan-out and checkpoints before repair', () => {
-  const planGate = flat.indexOf('validate-worker-plan');
+  const planGate = flat.indexOf('accept-worker-plan');
   const fanOut = flat.indexOf("Start a branch's workers together");
   // The checkpoint gate is run twice now, and both runs are asserted: once on the
   // seeds, where a refusal costs seconds rather than sixteen already-launched
@@ -301,7 +303,7 @@ test('the suite workflow mechanically gates plan before fan-out and checkpoints 
   assert.ok(planGate >= 0 && fanOut > planGate);
   assert.ok(seedGate >= 0 && seedGate < fanOut);
   assert.ok(checkpointGate > fanOut);
-  assert.match(flat, /If validation exits non-zero.*stop before fan-out/i);
+  assert.match(flat, /If it exits non-zero.*stop before fan-out/i);
 });
 
 // Still finite where finiteness is about not reusing an exhausted context. Spec

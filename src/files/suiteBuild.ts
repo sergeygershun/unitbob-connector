@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, sep } from 'node:path';
 import type { Recipe, SuitePacket } from '../wire.ts';
@@ -117,6 +117,40 @@ export function reviewRequestPath(projectRoot: string): string {
 
 export function candidateRunPath(projectRoot: string): string {
   return join(projectRoot, '.unitbob', 'suite-build', 'candidate-run.json');
+}
+
+// Spec 37-2, criterion 3. What a new build leaves behind, in the order a reader
+// meets it: the plan, the checkpoints written against that plan, and the answer
+// assembled from them. All three are bound to the `request.json` this run is
+// about to overwrite, so from the next line on they are a previous run's papers
+// wearing this run's filenames — which is exactly the confusion the coordinator
+// used to spend a turn untangling before fan-out.
+const PREVIOUS_RUN_ARTIFACTS = ['worker-plan.json', 'checkpoints', 'suite_output.json'];
+const PREVIOUS_DIR = 'previous';
+
+// Moved, never removed. A run costs hours and real money, and one interrupt plus
+// one restart must not be able to spend that twice — `previous/` is one line
+// more than `rmSync` and it is the line that makes a restart survivable.
+//
+// Replaced one artifact at a time rather than by clearing `previous/` first. The
+// tidier version — wipe, then move whatever exists — loses a complete previous
+// run to a partial one: a build interrupted between writing the plan and seeding
+// its checkpoints displaces only `worker-plan.json`, and clearing would take the
+// finished checkpoints and answer of the run before it with no way back. A
+// `previous/` holding pieces of two runs is worth strictly more than an empty
+// one, and every piece in it is named by the file it kept.
+export function movePreviousRunAside(projectRoot: string): string[] {
+  const buildDir = join(projectRoot, '.unitbob', 'suite-build');
+  const found = PREVIOUS_RUN_ARTIFACTS.filter((name) => existsSync(join(buildDir, name)));
+  if (found.length === 0) return [];
+
+  const previous = join(buildDir, PREVIOUS_DIR);
+  mkdirSync(previous, { recursive: true });
+  for (const name of found) {
+    rmSync(join(previous, name), { recursive: true, force: true });
+    renameSync(join(buildDir, name), join(previous, name));
+  }
+  return found;
 }
 
 export function writeBehavioralReviewRequest(

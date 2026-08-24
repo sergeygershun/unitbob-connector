@@ -382,3 +382,141 @@ test('a damaged run-state file reads as "no previous run"', async () => {
   assert.equal(next.code, 0);
   assert.doesNotMatch(next.out, /Stopping structural/);
 });
+
+// Spec 37-2, criterion 5. The connector already parses all five report formats
+// for the stall comparison, and until now printed none of what it found — so the
+// coordinator reopened `pytest_bdd_report.json` and `pytest_result.xml` with
+// inline `node -e` and `python3`, on the turns where its own context is largest.
+// On the microblog bench that stretch cost 79 coordinator turns and 47% of its
+// input tokens.
+test('a red run is read out: which case, which file, and what it said', async () => {
+  const projectRoot = project([structuralAnswer()]);
+  const { out, stdout } = collect();
+  const report = JSON.stringify({
+    examples: [
+      {
+        description: 'ubc_0123456789ab charges the card',
+        full_description: 'Checkout ubc_0123456789ab charges the card',
+        file_path: './.unitbob/structural/checkout_spec.rb',
+        status: 'failed',
+        exception: { message: 'expected 200, got 500\n  ./app/pay.rb:12', backtrace: ['./app/pay.rb:12'] },
+      },
+      { description: 'ubc_ba9876543210 refunds', file_path: './x_spec.rb', status: 'passed' },
+    ],
+  });
+
+  await runLocal(config(projectRoot), ['structural'], {
+    runStructural: async () => runnerResult({ report, code: 1 }),
+    runBehavioral: async () => runnerResult(),
+    validateStack: () => okStack,
+    stdout,
+  });
+
+  const printed = out.join('');
+  assert.match(printed, /1 case failed, read out of \.unitbob\/structural\/rspec_result\.json/);
+  assert.match(printed, /Do not open that file to find this again/);
+  assert.match(printed, /Checkout ubc_0123456789ab charges the card — \.\/\.unitbob\/structural\/checkout_spec\.rb/);
+  assert.match(printed, /expected 200, got 500/);
+  assert.match(printed, /\.\/app\/pay\.rb:12/);
+  // A passing example is not read out.
+  assert.doesNotMatch(printed, /refunds/);
+});
+
+test('a green run is read out as nothing at all', async () => {
+  const projectRoot = project([structuralAnswer()]);
+  const { out, stdout } = collect();
+
+  await runLocal(config(projectRoot), ['structural'], {
+    runStructural: async () => runnerResult({ report: '{"examples":[]}' }),
+    runBehavioral: async () => runnerResult(),
+    validateStack: () => okStack,
+    stdout,
+  });
+
+  assert.doesNotMatch(out.join(''), /cases? failed, read out of/);
+});
+
+// The step is half the answer to "where do I look", and it is the half a
+// structural runner cannot give — so it appears exactly where the format has one.
+test('a red behavioral run also names the step the scenario broke on', async () => {
+  const projectRoot = project([behavioralAnswer()]);
+  const { out, stdout } = collect();
+  const report = [
+    { pickle: { id: 'p1', name: 'A shopper pays', uri: '.unitbob/behavioral/features/pay.feature',
+      tags: [{ name: '@ubc_0123456789ab' }], steps: [{ id: 'ps1', text: 'the buyer confirms the cart' }] } },
+    { testCase: { id: 'tc1', pickleId: 'p1', testSteps: [{ id: 's1', pickleStepId: 'ps1' }] } },
+    { testCaseStarted: { id: 'run1', testCaseId: 'tc1' } },
+    { testStepFinished: { testCaseStartedId: 'run1', testStepId: 's1',
+      testStepResult: { status: 'FAILED', message: 'NoMethodError: undefined method `total\'' } } },
+  ].map((line) => JSON.stringify(line)).join('\n');
+
+  await runLocal(config(projectRoot), ['behavioral'], {
+    runStructural: async () => runnerResult(),
+    runBehavioral: async () => runnerResult({ report, code: 1, resultPath: '.unitbob/behavioral/cucumber_messages.ndjson' }),
+    validateStack: () => okStack,
+    stdout,
+  });
+
+  const printed = out.join('');
+  assert.match(printed, /A shopper pays — \.unitbob\/behavioral\/features\/pay\.feature/);
+  assert.match(printed, /step: the buyer confirms the cart/);
+  assert.match(printed, /NoMethodError: undefined method/);
+});
+
+// The full backtrace stays in the report file this line already names; what is
+// printed is bounded, and says so rather than trailing off.
+test('a very long message is cut short in the open', async () => {
+  const projectRoot = project([structuralAnswer()]);
+  const { out, stdout } = collect();
+  const report = JSON.stringify({
+    examples: [{
+      description: 'ubc_0123456789ab charges', full_description: 'Checkout charges',
+      file_path: './x_spec.rb', status: 'failed',
+      exception: { message: ['line one', ...Array.from({ length: 40 }, (_, i) => `frame ${i}`)].join('\n') },
+    }],
+  });
+
+  await runLocal(config(projectRoot), ['structural'], {
+    runStructural: async () => runnerResult({ report, code: 1 }),
+    runBehavioral: async () => runnerResult(),
+    validateStack: () => okStack,
+    stdout,
+  });
+
+  const printed = out.join('');
+  assert.match(printed, /line one/);
+  assert.match(printed, /…/);
+  assert.doesNotMatch(printed, /frame 39/);
+});
+
+// The run this read-out most exists for is the first red one, where the harness
+// is not wired and every case fails. Unbounded, that is half a megabyte into the
+// context this spec exists to make cheaper — so the block is capped, and what
+// did not fit is counted rather than dropped in silence.
+test('a branch where everything failed is bounded, and says how much it left out', async () => {
+  const projectRoot = project([structuralAnswer()]);
+  const { out, stdout } = collect();
+  const report = JSON.stringify({
+    examples: Array.from({ length: 400 }, (_, i) => ({
+      description: `ubc_${String(i).padStart(12, '0')} guards`,
+      full_description: `Checkout guards case number ${i} of the whole branch`,
+      file_path: `./.unitbob/structural/case_${i}_spec.rb`,
+      status: 'failed',
+      exception: { message: `NameError: uninitialized constant Something${i}\n  ./app/x.rb:1` },
+    })),
+  });
+
+  await runLocal(config(projectRoot), ['structural'], {
+    runStructural: async () => runnerResult({ report, code: 1 }),
+    runBehavioral: async () => runnerResult(),
+    validateStack: () => okStack,
+    stdout,
+  });
+
+  const printed = out.join('');
+  assert.match(printed, /400 cases failed, read out of/);
+  assert.match(printed, /…and \d+ more failed cases, not printed to keep this readable/);
+  assert.ok(printed.length < 60_000, `the read-out ran to ${printed.length} characters`);
+  // The ones that were printed are whole, not cut mid-failure.
+  assert.match(printed, /1\. Checkout guards case number 0 of the whole branch/);
+});

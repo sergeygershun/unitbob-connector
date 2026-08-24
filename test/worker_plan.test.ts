@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { validateWorkerPlan } from '../src/verbs/validateWorkerPlan.ts';
+import { acceptWorkerPlan } from '../src/verbs/acceptWorkerPlan.ts';
 import { workerPlanPath, workerPlanDigest, validateWorkerPlanFiles } from '../src/files/workerPlan.ts';
 
 function project(): string {
@@ -38,14 +38,13 @@ function item(branch: string, workerId: string, capabilities: string[], promises
     harness_path: branch === 'behavioral'
       ? '.unitbob/behavioral/step_definitions/00_unitbob_world.rb'
       : '.unitbob/structural/unitbob_helper.rb',
-    limits: { planned_cases: plannedCases.length },
     done_when: 'All planned cases are written and checkpointed.',
   };
 }
 
 test('validates a complete non-empty plan and returns its exact-byte digest', async () => {
   const root = project();
-  const result = await validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } });
+  const result = await acceptWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } });
   assert.equal(result.plan_digest, workerPlanDigest(root));
 });
 
@@ -57,11 +56,10 @@ test('reports every plan problem in one batch', async () => {
   plan.workers[1].capability_ids = ['b1'];
   plan.workers[1].owned_paths = plan.workers[0].owned_paths;
   plan.workers[1].planned_cases = ['a', 'b', 'c'];
-  plan.workers[1].limits.planned_cases = 3;
   writeFileSync(path, JSON.stringify(plan));
 
   await assert.rejects(
-    validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    acceptWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
     (error: Error) => {
       assert.match(error.message, /request_digest/);
       assert.match(error.message, /b1.*more than once|more than once.*b1/i);
@@ -79,7 +77,7 @@ test('rejects empty slices', async () => {
   writeFileSync(path, JSON.stringify(plan));
 
   await assert.rejects(
-    validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    acceptWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
     /non-empty/i,
   );
 });
@@ -101,7 +99,7 @@ test('a plan that covers part of the assignment passes, at any width and any bal
   ];
   writeFileSync(path, `${JSON.stringify(plan, null, 2)}\n`);
 
-  const result = await validateWorkerPlan(
+  const result = await acceptWorkerPlan(
     { server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } },
   );
 
@@ -118,7 +116,7 @@ test('a capability the request never assigned is still an error', async () => {
   writeFileSync(path, JSON.stringify(plan));
 
   await assert.rejects(
-    validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    acceptWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
     /c9 was not assigned by the request/i,
   );
 });
@@ -131,7 +129,7 @@ test('a branch with an assignment and no slice at all is still an error', async 
   writeFileSync(path, JSON.stringify(plan));
 
   await assert.rejects(
-    validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    acceptWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
     /behavioral: no worker slice was planned/i,
   );
 });
@@ -145,7 +143,7 @@ test('reports malformed worker items without throwing a raw TypeError', async ()
   writeFileSync(path, JSON.stringify(plan));
 
   await assert.rejects(
-    validateWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    acceptWorkerPlan({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
     (error: Error) => {
       assert.match(error.message, /workers\[0\].*must be an object/);
       assert.match(error.message, /owned path/);

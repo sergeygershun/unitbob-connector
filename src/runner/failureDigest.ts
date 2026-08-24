@@ -23,6 +23,26 @@ export interface Failure {
   message: string;
 }
 
+// Spec 37-2, criterion 5. Same parse, read for the other question.
+//
+// The three fields above are what identifies a failure across two runs, and they
+// are deliberately less than what a person needs to act on one: no name, no
+// step, and only the first line of the message. Until now that was all the
+// connector ever produced from a report, so the coordinator opened
+// `pytest_bdd_report.json` and `pytest_result.xml` with inline `node -e` and
+// `python3` — at 300,000 tokens of context per turn — to recover the rest. The
+// format is this module's knowledge; it does not become the coordinator's
+// because nobody printed it.
+//
+// `detail` is the whole message rather than its first line, and it is on this
+// record alone: nothing here reaches the digest, so drifting object ids and
+// absolute paths cost nothing.
+export interface ReportedFailure extends Failure {
+  name: string;
+  step: string;
+  detail: string;
+}
+
 export const RUN_STATE_FILE = 'run-state.json';
 
 // A marker embedded in a reported test name or Gherkin tag. Same shape the
@@ -36,9 +56,17 @@ const MARKER = /ubc_[0-9a-f]{12}(?![0-9a-f])/;
 // the first test produces no set at all, and comparing against nothing would
 // stop a branch over a harness problem the loop never even reached.
 export function failureSet(runner: string, report: string): Failure[] | null {
+  const found = reportedFailures(runner, report);
+  return found && canonical(found.map(({ marker, file, message }) => ({ marker, file, message })));
+}
+
+// The same failures, with everything a reader needs and the comparison does not.
+// Reported in the order the runner reported them: this list is read by a person
+// deciding what to repair, and a run's own order is the one that matches the
+// console output next to it.
+export function reportedFailures(runner: string, report: string): ReportedFailure[] | null {
   if (!report.trim()) return null;
-  const found = extract(runner, report);
-  return found && canonical(found);
+  return extract(runner, report);
 }
 
 // One hash for one set. Same set, same hash, on any machine and in any order.
@@ -103,7 +131,7 @@ function keyOf(failure: Failure): string {
 // run — the server owns every verdict a report leads to. This one only asks "is
 // this the same wall we hit last time", and its answer reaches nothing but an
 // exit code.
-function extract(runner: string, report: string): Failure[] | null {
+function extract(runner: string, report: string): ReportedFailure[] | null {
   switch (runner) {
     case 'rspec':
       return fromRspec(report);
@@ -121,7 +149,7 @@ function extract(runner: string, report: string): Failure[] | null {
   }
 }
 
-function fromRspec(report: string): Failure[] | null {
+function fromRspec(report: string): ReportedFailure[] | null {
   const data = parseObject(report);
   if (!Array.isArray(data?.examples)) return null;
 
@@ -129,11 +157,13 @@ function fromRspec(report: string): Failure[] | null {
     if (example.status === 'passed') return [];
     const name = `${text(example.description)} ${text(example.full_description)}`;
     const exception = example.exception as Record<string, unknown> | undefined;
-    return [failure(name, text(example.file_path), text(exception?.message))];
+    return [failure(name, text(example.file_path), text(exception?.message), {
+      name: text(example.full_description) || text(example.description),
+    })];
   });
 }
 
-function fromVitest(report: string): Failure[] | null {
+function fromVitest(report: string): ReportedFailure[] | null {
   const data = parseObject(report);
   if (!Array.isArray(data?.testResults)) return null;
 
@@ -143,7 +173,9 @@ function fromVitest(report: string): Failure[] | null {
       if (assertion.status === 'passed') return [];
       const messages = Array.isArray(assertion.failureMessages) ? assertion.failureMessages : [];
       const name = `${text(assertion.title)} ${text(assertion.fullName)}`;
-      return [failure(name, text(file.name), messages.map((m) => text(m)).join('\n'))];
+      return [failure(name, text(file.name), messages.map((m) => text(m)).join('\n'), {
+        name: text(assertion.fullName) || text(assertion.title),
+      })];
     });
   });
 }
@@ -158,23 +190,63 @@ function fromVitest(report: string): Failure[] | null {
 // a branch whose only permanent case is a skip, and it would do it while the
 // repair was still fixing everything else. A skip that should not be there is
 // caught at upload, where it costs a message rather than a branch.
-function fromJunitXml(report: string): Failure[] | null {
+function fromJunitXml(report: string): ReportedFailure[] | null {
   if (!/<testsuites?\b/.test(report)) return null;
 
-  const cases = report.match(/<testcase\b[^>]*(?:\/>|>[\s\S]*?<\/testcase>)/g) ?? [];
+  // Self-closing first, and as its own alternative rather than a branch inside
+  // one `[^>]*`. Written the other way the engine backtracks out of `\/>` into
+  // `>[\s\S]*?<\/testcase>` and swallows the next element whole, so a passing
+  // self-closed case immediately before a failing one hands back the passing
+  // one's name and file. Harmless while this was only hashed; wrong the moment
+  // spec 37-2 started printing it to somebody deciding what to repair.
+  const cases = report.match(/<testcase\b[^>]*\/>|<testcase\b[^>]*>[\s\S]*?<\/testcase>/g) ?? [];
   return cases.flatMap((testcase) => {
-    const problem = testcase.match(/<(?:failure|error)\b[^>]*(?:\/>|>[\s\S]*?<\/(?:failure|error)>)/);
+    const problem = testcase.match(/<(failure|error)\b[^>]*\/>|<(failure|error)\b[^>]*>([\s\S]*?)<\/(?:failure|error)>/);
     if (!problem) return [];
     const name = attribute(testcase, 'name');
     const file = attribute(testcase, 'file') || attribute(testcase, 'classname');
-    return [failure(name, file, attribute(problem[0], 'message'))];
+    const message = attribute(problem[0], 'message');
+    // pytest puts the one-line summary in `message=` and the assertion with its
+    // traceback in the element's body. The body is what a person needs; the
+    // attribute is what the digest compares, and changing its bytes would make
+    // every branch look like it had moved once.
+    const body = unescapeXml(problem[3] ?? '').trim();
+    return [failure(name, file, message, {
+      name,
+      detail: [unescapeXml(message), body].filter(Boolean).join('\n'),
+    })];
   });
+}
+
+// The five entities XML defines plus numeric references — pytest escapes its
+// newlines as `&#10;`, and a traceback rendered as one line of `&#10;` is not a
+// traceback. This is pytest's own writer on the other end, not arbitrary markup.
+// `&amp;` last, so `&amp;lt;` comes back as `&lt;` rather than as `<`.
+function unescapeXml(value: string): string {
+  return value
+    .replace(/&#(\d+);/g, (whole, code) => codePoint(Number(code), whole))
+    .replace(/&#x([0-9a-f]+);/gi, (whole, code) => codePoint(parseInt(code, 16), whole))
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+// A reference outside Unicode is left as it was written. Nothing here is worth
+// throwing over: this runs while somebody is reading why their suite is red.
+function codePoint(value: number, whole: string): string {
+  try {
+    return String.fromCodePoint(value);
+  } catch {
+    return whole;
+  }
 }
 
 // Cucumber Messages (NDJSON), both the Ruby and the JS emitter. One scenario is
 // spread over several envelopes: the pickle holds its name, tags and file, the
 // testCase maps its steps, and testStepFinished carries each step's result.
-function fromCucumberMessages(report: string): Failure[] | null {
+function fromCucumberMessages(report: string): ReportedFailure[] | null {
   const envelopes: Record<string, unknown>[] = [];
   for (const line of report.split('\n')) {
     if (!line.trim()) continue;
@@ -192,7 +264,13 @@ function fromCucumberMessages(report: string): Failure[] | null {
     if (!finished) continue;
     const startedId = text(finished.testCaseStartedId);
     const list = results.get(startedId) ?? [];
-    list.push((finished.testStepResult as Record<string, unknown>) ?? {});
+    list.push({
+      // The step's own id travels with its result, so the text of the step that
+      // failed can be recovered from the pickle it came from (spec 37-2,
+      // criterion 5). Nothing in the digest reads it.
+      testStepId: finished.testStepId,
+      ...((finished.testStepResult as Record<string, unknown>) ?? {}),
+    });
     results.set(startedId, list);
   }
 
@@ -208,32 +286,67 @@ function fromCucumberMessages(report: string): Failure[] | null {
     const tags = Array.isArray(pickle.tags) ? pickle.tags : [];
     const tagText = rows(tags).map((tag) => text(tag.name)).join(' ');
     const message = failed.map((step) => text(step.message)).find((line) => line.trim()) ?? '';
-    return [failure(`${tagText} ${text(pickle.name)}`, text(pickle.uri), message)];
+    return [failure(`${tagText} ${text(pickle.name)}`, text(pickle.uri), message, {
+      name: text(pickle.name),
+      step: cucumberStepText(failed[0], testCase, pickle),
+    })];
   });
 }
 
-// The connector's own pytest-bdd report (`runner/pytestBddPlugin.ts`). It names
-// no file — the whole behavioral bundle is one run — so the scenario's marker
-// and message carry the identity alone.
-function fromPytestBdd(report: string): Failure[] | null {
+// Which step of that Scenario failed, in the words of the feature file. Three
+// hops, because Cucumber Messages keeps the result, the mapping and the text in
+// three different envelopes: result → testStep → pickleStep.
+function cucumberStepText(
+  failed: Record<string, unknown>,
+  testCase: Record<string, unknown>,
+  pickle: Record<string, unknown>,
+): string {
+  const testSteps = Array.isArray(testCase.testSteps) ? rows(testCase.testSteps) : [];
+  const testStep = testSteps.find((step) => text(step.id) === text(failed.testStepId));
+  if (!testStep) return '';
+  const pickleSteps = Array.isArray(pickle.steps) ? rows(pickle.steps) : [];
+  return text(pickleSteps.find((step) => text(step.id) === text(testStep.pickleStepId))?.text);
+}
+
+// The connector's own pytest-bdd report (`runner/pytestBddPlugin.ts`). Its
+// `file` is the `.feature` the Scenario came from, and it is empty on a report
+// written by a connector older than spec 37-2 — which is why it is read
+// defensively rather than assumed.
+function fromPytestBdd(report: string): ReportedFailure[] | null {
   const data = parseObject(report);
   if (!Array.isArray(data?.scenarios)) return null;
 
   return rows(data.scenarios).flatMap((scenario) => {
     if (text(scenario.status) === 'passed') return [];
     const tags = Array.isArray(scenario.tags) ? scenario.tags.map((tag) => text(tag)).join(' ') : '';
-    return [failure(`${tags} ${text(scenario.name)}`, '', text(scenario.failure))];
+    // Our own plugin records one entry per step with its status, and marks the
+    // one it caught the exception in — so the step is read, never guessed.
+    const steps = Array.isArray(scenario.steps) ? rows(scenario.steps) : [];
+    const broke = steps.find((step) => text(step.status) === 'failed');
+    return [failure(`${tags} ${text(scenario.name)}`, text(scenario.file), text(scenario.failure), {
+      name: text(scenario.name),
+      step: broke ? `${text(broke.keyword)} ${text(broke.text)}`.trim() : '',
+    })];
   });
 }
 
-// Only the first line of a message. Later lines are backtraces and diffs, which
+// `message` is only the first line. Later lines are backtraces and diffs, which
 // carry object ids and absolute paths that differ between two runs of the same
-// unchanged failure — the very drift that would make this comparison useless.
-function failure(name: string, file: string, message: string): Failure {
+// unchanged failure — the very drift that would make the comparison useless.
+// `detail` keeps all of it: nothing on that field is hashed.
+function failure(
+  name: string,
+  file: string,
+  message: string,
+  extra: { name?: string; step?: string; detail?: string } = {},
+): ReportedFailure {
   return {
     marker: name.match(MARKER)?.[0] ?? '',
     file,
     message: message.split('\n')[0]?.trim() ?? '',
+    name: (extra.name ?? name).trim(),
+    step: extra.step ?? '',
+    detail: (extra.detail ?? message).trim(),
   };
 }
 
