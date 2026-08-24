@@ -105,19 +105,30 @@ after its bounded phase.
    connector's source, and do not take it from memory: a step file the runner
    does not load raises nothing, contributes no scenarios, and comes back green.
 
-3. Choose which lamps this build guards, before you plan anything. The
-   behavioral assignment lists every capability of the product map. A build that
-   takes all of them hands each worker more work than fits: on a2time,
-   2026-08-10, one worker carried 8–11 capabilities, seven of eight workers
-   wrote no file at all, and the run spent about 1.51M tokens on nothing.
+3. Choose which lamps this build guards, before you plan anything, and choose
+   for **both** branches in one message. The behavioral assignment lists every
+   capability of the product map; the structural one lists every interface of
+   every block. Scope is not about what fits in a worker — step 4 measures that,
+   and it is rarely the binding constraint. It is about what is worth writing,
+   running and repairing at all: on a2time, 2026-08-10, a build that took every
+   capability gave one worker 8–11 of them, seven of eight workers wrote no file
+   at all, and the run spent about 1.51M tokens on nothing.
 
    Read the behavioral assignment's capability list and propose the important
    ones, with a reason each in plain words. Judge from what the assignment
    already carries — `title`, `description`, and the `surfaces`, `tables` and
    `externals` lists. Money and access rights, many addresses, several external
    systems: those are readable signals. There is no weight formula and no target
-   number of lamps. Aim to spread roughly one 2026-08-10 worker's load across
-   several workers instead of piling it on one.
+   number of lamps. Propose what is worth guarding first, not how many workers it
+   will take: how it divides is step 4's question and is measured, not judged.
+
+   Do the same for the structural assignment, from the blocks and interfaces it
+   already names. This branch used to be exempt — "it covers its whole
+   assignment" — on the argument that its examples are cheap to run. They are;
+   the assignment is not. On microblog, 2026-08-23, the answer narrowed the
+   behavioral branch to eight lamps of fourteen and left all thirty-two
+   interfaces in, so the question the user was asked reached eight of the
+   fifteen workers that followed and the other seven were never put to them.
 
    Then ask the user in one message: these lamps, or which ones instead. **Do
    not plan or fan out before the user answers.** This is the only place in the
@@ -132,27 +143,27 @@ after its bounded phase.
    files — billing pulls in users, projects and clients — so a capability left
    out is one you do not aim at, never one you may not read.
 
-   The structural branch is never narrowed: it covers its whole assignment. Its
-   examples run in seconds, need no data setup, and repair cleanly.
-
    Nothing records this choice except the plan you write next. The assignment
    stays exactly as the server sent it, and the publication line still counts
    against the whole map.
 
-   The coverage manifest you write in step 9 stays exhaustive all the same: every
-   assigned capability gets exactly one answer. The lamps you guarded are
-   `covered`; every lamp you left out is `unguarded` with a reason saying so in
-   one plain sentence — "not in this build's scope; billing and access were
-   guarded first" is a reason, "n/a" is not. An unguarded lamp is the honest
-   state of a capability nobody guarded yet, and leaving it out of the manifest
-   altogether is rejected at upload.
+   The coverage manifest you write in step 9 stays exhaustive all the same, on
+   both branches: every assigned capability and every assigned interface gets
+   exactly one answer. What you guarded is `covered`; everything you left out is
+   `unguarded` with a reason saying so in one plain sentence — "not in this
+   build's scope; billing and access were guarded first" is a reason, "n/a" is
+   not. An unguarded lamp is the honest state of something nobody guarded yet,
+   and leaving it out of the manifest altogether is rejected at upload.
 
 4. Write strict JSON to `.unitbob/suite-build/worker-plan.json`. Compute
    `request_digest` as SHA-256 of the exact `request.json` bytes. The plan has
    this shape:
 
    ```json
-   { "request_digest": "<sha256>", "workers": [
+   { "request_digest": "<sha256>",
+     "fan_out": { "structural": { "work_tokens": 45280, "workers": 1 },
+                  "behavioral": { "work_tokens": 16100, "workers": 1 } },
+     "workers": [
      { "branch": "structural|behavioral", "worker_id": "stable-id",
        "capability_ids": ["opaque ids copied from assignment"],
        "promises": ["finite business promises"],
@@ -164,14 +175,36 @@ after its bounded phase.
    ] }
    ```
 
-   Plan every requested branch. The behavioral branch is planned over the lamps
-   the user confirmed in step 3 and no others; the structural branch is planned
-   over its whole assignment. There is no ceiling on how many workers a branch
-   gets: an agent re-reads its context every turn, so splitting the work never
-   costs more than keeping it together. Never create an empty slice. Assign each
-   planned capability exactly once and use globally unique worker ids and owned
-   paths. Balance visible business complexity, but do not invent weights or a
-   scheduler.
+   Plan every requested branch over the lamps the user confirmed in step 3 and
+   no others — the structural branch by the same rule as its peer, now that the
+   question in step 3 covers both.
+
+   **How many workers a branch gets is decided by how much work it is, and
+   `suite-prepare` has already printed that number.** It printed a *ceiling*,
+   over the whole assignment: plan that many or fewer, never more. Fewer is
+   ordinary — a capability cannot be cut in half, and you have narrowed the
+   scope since.
+
+   `fan_out` records what you actually did: `work_tokens` as
+   `accept-worker-plan` measures it — over the capabilities this plan takes, not
+   the whole assignment, so it is usually below the number `suite-prepare`
+   showed — and `workers` as the count of slices you wrote for that branch.
+   Both are checked, and a width above what the work needs is refused.
+
+   The rule here used to be that there was no ceiling at all — that an agent
+   re-reads its context every turn, so splitting never costs more than keeping
+   the work together. That is true of the work and false of everything else a
+   worker carries. A worker's opening context is its role, its recipe and its
+   plan item: 26,065 tokens on microblog, 2026-08-24, the same to within ±370
+   across fifteen workers, and it is bought once per worker rather than divided
+   between them. Those fifteen spent about 391,000 tokens on it to carry 39,652
+   tokens of work — the entire job weighed a shade over one and a half of the
+   preambles bought to carry it, and fifteen were bought.
+
+   Never create an empty slice. Assign each planned capability exactly once and
+   use globally unique worker ids and owned paths. Do not invent weights or a
+   scheduler, and do not judge the width by how complicated the business looks:
+   the only number is the measured one.
 
    A promise may have several planned behavioral scenario intents. Plan the
    scenarios the business outcome actually needs — no quota, in either
@@ -182,7 +215,8 @@ after its bounded phase.
 5. Run `npx -y --loglevel=error unitbob@0.7.0 accept-worker-plan`. If it exits
    non-zero, fix the whole reported batch and run it again. If it remains
    non-zero, stop before fan-out. The gate checks that the plan is intact —
-   digests, ids, paths, capabilities that were actually assigned — and no longer
+   digests, ids, paths, capabilities that were actually assigned, and the
+   `fan_out` of step 4 against the packets on disk — and no longer
    requires it to cover every capability in the assignment; that is what step 3
    decided. Do not replace this gate with a receipt, hook, or home-grown
    orchestrator.
@@ -202,10 +236,14 @@ after its bounded phase.
    `graphify-out/graph.json` and `.unitbob/map-build/surfaces.json` and copied by
    `suite-prepare` into `.unitbob/suite-build/packets/`. It has nothing to do
    with the failure and repair packets of steps 11-13. Keep that output: step 7
-   hands each worker its own paths out of it. The sizes are there to be read, not
-   obeyed — nothing is refused for being large. An entrypoint whose file was
+   hands each worker its own paths out of it. No packet is ever refused for being
+   large, and no worker is refused work for carrying a lot of it — the sizes bind
+   in exactly one place, the branch-wide `fan_out` of step 4, and never per
+   worker. An entrypoint whose file was
    found but was too large to carry is printed as a path to open in place; one
-   that resolved to nothing says so, and that worker searches as before.
+   that resolved to nothing says so, and that worker searches as before. Both
+   still count as work: the branch's total prices a file it could not carry at
+   its real size, and an entrypoint nothing resolved at what the others average.
 
 6. Add what you established about this project to the checkpoints step 5 seeded.
    That is the one thing in them no script can know, and it is the only thing in
@@ -274,6 +312,23 @@ after its bounded phase.
    generic subagent and never continue an exhausted context. Start a branch's
    workers together, in one go.
    Sequential slices save nothing and finish later.
+
+   **In one go means one message.** All of a branch's workers are launched by a
+   single message carrying one launch per slice — not by fifteen messages
+   carrying one launch each. This rule has been here all along and both measured
+   runs broke it the same way. On microblog, 2026-08-23, the fifteen launches
+   went out one per turn and cost **3,543,510 tokens** between them: a turn
+   re-reads your whole context, yours is the longest-lived context in the run,
+   and fifteen launch turns is that context bought fifteen times over. It bought
+   nothing — the workers ran concurrently either way, fourteen of them at once,
+   sixty-two minutes of work inside ten minutes of clock.
+
+   Then wait for the branch, not for each worker. Their returns arrive one at a
+   time and each one hands you a turn; on that same run the fifteen return turns
+   cost a further **3,573,675 tokens**. You cannot decline those turns, so make
+   them cost nothing else: a slice that has come back needs no acknowledgement,
+   no progress line and no inspection — its files are on disk and its checkpoint
+   is written, and step 8 is what reads them. One report, once the branch is in.
 
    Before you launch them, repeat step 0's check — `unitbob:suite-reviewer` on
    Claude Code, `suite-reviewer` on Codex, one word back. This is the last point
@@ -362,6 +417,14 @@ after its bounded phase.
    server catches that at publish, because it parses Gherkin and reads tags; the
    structural server deliberately does not, and a green lamp with nothing behind
    it is the one outcome this entire workflow exists to prevent.
+
+   Everything the plan never took has no checkpoint at all, and that is where its
+   answer comes from: no slice, no checkpoint, therefore `unguarded`, with the
+   reason step 3 already settled. This is the only entry in the manifest whose
+   source is the plan rather than a checkpoint, and since step 3 now narrows both
+   branches it exists on both. Do not go looking for a checkpoint that was never
+   seeded, and do not leave the entry out — the upload refuses a manifest that
+   answers for fewer than every assigned id.
 
    Write strict JSON only to the request's `output_path`, one entry for every
    requested branch. Each branch names one main file and every other file it

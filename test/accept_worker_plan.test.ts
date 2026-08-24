@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { PACKETS_DIR, packetIndexPath, type PacketTarget } from '../src/files/packets.ts';
+import { branchWorkloads } from '../src/files/fanOut.ts';
 import { checkpointPath, workerPlanDigest, workerPlanPath } from '../src/files/workerPlan.ts';
 import { acceptWorkerPlan } from '../src/verbs/acceptWorkerPlan.ts';
 import { validateWorkerCheckpoints } from '../src/verbs/validateWorkerCheckpoints.ts';
@@ -27,20 +28,40 @@ function project(packets?: PacketTarget[]): string {
   };
   const bytes = `${JSON.stringify(request, null, 2)}\n`;
   writeFileSync(join(root, '.unitbob/suite-build/request.json'), bytes);
-  writeFileSync(workerPlanPath(root), `${JSON.stringify({
-    request_digest: createHash('sha256').update(bytes).digest('hex'),
-    workers: [
-      item('s1', ['b1'], '.unitbob/structural/s1_spec.rb'),
-      item('s2', ['b2'], '.unitbob/structural/s2_spec.rb'),
-    ],
-  }, null, 2)}\n`);
 
+  // The index goes down before the plan, because since spec 37-3 the plan has
+  // to state the work it was divided from and that is measured from the packets.
   if (packets) {
     mkdirSync(join(root, PACKETS_DIR), { recursive: true });
     writeFileSync(packetIndexPath(root), `${JSON.stringify({ targets: packets }, null, 2)}\n`);
   }
+
+  const workers = [
+    item('s1', ['b1'], '.unitbob/structural/s1_spec.rb'),
+    item('s2', ['b2'], '.unitbob/structural/s2_spec.rb'),
+  ];
+  const fan_out: Record<string, { work_tokens: number; workers: number }> = {};
+  for (const load of branchWorkloads(root)) {
+    const mine = workers.filter((worker) => worker.branch === load.branch).length;
+    if (mine > 0) fan_out[load.branch] = { work_tokens: load.work_tokens, workers: mine };
+  }
+
+  writeFileSync(workerPlanPath(root), `${JSON.stringify({
+    request_digest: createHash('sha256').update(bytes).digest('hex'),
+    ...(Object.keys(fan_out).length > 0 ? { fan_out } : {}),
+    workers,
+  }, null, 2)}\n`);
   return root;
 }
+
+// Spec 37-3, criterion 1. These fixtures plan two slices, and two slices are now
+// only legal for work that does not fit in one — so the packets below have to
+// describe a project big enough to need two. Both halves stay under
+// MAX_PACKET_BYTES (200,000), because a single packet larger than that cannot
+// exist on disk: `copyPacket` refuses to write it. One file can therefore never
+// justify a second worker, which is the rule working, not a fixture problem.
+const BIG_HALF = 160_000;
+const SMALL_HALF = 140_000;
 
 function item(workerId: string, capabilityIds: string[], ownedPath: string) {
   return {
@@ -66,23 +87,24 @@ function seed(root: string, workerId: string): Record<string, unknown> {
 
 test('each worker is told which packets are its own and what they weigh', async () => {
   const root = project([
-    { branch: 'structural', id: 'b1', entrypoint: 'User#pay', packet: `${PACKETS_DIR}/app/models.py`, bytes: 1200 },
-    { branch: 'structural', id: 'b1', entrypoint: 'User#refund', packet: `${PACKETS_DIR}/app/models.py`, bytes: 1200 },
-    { branch: 'structural', id: 'b2', entrypoint: 'Cart#add', packet: `${PACKETS_DIR}/app/cart.py`, bytes: 340 },
+    { branch: 'structural', id: 'b1', entrypoint: 'User#pay', packet: `${PACKETS_DIR}/app/models.py`, bytes: BIG_HALF },
+    { branch: 'structural', id: 'b1', entrypoint: 'User#refund', packet: `${PACKETS_DIR}/app/models.py`, bytes: BIG_HALF },
+    { branch: 'structural', id: 'b2', entrypoint: 'Cart#add', packet: `${PACKETS_DIR}/app/cart.py`, bytes: SMALL_HALF },
   ]);
 
   const output = await run(root);
 
   // Two entrypoints in one file are one packet, counted once.
-  assert.match(output, /structural:s1 — 1 packet, 1,200 bytes:/);
-  assert.match(output, /structural:s2 — 1 packet, 340 bytes:/);
+  assert.match(output, /structural:s1 — 1 packet, 160,000 bytes:/);
+  assert.match(output, /structural:s2 — 1 packet, 140,000 bytes:/);
   assert.match(output, new RegExp(`${PACKETS_DIR}/app/models\\.py`));
   assert.match(output, new RegExp(`${PACKETS_DIR}/app/cart\\.py`));
 });
 
 test('a worker whose entrypoints did not resolve is told it reads the source itself', async () => {
   const root = project([
-    { branch: 'structural', id: 'b1', entrypoint: 'User#pay', packet: `${PACKETS_DIR}/app/models.py`, bytes: 1200 },
+    { branch: 'structural', id: 'b1', entrypoint: 'User#pay', packet: `${PACKETS_DIR}/app/models.py`, bytes: BIG_HALF },
+    { branch: 'structural', id: 'b1', entrypoint: 'User#save', packet: `${PACKETS_DIR}/app/store.py`, bytes: SMALL_HALF },
     { branch: 'structural', id: 'b2', entrypoint: 'Cart#add', note: 'no single file answers to this name' },
   ]);
 
@@ -100,8 +122,8 @@ test('a plan with no packet index says nothing about packets at all', async () =
 
 test('an over-fuse entrypoint hands the worker the path instead of calling it unresolved', async () => {
   const root = project([
-    { branch: 'structural', id: 'b1', entrypoint: 'Huge#create', source_file: 'app/huge.rb' },
-    { branch: 'structural', id: 'b2', entrypoint: 'Cart#add', packet: `${PACKETS_DIR}/app/cart.py`, bytes: 340 },
+    { branch: 'structural', id: 'b1', entrypoint: 'Huge#create', source_file: 'app/huge.rb', bytes: 250_000 },
+    { branch: 'structural', id: 'b2', entrypoint: 'Cart#add', packet: `${PACKETS_DIR}/app/cart.py`, bytes: SMALL_HALF },
   ]);
 
   const output = await run(root);
@@ -112,13 +134,14 @@ test('an over-fuse entrypoint hands the worker the path instead of calling it un
 
 test('two branches sharing one id do not receive each other packets', async () => {
   const root = project([
-    { branch: 'structural', id: 'b1', entrypoint: 'User#pay', packet: `${PACKETS_DIR}/app/models.py`, bytes: 1200 },
+    { branch: 'structural', id: 'b1', entrypoint: 'User#pay', packet: `${PACKETS_DIR}/app/models.py`, bytes: BIG_HALF },
+    { branch: 'structural', id: 'b1', entrypoint: 'User#save', packet: `${PACKETS_DIR}/app/store.py`, bytes: SMALL_HALF },
     { branch: 'behavioral', id: 'b1', entrypoint: 'POST /pay', packet: `${PACKETS_DIR}/app/web.py`, bytes: 99 },
   ]);
 
   const output = await run(root);
 
-  assert.match(output, /structural:s1 — 1 packet, 1,200 bytes:/);
+  assert.match(output, /structural:s1 — 2 packets, 300,000 bytes:/);
   assert.doesNotMatch(output, /app\/web\.py/);
 });
 

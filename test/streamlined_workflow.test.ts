@@ -137,8 +137,13 @@ test('the suite workflow chooses the lamps with the user before it plans', () =>
   assert.match(flat, /only place in the whole workflow where a question is worth the user's turn/i);
   // Criterion 1.8: scope bounds the target, not the reading.
   assert.match(flat, /Scope bounds the target, not the reading/i);
-  // Criterion 1.7: the structural peer keeps its whole assignment.
-  assert.match(flat, /structural branch is never narrowed/i);
+  // Spec 37-3, criterion 2. The structural peer is chosen the same way, in the
+  // same message. It used to be exempt — "never narrowed" — and that exemption
+  // is what kept two thirds of a run outside the only question a user is asked:
+  // on microblog, 2026-08-23, the answer reached 8 of the 15 workers that ran.
+  assert.match(flat, /choose for \*\*both\*\* branches in one message/i);
+  assert.match(flat, /Do the same for the structural assignment/i);
+  assert.doesNotMatch(flat, /structural branch is never narrowed/i);
   // Criterion 1.5: the plan is the only record of the choice.
   assert.match(flat, /Nothing records this choice except the plan/i);
 });
@@ -149,7 +154,10 @@ test('the suite workflow chooses the lamps with the user before it plans', () =>
 // Leaving them out is rejected at upload, after every file has been written.
 test('the workflow answers the lamps outside the scope as unguarded, with a reason', () => {
   assert.match(flat, /coverage manifest you write in step 9 stays exhaustive/i);
-  assert.match(flat, /every lamp you left out is `unguarded` with a reason/i);
+  // Both branches, now that both can be narrowed: the structural manifest is
+  // keyed by interface and is checked for exhaustiveness by the same validator.
+  assert.match(flat, /every assigned capability and every assigned interface gets exactly one answer/i);
+  assert.match(flat, /everything you left out is `unguarded` with a reason/i);
   assert.match(flat, /"n\/a" is not/i);
 });
 
@@ -180,7 +188,12 @@ test('the suite workflow states no budget, no worker ceiling and no lookup ceili
   assert.doesNotMatch(flat, /1\.5 times/);
   assert.doesNotMatch(flat, /3–6 scenarios|more than 8 requires/i);
   assert.doesNotMatch(flat, /no more than \*\*eight\*\* lookups/i);
-  assert.match(flat, /no ceiling on how many workers a branch gets/i);
+  // The worker ceiling is back, and deliberately: spec 37-3 replaced "no ceiling
+  // at all" with one measured from the work. What stays gone is the *budget* —
+  // a number the server sent and nothing could check. This one is measured on
+  // the vibecoder's own disk, by the same command that built the packets.
+  assert.doesNotMatch(flat, /no ceiling on how many workers a branch gets/i);
+  assert.match(flat, /decided by how much work it is/i);
 });
 
 // Criterion 4, and spec 37-2 criterion 1. Every checkpoint exists before fan-out
@@ -218,14 +231,27 @@ test('the suite workflow puts a bounded fan-out where the reading is', () => {
   assert.doesNotMatch(flat, /continuation of its own context/i);
 });
 
-// Spec 34-3, criterion 3, kept and widened by 34-6. An agent re-reads its
-// context every turn, so only the variable half of its cost divides when the
-// work is split — splitting never loses. `budget.workers: 4` said the opposite
-// by existing at all, and is gone; what survives is the half that was right.
-test('the suite workflow puts no ceiling on the fan and creates only non-empty slices', () => {
-  assert.match(flat, /re-reads its context every turn/i);
-  assert.match(flat, /splitting the work never costs more/i);
+// Spec 37-3, criterion 1. 34-3 said splitting never loses, on the argument that
+// an agent re-reads its context every turn so only the variable half of its cost
+// divides. The measurement of 2026-08-24 says the fixed half is the whole story:
+// a worker's opening context is 26,065 tokens (±370 across fifteen), it is
+// bought per worker rather than divided, and the entire run's work was 39,652
+// tokens — less than two of those preambles, spread over fifteen.
+test('the suite workflow sizes the fan by the work and creates only non-empty slices', () => {
+  assert.match(flat, /How many workers a branch gets is decided by how much work it is/i);
+  assert.match(flat, /`suite-prepare` has already printed that number/i);
+  // What it printed is a ceiling over the whole assignment; what `fan_out`
+  // records is the plan's own width and the work the plan actually took. Both
+  // halves are load-bearing — a coordinator that copies the ceiling into
+  // `fan_out.workers` in the ordinary "fewer" case is refused by the gate.
+  assert.match(flat, /It printed a \*ceiling\*, over the whole assignment/i);
+  assert.match(flat, /plan that many or fewer, never more/i);
+  assert.match(flat, /over the capabilities this plan takes, not the whole assignment/i);
+  assert.match(flat, /`workers` as the count of slices you wrote/i);
   assert.match(flat, /never create an empty slice/i);
+  // Judging the width by eye is the thing being replaced, so it is named.
+  assert.match(flat, /do not judge the width by how complicated the business looks/i);
+  assert.doesNotMatch(flat, /Balance visible business complexity/i);
 });
 
 // Same criterion, and nothing in the plugin used to say it: `parallel`,
@@ -236,6 +262,19 @@ test("the suite workflow starts a branch's workers in one go", () => {
   assert.match(flat, /Sequential slices save nothing and finish later/i);
   // Twice the workers is not permission to run the shared test database twice.
   assert.match(flat, /never run the suite themselves/i);
+  // Spec 37-3, criterion 3. "In one go" was already here and both measured runs
+  // broke it the same way, launching one worker per message. The rule now says
+  // what one go is, and what it cost not to: on microblog, 2026-08-23, the 15
+  // launch turns were 3.54M tokens and bought nothing — the workers ran
+  // concurrently regardless, 14 at once. The 15 return turns are a further 3.57M
+  // and cannot be declined, so the rule there is the opposite one: owe a
+  // returned slice nothing.
+  assert.match(flat, /\*\*In one go means one message\.\*\*/i);
+  assert.match(flat, /a single message carrying one launch per slice/i);
+  assert.match(flat, /the workers ran concurrently either way/i);
+  assert.match(flat, /Then wait for the branch, not for each worker/i);
+  assert.match(flat, /You cannot decline those turns/i);
+  assert.match(flat, /One report, once the branch is in/i);
 });
 
 // The fact-finder's ceilings are frontmatter, so they hold whatever the session

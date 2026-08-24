@@ -2,6 +2,7 @@ import type { Config } from '../config.ts';
 import { clearRunState } from '../runner/failureDigest.ts';
 import { materializeHelper } from '../files/guardrails.ts';
 import { materializeBehavioralWorld } from '../files/behavioral.ts';
+import { branchWorkloads, workloadLine } from '../files/fanOut.ts';
 import { PACKETS_DIR, writeSuitePackets, type SuitePacketsSummary } from '../files/packets.ts';
 import {
   movePreviousRunAside,
@@ -339,6 +340,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     );
   }
   actual.stdout.write(packetNotice(request.project_root, sourcePackets));
+  actual.stdout.write(workloadNotice(request.project_root));
   actual.stdout.write(
     `Next: build ${branches.length === 1 ? 'the' : 'both'} peer ${branches.length === 1 ? 'suite' : 'suites'} (${kinds}) following each branch's \`recipe\` and \`assignment\`, ` +
       `write your answer to ${request.output_path} as a branches array — one entry per branch named above, and a branch you cannot ` +
@@ -442,6 +444,25 @@ function packetNotice(projectRoot: string, packets: SuitePacketsSummary | string
     (carried > 0 ? `; ${carried} name a file that was found but not carried` : '') +
     ` (${packets.notes.join('; ')}). ` +
     `Each says why in ${where}/index.json.\n`
+  );
+}
+
+// Spec 37-3, criterion 1. The size of the work, printed before the plan exists,
+// because that is the only moment it can decide anything: the packets are built
+// from the request's entrypoints, and the entrypoints are known before the
+// workers are. A number that arrives after the plan is a number the plan was
+// not made from.
+function workloadNotice(projectRoot: string): string {
+  const loads = branchWorkloads(projectRoot);
+  if (loads.length === 0) return '';
+  return (
+    '\nHow much work each branch is, and how many workers that is:\n' +
+    loads.map(workloadLine).join('') +
+    'That is the whole assignment, before you narrow it: a ceiling for a build that takes all of ' +
+    'it, and an over-estimate for any build that takes less. `accept-worker-plan` measures again ' +
+    'over what you actually planned, and that second measurement is the one that refuses a plan. ' +
+    'Plan that many or fewer, never more: one worker re-reads its own role and recipe on every ' +
+    'turn, and that does not divide.\n'
   );
 }
 

@@ -120,6 +120,10 @@ export function writeSuitePackets(projectRoot: string, request: SuiteBuildReques
     if (bytes === undefined) {
       const refusal = refused.get(sourceFile)!;
       target.note = refusal.note;
+      // The size travels even when the contents do not, so spec 37-3 can weigh
+      // this entrypoint. `packet` stays unset: there is still nothing to open
+      // under the packets folder, and every reader keys off that, not off size.
+      if (refusal.bytes !== undefined) target.bytes = refusal.bytes;
       count(notes, refusal.kind);
       continue;
     }
@@ -291,6 +295,11 @@ function readSurfaces(projectRoot: string): unknown[] {
 interface Refusal {
   note: string;
   kind: string;
+  // The file's size when we know it, even though no copy was made. Spec 37-3
+  // measures the fan-out from these bytes, and a file refused for being large
+  // is the largest work there is — counting it as nothing would let the biggest
+  // sources argue for the fewest workers.
+  bytes?: number;
 }
 
 // Copy one source file into the packets folder, keeping the path it has in the
@@ -344,6 +353,7 @@ function copyPacket(projectRoot: string, sourceFile: string): number | Refusal {
       return {
         note: `${sourceFile} is ${stat.size.toLocaleString('en-US')} bytes, over the ${MAX_PACKET_BYTES.toLocaleString('en-US')}-byte packet fuse — open it at that path instead`,
         kind: 'over the packet fuse — the path travels instead',
+        bytes: stat.size,
       };
     }
 

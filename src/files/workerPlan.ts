@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join } from 'node:path';
 import { detectStructuralRunner } from '../runner/precheck.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
+import { branchWorkloads, type BranchWorkload } from './fanOut.ts';
 
 export interface WorkerPlanItem {
   branch: string;
@@ -16,8 +17,19 @@ export interface WorkerPlanItem {
   done_when: string;
 }
 
+// Spec 37-3, criterion 1. The width of each branch's fan-out and the measured
+// work it was divided from, written down together. The count alone is already
+// in the plan — it is the length of the branch's slice list — so what this adds
+// is the half that used to be missing: what the count was derived from. A
+// number nobody can trace is a number chosen by eye.
+export interface FanOutRecord {
+  work_tokens: number;
+  workers: number;
+}
+
 export interface WorkerPlan {
   request_digest: string;
+  fan_out?: Record<string, FanOutRecord>;
   workers: WorkerPlanItem[];
 }
 
@@ -252,6 +264,12 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
   // The neighbours stay for the opposite reason: naming a capability the request
   // never assigned, or naming one twice, are ways a plan is wrong rather than
   // ways it is narrow. So is an empty plan for a branch that was given work.
+  // Measured over the ids this plan actually took, never over the whole
+  // assignment. The packets are built before anybody chooses a scope, and since
+  // spec 37-3 criterion 2 both branches may be narrowed — so weighing the whole
+  // assignment against the width of a narrowed plan would compare two different
+  // jobs and refuse the narrow one for being narrow.
+  const loads = new Map(branchWorkloads(projectRoot, takenIds(plan)).map((load) => [load.branch, load]));
   for (const [branch, expected] of expectedByBranch) {
     const items = plan.workers.filter((item) => item && typeof item === 'object' && !Array.isArray(item) && item.branch === branch);
     if (expected.length > 0 && items.length === 0) errors.push(`${branch}: no worker slice was planned`);
@@ -262,6 +280,65 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
       }
     }
     for (const id of assigned.filter((id) => !expected.includes(id))) errors.push(`${branch}: capability ${id} was not assigned by the request`);
+    errors.push(...fanOutErrors(branch, items.length, plan.fan_out?.[branch], loads.get(branch)));
+  }
+  return errors;
+}
+
+// Which assigned ids each branch of a plan actually took. Spec 37-3 weighs a
+// plan against the work it took on, never against the whole assignment: the
+// packets are built before anybody chooses a scope, and since criterion 2 both
+// branches may be narrowed, so the two are different jobs.
+export function takenIds(plan: WorkerPlan): Map<string, Set<string>> {
+  const taken = new Map<string, Set<string>>();
+  for (const item of Array.isArray(plan?.workers) ? plan.workers : []) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || !isNonEmptyString(item.branch)) continue;
+    const ids = taken.get(item.branch) ?? new Set<string>();
+    for (const id of Array.isArray(item.capability_ids) ? item.capability_ids : []) {
+      if (isNonEmptyString(id)) ids.add(id);
+    }
+    taken.set(item.branch, ids);
+  }
+  return taken;
+}
+
+// Spec 37-3, criterion 1. Two things are checked, and only when the packets
+// exist to measure against: that the plan says what it divided, and that it did
+// not divide work that already fits in one worker.
+//
+// A run without packets has no measured work, and a rule with no measurement
+// behind it refuses nobody — the same policy the packets themselves follow.
+function fanOutErrors(
+  branch: string,
+  planned: number,
+  stated: FanOutRecord | undefined,
+  load: BranchWorkload | undefined,
+): string[] {
+  if (!load || planned === 0) return [];
+  const where = `${branch}: fan_out`;
+  if (!stated || typeof stated !== 'object') {
+    return [`${where} is missing — state {"work_tokens": ${load.work_tokens}, "workers": ${load.workers}}`];
+  }
+
+  const errors: string[] = [];
+  // Checked against the connector's own measurement rather than trusted, so the
+  // record cannot become a place to write a number that suits the plan.
+  if (stated.work_tokens !== load.work_tokens) {
+    errors.push(`${where}.work_tokens is ${stated.work_tokens}; the packets on disk measure ${load.work_tokens}`);
+  }
+  if (stated.workers !== planned) {
+    errors.push(`${where}.workers says ${stated.workers} but ${planned} ${planned === 1 ? 'slice was' : 'slices were'} planned`);
+  }
+  // The ceiling, and the only one. Fewer is allowed: a branch whose work would
+  // take three workers may still be indivisible, because a capability cannot be
+  // split in half. More is not, and this is the whole spec: on microblog,
+  // 2026-08-24, both branches' work fitted one worker each and fifteen ran.
+  if (planned > load.workers) {
+    errors.push(
+      `${where}: ${planned} slices for ${load.work_tokens.toLocaleString('en-US')} tokens of work, which needs ` +
+        `${load.workers}. Each extra slice buys another opening context (26,065 tokens on the 2026-08-24 ` +
+        `bench) and divides nothing.`,
+    );
   }
   return errors;
 }
