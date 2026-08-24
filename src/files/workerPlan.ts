@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join } from 'node:path';
 import { detectStructuralRunner } from '../runner/precheck.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
-import { branchWorkloads, type BranchWorkload } from './fanOut.ts';
+import { branchWidth } from './fanOut.ts';
 
 export interface WorkerPlanItem {
   branch: string;
@@ -17,19 +17,8 @@ export interface WorkerPlanItem {
   done_when: string;
 }
 
-// Spec 37-3, criterion 1. The width of each branch's fan-out and the measured
-// work it was divided from, written down together. The count alone is already
-// in the plan — it is the length of the branch's slice list — so what this adds
-// is the half that used to be missing: what the count was derived from. A
-// number nobody can trace is a number chosen by eye.
-export interface FanOutRecord {
-  work_tokens: number;
-  workers: number;
-}
-
 export interface WorkerPlan {
   request_digest: string;
-  fan_out?: Record<string, FanOutRecord>;
   workers: WorkerPlanItem[];
 }
 
@@ -269,7 +258,6 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
   // spec 37-3 criterion 2 both branches may be narrowed — so weighing the whole
   // assignment against the width of a narrowed plan would compare two different
   // jobs and refuse the narrow one for being narrow.
-  const loads = new Map(branchWorkloads(projectRoot, takenIds(plan)).map((load) => [load.branch, load]));
   for (const [branch, expected] of expectedByBranch) {
     const items = plan.workers.filter((item) => item && typeof item === 'object' && !Array.isArray(item) && item.branch === branch);
     if (expected.length > 0 && items.length === 0) errors.push(`${branch}: no worker slice was planned`);
@@ -280,7 +268,8 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
       }
     }
     for (const id of assigned.filter((id) => !expected.includes(id))) errors.push(`${branch}: capability ${id} was not assigned by the request`);
-    errors.push(...fanOutErrors(branch, items.length, plan.fan_out?.[branch], loads.get(branch)));
+    const cases = items.reduce((sum, item) => sum + (Array.isArray(item.planned_cases) ? item.planned_cases.length : 0), 0);
+    errors.push(...fanOutErrors(branch, items.length, cases));
   }
   return errors;
 }
@@ -308,39 +297,31 @@ export function takenIds(plan: WorkerPlan): Map<string, Set<string>> {
 //
 // A run without packets has no measured work, and a rule with no measurement
 // behind it refuses nobody — the same policy the packets themselves follow.
-function fanOutErrors(
-  branch: string,
-  planned: number,
-  stated: FanOutRecord | undefined,
-  load: BranchWorkload | undefined,
-): string[] {
-  if (!load || planned === 0) return [];
-  const where = `${branch}: fan_out`;
-  if (!stated || typeof stated !== 'object') {
-    return [`${where} is missing — state {"work_tokens": ${load.work_tokens}, "workers": ${load.workers}}`];
-  }
+function fanOutErrors(branch: string, planned: number, cases: number): string[] {
+  const width = branchWidth(branch, cases);
+  if (!width || planned === 0) return [];
 
-  const errors: string[] = [];
-  // Checked against the connector's own measurement rather than trusted, so the
-  // record cannot become a place to write a number that suits the plan.
-  if (stated.work_tokens !== load.work_tokens) {
-    errors.push(`${where}.work_tokens is ${stated.work_tokens}; the packets on disk measure ${load.work_tokens}`);
-  }
-  if (stated.workers !== planned) {
-    errors.push(`${where}.workers says ${stated.workers} but ${planned} ${planned === 1 ? 'slice was' : 'slices were'} planned`);
-  }
-  // The ceiling, and the only one. Fewer is allowed: a branch whose work would
-  // take three workers may still be indivisible, because a capability cannot be
-  // split in half. More is not, and this is the whole spec: on microblog,
-  // 2026-08-24, both branches' work fitted one worker each and fifteen ran.
-  if (planned > load.workers) {
-    errors.push(
-      `${where}: ${planned} slices for ${load.work_tokens.toLocaleString('en-US')} tokens of work, which needs ` +
-        `${load.workers}. Each extra slice buys another opening context (26,065 tokens on the 2026-08-24 ` +
-        `bench) and divides nothing.`,
-    );
-  }
-  return errors;
+  // A band, not a ceiling. Both ends are expensive and neither is safe: on the
+  // 2026-08-24 bench fifteen workers cost 28% more than the cheapest width, and
+  // one worker cost 85% more — and a single worker on the behavioral branch
+  // would have run 216 turns into a 150-turn fuse. Anywhere inside the band is
+  // within about a tenth of the cheapest, so this refuses only what costs.
+  //
+  // Nothing is restated in the plan to prove the coordinator did this division.
+  // Both halves are already in the file — the cases in `planned_cases`, the
+  // width as the length of the branch's slice list — so a `fan_out` record would
+  // be the same two numbers copied by hand, which is what spec 37-1 refused for
+  // `packet_paths`. The gate is the guarantee; `accept-worker-plan` prints the
+  // derivation next to it.
+  if (planned >= width.fewest && planned <= width.most) return [];
+  const way = planned > width.most ? 'wide' : 'narrow';
+  return [
+    `${branch}: ${planned} slices for ${cases} planned cases is too ${way} — ` +
+      `${width.fewest}-${width.most} is the band, ${width.workers} the cheapest. ` +
+      `Each slice costs a whole opening context (26,065 tokens on that bench, re-read every turn), ` +
+      `and each slice fewer makes one conversation longer, which costs with the square of its ` +
+      `length. At ${width.workers} a worker of this branch runs about ${width.turns_each} turns.`,
+  ];
 }
 
 function assignmentIds(value: unknown): string[] {

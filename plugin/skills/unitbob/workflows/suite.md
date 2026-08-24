@@ -47,7 +47,7 @@ after its bounded phase.
    missing it. Report that error as it stands and **do not** advise a restart: it
    will not help, and it costs the user everything else in the session.
 
-1. Run `npx -y --loglevel=error unitbob@0.7.0 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.7.1 suite-prepare` with exactly one
    defect-context option. Use `--known-defect='<exact description>'` (and
    `--fixed-revision='<revision>'` when supplied), otherwise use
    `--no-known-defect`. This command checks the supported stack, provisions the
@@ -160,10 +160,7 @@ after its bounded phase.
    this shape:
 
    ```json
-   { "request_digest": "<sha256>",
-     "fan_out": { "structural": { "work_tokens": 45280, "workers": 1 },
-                  "behavioral": { "work_tokens": 16100, "workers": 1 } },
-     "workers": [
+   { "request_digest": "<sha256>", "workers": [
      { "branch": "structural|behavioral", "worker_id": "stable-id",
        "capability_ids": ["opaque ids copied from assignment"],
        "promises": ["finite business promises"],
@@ -179,27 +176,44 @@ after its bounded phase.
    no others — the structural branch by the same rule as its peer, now that the
    question in step 3 covers both.
 
-   **How many workers a branch gets is decided by how much work it is, and
-   `suite-prepare` has already printed that number.** It printed a *ceiling*,
-   over the whole assignment: plan that many or fewer, never more. Fewer is
-   ordinary — a capability cannot be cut in half, and you have narrowed the
-   scope since.
+   **How many workers a branch gets is decided by how many cases they will
+   write.** Not by how much source there is to read: on microblog, 2026-08-24,
+   the branch with three times the source spent half the turns. A planned case
+   is one intent somebody has to turn into a written example or Scenario, and
+   what it costs in turns is a property of the branch — a Gherkin Scenario needs
+   a World, a session, a fixture and an assertion; a structural example calls a
+   method.
 
-   `fan_out` records what you actually did: `work_tokens` as
-   `accept-worker-plan` measures it — over the capabilities this plan takes, not
-   the whole assignment, so it is usually below the number `suite-prepare`
-   showed — and `workers` as the count of slices you wrote for that branch.
-   Both are checked, and a width above what the work needs is refused.
+   There is a cheapest width, and **both sides of it are expensive.** An agent's
+   cost is the sum of its context over its turns, so splitting pulls two ways:
+   the opening context is bought once per worker and re-read every turn, while
+   each conversation gets shorter, and a conversation costs with the square of
+   its length. What the fifteen workers of that run would have cost at other
+   widths:
+
+   ```text
+   workers     1      2      3      5      8     15     20
+   input   51.2M  34.6M  29.9M  27.7M  28.8M  35.6M  41.3M
+   ```
+
+   Fifteen was 28% over the cheapest. One worker is 85% over it — and would have
+   run a 216-turn worker into a 150-turn fuse. So there is no "as few as
+   possible" here, and no "as many as the map lists" either.
+
+   `accept-worker-plan` computes the cheapest width for each branch from the
+   cases your plan intends, and refuses a plan outside a band around it. The
+   bottom of that curve is flat, so the band is wide: anywhere inside it is
+   within about a tenth of the cheapest. Nothing is copied into the plan to prove
+   you did this — the cases are already in `planned_cases` and the width is
+   already the length of the branch's slice list, so a field restating them would
+   be two numbers copied by hand.
 
    The rule here used to be that there was no ceiling at all — that an agent
    re-reads its context every turn, so splitting never costs more than keeping
-   the work together. That is true of the work and false of everything else a
-   worker carries. A worker's opening context is its role, its recipe and its
-   plan item: 26,065 tokens on microblog, 2026-08-24, the same to within ±370
-   across fifteen workers, and it is bought once per worker rather than divided
-   between them. Those fifteen spent about 391,000 tokens on it to carry 39,652
-   tokens of work — the entire job weighed a shade over one and a half of the
-   preambles bought to carry it, and fifteen were bought.
+   the work together. True of the work, false of everything else a worker
+   carries: 26,065 tokens of opening context on that run, the same to within
+   ±370 across fifteen workers, and bought once per worker rather than divided
+   between them.
 
    Never create an empty slice. Assign each planned capability exactly once and
    use globally unique worker ids and owned paths. Do not invent weights or a
@@ -212,7 +226,7 @@ after its bounded phase.
    a different business outcome. `surface_budget` is a ceiling, never a quota;
    unselected assigned surfaces are `deferred_surfaces`, not `unreachable`.
 
-5. Run `npx -y --loglevel=error unitbob@0.7.0 accept-worker-plan`. If it exits
+5. Run `npx -y --loglevel=error unitbob@0.7.1 accept-worker-plan`. If it exits
    non-zero, fix the whole reported batch and run it again. If it remains
    non-zero, stop before fan-out. The gate checks that the plan is intact —
    digests, ids, paths, capabilities that were actually assigned, and the
@@ -292,7 +306,7 @@ after its bounded phase.
    sixteen packets marked as verified.
 
    When the facts are in, run
-   `npx -y --loglevel=error unitbob@0.7.0 validate-worker-checkpoints` here,
+   `npx -y --loglevel=error unitbob@0.7.1 validate-worker-checkpoints` here,
    before fan-out. It is step 8's gate, it costs seconds, and it reads every
    checkpoint against the plan — so a fact it would refuse is refused now, rather
    than after sixteen workers have been launched on it. Skip it only if you added
@@ -339,7 +353,7 @@ after its bounded phase.
 
    On Codex, the Unitbob definitions must also be discoverable on disk in
    `~/.codex/agents/`; if they are missing, stop and run
-   `npx -y --loglevel=error unitbob@0.7.0 codex-install`, then tell the user to
+   `npx -y --loglevel=error unitbob@0.7.1 codex-install`, then tell the user to
    start a new Codex thread. That is a different question from the one above —
    files on disk are exactly what both lost runs already had — so ask both. No Codex version is currently qualified by Unitbob
    for a per-named-agent rollout budget. Before the first bounded role, ask:
@@ -380,7 +394,7 @@ after its bounded phase.
    incarnation. Stop follows the existing incomplete/checkpoint path. Never
    auto-resume or report the incomplete slice as successful after a budget stop.
 
-8. Run `npx -y --loglevel=error unitbob@0.7.0 validate-worker-checkpoints` after
+8. Run `npx -y --loglevel=error unitbob@0.7.1 validate-worker-checkpoints` after
    fan-out and before assembly or repair. It verifies one compact checkpoint per
    plan item against the exact request and plan digests, worker id, promises,
    and owned paths. A stale or invalid checkpoint never goes to repair: record a
@@ -456,7 +470,7 @@ after its bounded phase.
    `known_defect_probe`, `known_defect_context`, or runner reports in generator
    `test_metadata`.
 
-10. Run `npx -y --loglevel=error unitbob@0.7.0 validate-build` after assembly. It
+10. Run `npx -y --loglevel=error unitbob@0.7.1 validate-build` after assembly. It
     checks locally only what the server cannot see — that the files the answer
     names exist under `.unitbob/`, and that every branch the request asked for
     has an entry — and then sends the exact batch the publish would send as a
@@ -473,7 +487,7 @@ after its bounded phase.
     a verdict on the whole branch, and it is the cheapest possible insurance for
     the single publication step 15 allows.
 
-11. Run `npx -y --loglevel=error unitbob@0.7.0 run-local` once for the assembled
+11. Run `npx -y --loglevel=error unitbob@0.7.1 run-local` once for the assembled
     branches. The connector owns the exact runner commands. A runner that never
     starts is a harness failure, not a red test. If the runner never started, it
     died before the first test or scenario; report its exact error, upload nothing
@@ -560,7 +574,7 @@ after its bounded phase.
 
 13. If behavioral is a `build_error`, skip review and keep the structural peer.
     Otherwise run
-    `npx -y --loglevel=error unitbob@0.7.0 suite-review-prepare`. It runs and binds
+    `npx -y --loglevel=error unitbob@0.7.1 suite-review-prepare`. It runs and binds
     the exact candidate, then writes
     `.unitbob/suite-build/review-request.json`. That request includes the
     original behavioral assignment, its worker-plan items, and exact
@@ -602,7 +616,7 @@ after its bounded phase.
     protected. Run `validate-build` once more after this step to get the server's
     verdict on the whole branch, review included.
 
-15. Run `npx -y --loglevel=error unitbob@0.7.0 put-suite-build` exactly once. It
+15. Run `npx -y --loglevel=error unitbob@0.7.1 put-suite-build` exactly once. It
     validates and publishes each branch independently, runs every branch it published,
     and prints the server summaries and map URL. Never ask the user
     to run the checks to finish generating.

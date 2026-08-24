@@ -193,7 +193,7 @@ test('the suite workflow states no budget, no worker ceiling and no lookup ceili
   // a number the server sent and nothing could check. This one is measured on
   // the vibecoder's own disk, by the same command that built the packets.
   assert.doesNotMatch(flat, /no ceiling on how many workers a branch gets/i);
-  assert.match(flat, /decided by how much work it is/i);
+  assert.match(flat, /decided by how many cases they will write/i);
 });
 
 // Criterion 4, and spec 37-2 criterion 1. Every checkpoint exists before fan-out
@@ -238,16 +238,15 @@ test('the suite workflow puts a bounded fan-out where the reading is', () => {
 // bought per worker rather than divided, and the entire run's work was 39,652
 // tokens — less than two of those preambles, spread over fifteen.
 test('the suite workflow sizes the fan by the work and creates only non-empty slices', () => {
-  assert.match(flat, /How many workers a branch gets is decided by how much work it is/i);
-  assert.match(flat, /`suite-prepare` has already printed that number/i);
-  // What it printed is a ceiling over the whole assignment; what `fan_out`
-  // records is the plan's own width and the work the plan actually took. Both
-  // halves are load-bearing — a coordinator that copies the ceiling into
-  // `fan_out.workers` in the ordinary "fewer" case is refused by the gate.
-  assert.match(flat, /It printed a \*ceiling\*, over the whole assignment/i);
-  assert.match(flat, /plan that many or fewer, never more/i);
-  assert.match(flat, /over the capabilities this plan takes, not the whole assignment/i);
-  assert.match(flat, /`workers` as the count of slices you wrote/i);
+  assert.match(flat, /How many workers a branch gets is decided by how many cases they will write/i);
+  // Both ends of the curve, because naming only the ceiling is what produced the
+  // first draft of this rule — which would have collapsed the behavioral branch
+  // to one 216-turn worker against a 150-turn fuse.
+  assert.match(flat, /both sides of it are expensive/i);
+  assert.match(flat, /no "as few as possible" here, and no "as many as the map lists" either/i);
+  assert.match(flat, /refuses a plan outside a band around it/i);
+  // Bytes are measured and printed, and deliberately do not set the width.
+  assert.match(flat, /Not by how much source there is to read/i);
   assert.match(flat, /never create an empty slice/i);
   // Judging the width by eye is the thing being replaced, so it is named.
   assert.match(flat, /do not judge the width by how complicated the business looks/i);

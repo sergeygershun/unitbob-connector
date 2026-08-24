@@ -1,75 +1,117 @@
 import { readPacketIndex, type PacketTarget } from './packets.ts';
 
-// Spec 37-3, criterion 1. How wide a branch's fan-out may be, decided by the
-// size of the work rather than by how many items the map happens to list.
+// Spec 37-3, criterion 1. How wide a branch's fan-out should be.
 //
-// The old rule said there was no ceiling at all: "an agent re-reads its context
-// every turn, so splitting the work never costs more than keeping it together."
-// That is true of the work and false of everything else a worker carries. A
-// worker's opening context — its role, its recipe, its plan item — is 26,065
-// tokens on the bench of 2026-08-24, and it varies by ±370 across fifteen
-// workers. It is not divided between them; it is bought once per worker and
-// re-read every turn. Fifteen workers is 391,000 tokens of it, to carry 39,652
-// tokens of actual work.
+// The rule this replaces said there was no ceiling at all: "an agent re-reads
+// its context every turn, so splitting the work never costs more than keeping it
+// together." Half right, and the wrong half was load-bearing. An agent's cost is
+// the sum of its context over its turns, so splitting pulls in two directions:
 //
-// Every number below is measured on that bench, never chosen. See
-// ai/specs/37-3-fan-out-by-workload/after-2026-08-24.md in the brain repo.
+//   - the opening context is bought once per worker and re-read every turn, so
+//     it multiplies with the width. 26,065 tokens on the bench of 2026-08-24,
+//     the same to within ±370 across fifteen workers.
+//   - each worker's conversation is shorter, and a conversation's cost grows
+//     with the square of its length, so this falls with the width.
+//
+// There is therefore a minimum, and it is neither end. Measured on that bench,
+// against what the fifteen workers actually cost:
+//
+//   workers     1      2      3      5      8     15     20
+//   input   51.2M  34.6M  29.9M  27.7M  28.8M  35.6M  41.3M
+//
+// Fifteen was 28% over the cheapest width. One worker — which is what "the work
+// fits in one context" would have said, and what the first draft of this rule
+// enforced — is 85% over it, and would have run a 216-turn worker into a
+// 150-turn fuse. The floor is as expensive a mistake as the ceiling.
+//
+// See ai/specs/37-3-fan-out-by-workload/after-2026-08-24.md in the brain repo.
 
-// Four bytes to the token, the ratio the bench keeps returning: 281,803
-// characters of microblog source came to about 70,000 tokens.
+// What the optimum is not a function of. Productive turns per 1,000 tokens of
+// source were 7.8 on the behavioral branch and 1.4 on the structural one of the
+// same run — 5.6× apart — and per assigned id, 8× apart. Bytes measure how much
+// there is to read, which turns out not to be what a worker spends its turns on.
+// They stay here for the printout and for the record in `fan_out`; they do not
+// set the width.
 const BYTES_PER_TOKEN = 4;
-
-// The context a worker is allowed to reach. Same number as MAX_WORKER_CONTEXT
-// in the brain's script/cost/run_cost.py, which is the only thing that checks it
-// after the fact; the two must not drift. Criterion 4 leaves the value itself
-// open — it wants a second bench, on an application far larger than microblog,
-// before anybody moves it — so this rule inherits whatever that number becomes.
-const WORKER_CONTEXT_CEILING = 400_000;
-
-// The largest context any worker reached on the bench: 115,937, while carrying
-// about 2,600 tokens of work. Work is not what fills a worker — a least-squares
-// fit of peak against work across the fifteen has an R² of 0.009, so work
-// explains under one percent of why one worker's context differs from another's.
-// That is the finding, and it is why this is the whole fixed cost rather than
-// a slope: a worker costs what a worker costs, and the work rides along.
-const WORKER_PEAK_WITHOUT_WORK = 115_937;
-
-// Work is read plus written, and only the read half can be measured before the
-// plan exists. On the same bench the workers wrote 29,836 tokens against 9,816
-// tokens of packets — almost exactly three to one — so the written half is
-// estimated from the read half rather than left out of the sum.
 const WRITTEN_PER_READ = 3;
 
-// How much work one worker may carry: what the biggest measured worker left
-// unused under the ceiling. 400,000 − 115,937.
-export const WORK_PER_WORKER_TOKENS = WORKER_CONTEXT_CEILING - WORKER_PEAK_WITHOUT_WORK;
+// What it is a function of. A planned case is one intent the worker has to turn
+// into a written example or Scenario, and its cost in turns is a property of the
+// branch, not of the project: a Gherkin Scenario needs the World, a session, a
+// fixture and an assertion; a structural example calls a method.
+//
+// Measured 2026-08-24: 35 behavioral cases over 126 productive turns, 91
+// structural cases over 65.
+const TURNS_PER_CASE: Record<string, number> = { behavioral: 3.6, structural: 0.7 };
+
+// The optimum width is the branch's productive turns over this. It comes out of
+// setting the derivative of the cost above to zero, which gives
+// `sqrt(2·warmup·preamble/added + warmup²)` — 31.3 on the behavioral branch of
+// that run and 41.7 on the structural one, near enough to each other that one
+// number carries both and the flat bottom of the curve absorbs the difference.
+const TURNS_PER_WORKER = 36;
+
+// What a worker spends before it writes anything — reading its packets, its plan
+// item and its seeded facts. Measured 2026-08-24: 176 warm-up turns over eight
+// behavioral workers, 202 over seven structural ones. It is per worker and does
+// not divide, which is half of why width costs; it is added back here so that
+// the turns this prints are the whole conversation, the thing that meets the
+// 150-turn fuse.
+const WARMUP_TURNS: Record<string, number> = { behavioral: 22, structural: 28 };
+
+// Every case ends up at the same handful of widths, so the rule has to be a band
+// rather than a number: anywhere from three to eight workers cost within 10% of
+// the cheapest on the measured run. What the band excludes is what actually
+// costs — fifteen at one end, one at the other.
+const NARROWEST = 0.5;
+const WIDEST = 1.5;
+
+export interface BranchWidth {
+  branch: string;
+  planned_cases: number;
+  // Turns one worker of this branch is expected to spend, at the chosen width.
+  turns_each: number;
+  workers: number;
+  fewest: number;
+  most: number;
+}
+
+// How wide a branch should be, from the cases its plan intends to write.
+// Returns nothing for a branch this connector has no measured cost for: a rule
+// with no measurement behind it must not refuse anybody's plan.
+export function branchWidth(branch: string, plannedCases: number): BranchWidth | undefined {
+  const perCase = TURNS_PER_CASE[branch];
+  if (perCase === undefined || plannedCases <= 0) return undefined;
+  const turns = plannedCases * perCase;
+  const workers = Math.max(1, Math.round(turns / TURNS_PER_WORKER));
+  return {
+    branch,
+    planned_cases: plannedCases,
+    turns_each: Math.round(turns / workers) + (WARMUP_TURNS[branch] ?? 0),
+    workers,
+    fewest: Math.max(1, Math.round(workers * NARROWEST)),
+    most: Math.max(1, Math.ceil(workers * WIDEST)),
+  };
+}
 
 export interface BranchWorkload {
   branch: string;
-  // Distinct source files, so two entrypoints in one file are one read. Sharing
-  // is the common case and double-counting it would invent work that is not
-  // there.
+  // Distinct source files, so two entrypoints in one file are one read.
   files: number;
   bytes: number;
-  // Entrypoints whose file nothing measured. They are not free — they are the
-  // most expensive kind of work there is, because that worker searches — so
-  // they are counted at what the branch's measured files average.
+  // Entrypoints whose file nothing measured, priced at what the others average.
   unmeasured: number;
   read_tokens: number;
   work_tokens: number;
-  workers: number;
 }
 
-// What each branch's work weighs, from the packets already on disk.
+// What each branch's source weighs. Kept because it is the honest answer to "how
+// much is there", printed before the plan exists and recorded in `fan_out` — but
+// it is not what decides the width. See TURNS_PER_CASE above.
 //
 // `taken` narrows the count to the ids a plan actually took, which matters since
 // criterion 2 let the structural branch be narrowed too: the packets are built
-// from the whole assignment, before anybody chose a scope, so measuring all of
-// them against the width of a narrowed plan would compare two different jobs.
-// Omit it before the plan exists, and the answer is the whole assignment.
-//
-// A branch nothing could be measured for is left out entirely: a rule with no
-// measurement behind it must not refuse anybody's plan.
+// from the whole assignment, before anybody chose a scope.
 export function branchWorkloads(
   projectRoot: string,
   taken?: Map<string, Set<string>>,
@@ -83,10 +125,9 @@ export function branchWorkloads(
     const ids = taken?.get(target.branch);
     if (taken && !ids?.has(target.id)) continue;
     const size = sizeOf(target);
-    // Keyed by the file, so the same file behind two entrypoints is one read.
     // A file too large to copy still has a path and a size, and it is the
-    // heaviest work on the branch — counting it as nothing would let the
-    // biggest sources argue for the fewest workers.
+    // heaviest reading on the branch — counting it as nothing would let the
+    // biggest sources look like the smallest.
     const file = target.packet ?? target.source_file;
     if (file !== undefined && size !== undefined) {
       const files = measured.get(target.branch) ?? new Map<string, number>();
@@ -100,41 +141,35 @@ export function branchWorkloads(
   const branches = new Set([...measured.keys(), ...unmeasured.keys()]);
   return [...branches].sort().flatMap((branch) => {
     const files = measured.get(branch);
-    // Nothing on this branch resolved to a file with a size, so there is no
-    // average to price the rest at and nothing to divide. Ungated.
     if (!files || files.size === 0) return [];
     const bytes = [...files.values()].reduce((sum, size) => sum + size, 0);
     const missing = unmeasured.get(branch) ?? 0;
     const withMissing = bytes + Math.round((bytes / files.size) * missing);
     const read_tokens = Math.round(withMissing / BYTES_PER_TOKEN);
-    const work_tokens = read_tokens * (1 + WRITTEN_PER_READ);
     return [{
       branch, files: files.size, bytes, unmeasured: missing,
-      read_tokens, work_tokens, workers: workersFor(work_tokens),
+      read_tokens, work_tokens: read_tokens * (1 + WRITTEN_PER_READ),
     }];
   });
 }
 
-// The index is a file on the vibecoder's disk and is read defensively
-// everywhere else, so a size that is not a real byte count is treated as a size
-// we do not have rather than as zero. Zero would quietly shrink the branch's
-// average and tighten a ceiling nobody could see move.
+// The index is a file on the vibecoder's disk, so a size that is not a real byte
+// count is treated as a size we do not have rather than as zero. Zero would
+// quietly shrink the branch's average.
 function sizeOf(target: PacketTarget): number | undefined {
   const { bytes } = target;
   return typeof bytes === 'number' && Number.isFinite(bytes) && bytes >= 0 ? bytes : undefined;
 }
 
-// Never zero, and never more than the work needs. One worker is the answer
-// whenever the work fits in one, and that is not a preference: splitting work
-// that already fits buys another whole opening context and divides nothing.
-export function workersFor(workTokens: number): number {
-  if (!Number.isFinite(workTokens) || workTokens <= 0) return 1;
-  return Math.max(1, Math.ceil(workTokens / WORK_PER_WORKER_TOKENS));
+export function widthLine(width: BranchWidth): string {
+  return (
+    `  ${width.branch} — ${width.planned_cases} planned ` +
+    `${width.planned_cases === 1 ? 'case' : 'cases'}: ${width.workers} ` +
+    `${width.workers === 1 ? 'worker' : 'workers'} of about ${width.turns_each} turns each ` +
+    `(${width.fewest}–${width.most} accepted).\n`
+  );
 }
 
-// The sentence that goes wherever this number is printed. It names what the
-// number came from, because a ceiling nobody can trace is a ceiling somebody
-// will route around.
 export function workloadLine(load: BranchWorkload): string {
   const missing = load.unmeasured === 0
     ? ''
@@ -144,8 +179,6 @@ export function workloadLine(load: BranchWorkload): string {
     `  ${load.branch} — ${load.files} ${load.files === 1 ? 'file' : 'files'}, ` +
     `${load.bytes.toLocaleString('en-US')} bytes${missing}: ` +
     `${load.read_tokens.toLocaleString('en-US')} tokens to read and about ` +
-    `${(load.work_tokens - load.read_tokens).toLocaleString('en-US')} to write, ` +
-    `${load.work_tokens.toLocaleString('en-US')} of work — ` +
-    `${load.workers} ${load.workers === 1 ? 'worker' : 'workers'}.\n`
+    `${(load.work_tokens - load.read_tokens).toLocaleString('en-US')} to write.\n`
   );
 }

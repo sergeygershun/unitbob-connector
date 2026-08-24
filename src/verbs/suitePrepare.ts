@@ -456,13 +456,12 @@ function workloadNotice(projectRoot: string): string {
   const loads = branchWorkloads(projectRoot);
   if (loads.length === 0) return '';
   return (
-    '\nHow much work each branch is, and how many workers that is:\n' +
+    '\nHow much each branch has to read, over the whole assignment and before you narrow it:\n' +
     loads.map(workloadLine).join('') +
-    'That is the whole assignment, before you narrow it: a ceiling for a build that takes all of ' +
-    'it, and an over-estimate for any build that takes less. `accept-worker-plan` measures again ' +
-    'over what you actually planned, and that second measurement is the one that refuses a plan. ' +
-    'Plan that many or fewer, never more: one worker re-reads its own role and recipe on every ' +
-    'turn, and that does not divide.\n'
+    'This does not set how many workers a branch gets, and that is worth knowing before you plan: ' +
+    'on the bench of 2026-08-24 the branch with three times the source spent half the turns. What ' +
+    'sets the width is how many cases you intend to write, so it is decided by the plan and ' +
+    'checked by `accept-worker-plan`, which prints the band it accepted.\n'
   );
 }
 
