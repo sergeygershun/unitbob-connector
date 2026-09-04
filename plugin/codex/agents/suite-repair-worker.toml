@@ -21,7 +21,7 @@ markers, or paths. Do not edit production code, host-owned shared files, the
 connector-owned harness, or another slice.
 
 After every owned edit, run
-`npx -y --loglevel=error unitbob@0.7.2 run-local <branch>` and inspect the machine
+`npx -y --loglevel=error unitbob@0.7.3 run-local <branch>` and inspect the machine
 report. Look only at examples or scenarios matching your owned paths or case
 markers. Do not require a green exit code from the whole branch: foreign failures
 and an already-confirmed product red do not widen your scope. Repeat the bounded
