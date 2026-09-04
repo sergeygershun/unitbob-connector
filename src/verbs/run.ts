@@ -5,7 +5,7 @@ import { placeProblem } from '../runner/place.ts';
 import { runnerEnvironmentPlaceProblem } from '../runner/placeEnvironment.ts';
 import { validateStack, type PrecheckResult } from '../runner/precheck.ts';
 import { runRspecSuite } from '../runner/rspec.ts';
-import { runVitestSuite } from '../runner/vitest.ts';
+import { runVitestSuite, testPathsOf } from '../runner/vitest.ts';
 import { runPytestSuite } from '../runner/pytest.ts';
 import { runBddSuite } from '../runner/bdd.ts';
 import type { RunnerResult } from '../runner/types.ts';
@@ -190,8 +190,11 @@ export function runStructuralByRunner(
 // Every file of the branch, in the order the envelope carries them. A structural
 // branch is one file per assignment since spec one-place-per-rule, §6, and running only the main
 // one would execute a fraction of what the map says is guarded.
+//
+// Every file except the branch's shared setup file, which `testPathsOf` drops
+// (spec 39): it is named in `setupFiles` instead of being collected from.
 function artifactPaths(file: SuiteArtifact): string[] {
-  return [file.path, ...(file.support_files ?? []).map((entry) => entry.path)];
+  return testPathsOf([file.path, ...(file.support_files ?? []).map((entry) => entry.path)]);
 }
 
 function suiteError(suiteDigest: string, message: string): unknown {

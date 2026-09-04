@@ -30,6 +30,7 @@ import { placeProblem } from '../runner/place.ts';
 import { alignRunnerEnvironmentWithPlace } from '../runner/placeEnvironment.ts';
 import { ensureRunner, ensureStructuralRunner, type ProvisionResult } from '../runner/provision.ts';
 import { ToolchainUnavailableError } from '../runner/toolchain.ts';
+import { canPrepareBeforeImports, setupFileOf, STRUCTURAL_SETUP_FILE } from '../runner/vitest.ts';
 import { probeBehavioralWorld, type WorldProbeResult } from '../runner/worldProbe.ts';
 import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
 
@@ -279,7 +280,41 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   // and boots the application for itself, so asking with no structural branch in
   // the run would start Rails to answer a question nobody put — and a `broken`
   // answer would then report a branch this build never had.
+  //
+  // Spec 39 kept the sentry and moved the sentence. The probe asks its question
+  // twice: once before anything has been prepared for these files, and once
+  // after the coordinator has written the branch's shared setup file. Only the
+  // second answer costs a branch, because only the second one asks what the run
+  // will ask. Before the setup file exists the probe's question — "do these
+  // files load with nothing in front of them" — is stricter than the condition
+  // it stands in for, and `docs/adr/0001` forbids exactly that: the condition
+  // tested must equal the condition that makes a run impossible, never exceed
+  // it. Two bench projects were refused on that excess while their behavioral
+  // peers built and stayed green.
+  //
+  // The switch is the file on disk and nothing else. No flag and no mode: 32-6
+  // forbade them, and the connector has to ask this same question anyway to
+  // decide whether to name the file in `setupFiles`, so a second signal could
+  // only ever disagree with the first.
+  //
+  // And only on the stack where a preparation can actually be put in front of
+  // the imports — `canPrepareBeforeImports`, which is vitest and only vitest. On
+  // rspec and pytest nothing of ours runs before the branch's imports, so there
+  // the probe's question already *is* the run's question: no excess to correct,
+  // and a red answer costs the branch on the first run exactly as it has since
+  // 32-6. Waiting for a file those stacks will never have would have quietly
+  // reopened the funnel that spec closed.
+  //
+  // One thing this sign cannot see: a setup file left over from an earlier
+  // build. It comes back with the artifact and is materialized like any other
+  // file of the branch, so on a re-generation the probe sentences on its first
+  // ask instead of scouting. That is the honest reading — a preparation does
+  // exist and the probe went through it — and the way out is the same one the
+  // verdict already names: fix that file, run `suite-prepare` again. Telling the
+  // two apart would need a memory of which build wrote it, which is a mode by
+  // another name, and 32-6 forbade those.
   const bootNotices: string[] = [];
+  const bootAdvisories: string[] = [];
   const structuralIndex = branches.findIndex((branch) => branch.suite_kind === 'structural');
   if (structuralIndex !== -1) {
     const boot = await actual.bootCheck(
@@ -288,8 +323,12 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
       structuralSourceFiles(config.projectRoot, { branches }),
     );
     if (boot.status === 'broken') {
-      branches.splice(structuralIndex, 1);
-      bootNotices.push(bootStop(boot, structuralRunner));
+      if (!canPrepareBeforeImports(structuralRunner) || setupFileOf(config.projectRoot)) {
+        branches.splice(structuralIndex, 1);
+        bootNotices.push(bootStop(boot, structuralRunner));
+      } else {
+        bootAdvisories.push(bootAdvisory(boot, structuralRunner));
+      }
     } else {
       actual.stdout.write(bootFinding(boot, structuralRunner));
     }
@@ -404,6 +443,21 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
       '\nThe code-structure suite was left out of this run — the source files its guardrails would ' +
         'import did not load. None of your own tests were opened; only the files the map named:\n' +
         bootNotices.join('\n') +
+        '\n',
+    );
+  }
+
+  // The other half of the probe's answer (spec 39), and it needs a heading of
+  // its own: "was left out of this run" is true only of the verdict, and this
+  // branch was not left out of anything. It is being built, and what follows is
+  // the opening fact for whoever writes its preparation.
+  if (bootAdvisories.length > 0) {
+    actual.stdout.write(
+      '\nThe code-structure suite is still being built, and here is what its source files did on their own: ' +
+        `they did not load. Nothing has been put in front of them yet — that is what ${STRUCTURAL_SETUP_FILE} ` +
+        'is for, and writing it comes before the fan-out. None of your own tests were opened; only the files ' +
+        'the map named:\n' +
+        bootAdvisories.join('\n') +
         '\n',
     );
   }
@@ -534,17 +588,49 @@ function bootFinding(boot: Exclude<BootCheck, { status: 'broken' }>, runner: str
 // its peer carries on, `request.json` is written, and the vibecoder comes away
 // with the guardrails that branch can still give rather than with nothing.
 //
+// Reached only once the branch's shared setup file exists (spec 39). By then the
+// probe has been asked through that preparation, so a red answer is the run's
+// own answer and taking the branch is honest.
+function bootStop(boot: Extract<BootCheck, { status: 'broken' }>, runner: string | null): string {
+  return bootReport(boot, runner, true);
+}
+
+// The same red answer, read before anything was prepared for these files (spec
+// 39). Same facts, same words from the runner, same caveat — what differs is
+// the step that follows, and that is the whole difference between a scout and a
+// sentry. Nothing here is worded as a verdict on somebody's code, because on
+// this run it is not one: the files were asked to load with nothing in front of
+// them, and putting something in front of them is Unitbob's own work.
+function bootAdvisory(boot: Extract<BootCheck, { status: 'broken' }>, runner: string | null): string {
+  return bootReport(boot, runner, false);
+}
+
 // The two causes keep their separate next steps. An un-run `pip install` is not
 // somebody's bug and must not be worded as one; a module of theirs that raises
-// on import is theirs to fix and pointing at an install would waste their time.
-function bootStop(boot: Extract<BootCheck, { status: 'broken' }>, runner: string | null): string {
+// on import, asked with the preparation already in place, is theirs to fix and
+// pointing at an install would waste their time.
+//
+// The environment cause keeps the same next step in both reports: a missing gem
+// is not something a setup file can prepare its way around, and sending someone
+// to write one would waste the round it costs.
+function bootReport(
+  boot: Extract<BootCheck, { status: 'broken' }>,
+  runner: string | null,
+  prepared: boolean,
+): string {
   const next =
-    boot.cause === 'defect_in_code'
-      ? 'Repair it and run `unitbob suite-prepare` again to build this branch.'
-      : 'Unitbob installs the runner, and your declared dependencies with it, into `.unitbob/runners/` — ' +
+    boot.cause !== 'defect_in_code'
+      ? 'Unitbob installs the runner, and your declared dependencies with it, into `.unitbob/runners/` — ' +
         'it never writes to your project. Something outside that file is still missing here. Run the ' +
         'install your project needs (`bundle install`, `npm install`, `pip install -r requirements.txt`), ' +
-        'then run `unitbob suite-prepare` again.';
+        'then run `unitbob suite-prepare` again.'
+      : prepared
+        ? 'Repair it and run `unitbob suite-prepare` again to build this branch.'
+        : `This is what these files do with nothing in front of them, and the run will have ` +
+          `${STRUCTURAL_SETUP_FILE} in front of them. Put into that file whatever has to happen before the ` +
+          'first import — the environment variables the modules read, a loader registration, and only as a ' +
+          'last resort an entry through the project\'s root module — then run `unitbob suite-prepare` again ' +
+          'and this same question will be asked through it.';
 
   // `boot.message` is the runner's own words, indented but never paraphrased:
   // this is the line the vibecoder can paste into a search.

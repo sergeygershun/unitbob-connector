@@ -593,12 +593,69 @@ const brokenBoot = async () => ({
   detail: 'app/models/report.rb:1',
 });
 
-test('a structural branch that cannot start drops out, and its peer is still built', async () => {
-  const projectRoot = railsProject();
+// Spec 39. The coordinator's shared setup file, on disk. Its presence is the
+// whole of the switch between the probe's two questions, so a test that wants
+// the verdict has to write it and a test that wants the finding must not.
+function withPreparation(projectRoot: string): string {
+  mkdirSync(join(projectRoot, '.unitbob', 'structural'), { recursive: true });
+  writeFileSync(join(projectRoot, '.unitbob', 'structural', '_setup.ts'), '// nothing to prepare here\n');
+  return projectRoot;
+}
+
+// The stack that has somewhere to put a preparation. `setupFiles` is a vitest
+// notion and the connector inserts our file only there, so this is the only
+// stack on which the probe's first question is stricter than the run's.
+function nodeProject(): string {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, 'package.json'), '{"name":"soul","version":"1.0.0"}\n');
+  return projectRoot;
+}
+const vitestPrecheck = () => ({ ok: true, runner: 'vitest' });
+
+// Spec 39, criterion 4, first half. This used to be the whole rule: a red probe
+// took the branch, whatever had or had not been prepared for it. But before the
+// setup file exists the probe is asking a stricter question than the one it
+// stands in for — these files with nothing in front of them, against the run,
+// which will have the preparation in front of them — and two bench projects were
+// refused on it while their behavioral peers were built and stayed green.
+test('a structural branch that cannot start yet is kept, and the finding says what is missing', async () => {
+  const projectRoot = nodeProject();
   let output = '';
 
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
-    precheck: okPrecheck,
+    precheck: vitestPrecheck,
+    bootCheck: brokenBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  // Both branches are in the request: nothing has been sentenced.
+  const request = readSuiteBuildRequest(projectRoot);
+  assert.deepEqual(request.branches.map((branch) => branch.suite_kind), ['structural', 'behavioral']);
+
+  // The finding is the same facts as the verdict, in the runner's own words,
+  // and it names the file whose job this is.
+  assert.match(output, /undefined method `before_validation'/);
+  assert.match(output, /None of your own tests were opened/);
+  assert.match(output, /\.unitbob\/structural\/_setup\.ts/);
+  // Not a verdict, and not worded as one.
+  assert.doesNotMatch(output, /was left out of this run/);
+  assert.doesNotMatch(output, /Repair it/);
+  assert.doesNotMatch(output, /Found a defect that stops your test suite from starting/);
+});
+
+// Spec 39, criterion 4, second half. The preparation is written, the probe went
+// through it, and the answer is still red — so now it means what it says, and
+// the branch goes exactly as it did before this spec.
+test('with the preparation written, the same red answer costs the branch', async () => {
+  const projectRoot = withPreparation(nodeProject());
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: vitestPrecheck,
     bootCheck: brokenBoot,
     ensureRunner: okRunner,
     runnerEnvelope: okEnvelope,
@@ -622,19 +679,21 @@ test('a structural branch that cannot start drops out, and its peer is still bui
   assert.doesNotMatch(output, /No suite was written and nothing was uploaded/);
 });
 
-// Same drop, different words: an un-run `bundle install` is not the user's bug,
-// and we say which install to run rather than installing it ourselves.
-test('an environment that is not ready names the install, and still builds the peer', async () => {
-  const projectRoot = railsProject();
+// A cause the setup file cannot cure. The finding still holds the branch — the
+// coordinator writes the preparation, the next run stays red, and the branch
+// goes then — but the next step must be the install, not a file that will not
+// help. An un-run `bundle install` is not the user's bug either way.
+test('an environment that is not ready names the install, not the setup file', async () => {
+  const projectRoot = nodeProject();
   let output = '';
 
   await suitePrepare(config(projectRoot), ['--no-known-defect'], {
-    precheck: okPrecheck,
+    precheck: vitestPrecheck,
     bootCheck: async () => ({
       status: 'broken',
       cause: 'environment_not_ready',
-      message: 'Bundler::GemNotFound: Could not find rake-13.0.6',
-      detail: 'bundler: failed to load command: rspec',
+      message: "Cannot find module 'express'",
+      detail: 'at src/app.ts:1',
     }),
     ensureRunner: okRunner,
     runnerEnvelope: okEnvelope,
@@ -643,13 +702,40 @@ test('an environment that is not ready names the install, and still builds the p
     stdout: { write: (chunk) => { output += chunk; return true; } },
   });
 
-  assert.deepEqual(readSuiteBuildRequest(projectRoot).branches.map((b) => b.suite_kind), ['behavioral']);
+  assert.deepEqual(readSuiteBuildRequest(projectRoot).branches.map((b) => b.suite_kind), ['structural', 'behavioral']);
   // The runner and the project's declared dependencies are installed under
   // `.unitbob/runners/`, so the wording does not claim we install nothing. What
   // is left for the reader is whatever their declaration does not cover.
   assert.match(output, /installs the runner.*into `\.unitbob\/runners\/`/);
   assert.match(output, /never writes to your project/);
-  assert.match(output, /bundle install/);
+  assert.match(output, /npm install/);
+  // A missing package is not something a setup file can prepare its way around,
+  // so nobody is sent to write one.
+  assert.doesNotMatch(output, /Put into that file/);
+});
+
+// The other stacks have nowhere to put a preparation: `setupFiles` is a vitest
+// notion, and nothing of Unitbob's runs before an rspec or pytest branch's
+// imports. There the probe's question already is the run's question, so the
+// verdict comes on the first run, exactly as 32-6 left it. Waiting for a file
+// those stacks will never have would have reopened that funnel in silence.
+test('on a stack with nowhere to prepare, the first red answer still takes the branch', async () => {
+  const projectRoot = railsProject();
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: brokenBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  assert.deepEqual(readSuiteBuildRequest(projectRoot).branches.map((b) => b.suite_kind), ['behavioral']);
+  assert.match(output, /code-structure suite was left out of this run/);
+  assert.doesNotMatch(output, /_setup\.ts/);
 });
 
 // Ruby's boot check ignores the file list and boots the application for itself,
@@ -702,6 +788,35 @@ test('a run that loses both branches stops, naming why each one went', async () 
       return true;
     },
   );
+});
+
+// Spec 39 moved the probe's verdict behind a condition, and the one stop this
+// verb still has must stay reachable without it. It is: a run where no branch
+// has a runner manifest loses both before the probe is ever consulted, and says
+// so in the same words.
+test('the empty-run stop is still reached when nothing the probe says is involved', async () => {
+  let asked = false;
+
+  await assert.rejects(
+    suitePrepare(config(railsProject()), ['--no-known-defect'], {
+      precheck: okPrecheck,
+      bootCheck: async () => { asked = true; return { status: 'ok' }; },
+      ensureRunner: okRunner,
+      runnerEnvelope: () => null,
+      getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+      getSuitePacketsBatch: async () => packets(),
+      stdout: { write: () => true },
+    }),
+    (err: Error) => {
+      assert.match(err.message, /No suite branch can be built this run/);
+      assert.match(err.message, /structural: /);
+      assert.match(err.message, /behavioral: /);
+      assert.match(err.message, /Nothing was written and nothing was uploaded/);
+      return true;
+    },
+  );
+
+  assert.equal(asked, false, 'there was no structural branch left to ask about');
 });
 
 // Not checked is not broken. Conflating them would turn away projects that are

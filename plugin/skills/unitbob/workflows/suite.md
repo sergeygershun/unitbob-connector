@@ -92,6 +92,54 @@ after its bounded phase.
    `worker` by their names is how a suite comes to run somewhere nobody meant it
    to.
 
+   **One more of its answers is that the code-structure branch's source files do
+   not load on their own.** It prints that as a finding, not as a verdict: the
+   branch stays in the request, nothing is refused, and what it reports is the
+   opening fact for the file you write next. On a JS/TS project that file is
+   `.unitbob/structural/_setup.ts`, and step 1a is where it gets written.
+
+1a. **Write `.unitbob/structural/_setup.ts` before you plan anything.** It is
+   the code-structure branch's one shared setup file — one per branch, one per
+   project — and the runner executes it before the first import of every file of
+   that branch. Its author is you, not a worker: it has to exist before the first
+   worker starts, or the second worker cannot know that the first already wrote
+   the preparation, and the boot probe's finding is something only you have seen.
+   This is the opposite of the behavioral branch, where a worker writes the
+   shared file and you only repair it.
+
+   Put in it **the minimum the probe needs to go green, and nothing more**: the
+   environment variables the project's modules read at import time, a loader
+   registration. An entry through the project's root module is a last resort,
+   never a first move — on epic-stack the code-structure branch already gives 50
+   green checks and the project's own setup raises the test database they read
+   from, and an early entry into the application from our file is the one thing
+   that could take that away.
+
+   **Write it always, even when there is nothing to prepare**, and never leave it
+   empty: a file with empty contents is refused by the server together with the
+   whole branch, after all the work is done. When the probe was green and nothing
+   is needed, one comment saying why is the whole file.
+
+   Then **run `suite-prepare` again** and read the probe's answer. With the file
+   on disk the probe goes through your preparation, so this time its answer is
+   about the run: green means carry on, red means the branch really cannot start.
+   You may repeat this **only before step 4 writes `worker-plan.json`** — after
+   that, `suite-prepare` moves the plan and the filled-in checkpoints to
+   `previous/` and you would be starting the build over. Re-running costs two or
+   three GETs, seconds of probe, and no money at all, and it clears nothing out
+   of `.unitbob/structural/`, so the file you just wrote survives it.
+
+   **You get one correction, not a loop.** If the second run is still red, fix
+   the file once and run it a third time. If that is still red the branch is out:
+   say so and go on with the behavioral peer. Do not iterate until it goes
+   green — that is the shape of failure the fail-early rule exists to prevent,
+   and it is what a bench run lost itself to.
+
+   Skip all of this on Ruby and Python. There is nowhere to put a preparation on
+   those stacks — nothing of Unitbob's runs before their imports — so the probe
+   answers the run's own question on its first try there, and a red answer takes
+   the branch straight away, as it always has.
+
 2. Read `.unitbob/suite-build/request.json`. It names `project_root`,
    `output_path`, and the requested `branches`. Copy each branch's
    `runner_manifest` verbatim. Never invent or edit one and never add a branch
@@ -443,7 +491,14 @@ after its bounded phase.
    ] }
    ```
 
-   A file already on disk needs only its path. Never list the connector-owned
+   A file already on disk needs only its path. **List
+   `.unitbob/structural/_setup.ts` among the code-structure branch's
+   `support_files`** wherever you wrote one: it is a file of that branch like any
+   other, and a file left out of the answer is wiped the next time the suite is
+   materialized — the branch would then run with nothing in front of its imports
+   and fail exactly the way it did before you wrote it. The connector knows that
+   name and keeps it out of the test paths, so it is never collected as a suite
+   file. Never list the connector-owned
    World as a host support file. A branch that cannot finish gets
    `{ "suite_kind": "...", "build_error": { "message": "exact cause" } }`;
    never omit it. The generator must not put `bdd_quality_review`, `selection_review`,
@@ -497,7 +552,12 @@ after its bounded phase.
 
     Group the failures by the verbatim text of the error. Look yourself at any
     error that turns up under more than one worker: it is coordinator-owned. A
-    host-owned shared step is yours, fixed once and never handed back;
+    host-owned shared step is yours, fixed once and never handed back; so is
+    `.unitbob/structural/_setup.ts`, and a mistake in it does not look like one
+    worker's failure — it runs before every file of the branch, so it paints the
+    whole branch red at once. Fix it yourself, once, and put it in no repair
+    packet: it belongs to no worker's `owned_paths`, and handing it out is how
+    one shared file comes back edited four different ways.
     the connector-owned World is never locally patched. A World incompatibility
     missed by the pre-fan-out probe makes the behavioral branch a `build_error`.
     A production stack frame alone does not prove a product defect: incorrect

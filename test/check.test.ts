@@ -127,6 +127,30 @@ test('runs both peer suites and ships one batch of two run_results', async () =>
   assert.match(output, /\/repos\/3\/enter\?next=%2Frepos%2F3%2Fmap#t=secret-token/);
 });
 
+// Spec 39, criterion 3, on the published side. The shared setup file comes back
+// down with the rest of the branch — it travels as a support file so that
+// `materializeGuardrails` writes it back rather than wiping it — and it is the
+// one support file the runner must never be pointed at.
+test('the shared setup file comes back with the branch but is never run as a test', async () => {
+  let given: string[] = [];
+
+  const published = structuralSuite('vitest');
+  published.suite_file!.support_files = [
+    { path: '.unitbob/structural/_setup.ts', content: '// nothing to prepare here\n' },
+    { path: '.unitbob/structural/reporting.test.ts', content: 'suite bytes' },
+  ];
+
+  await run(config(tmpProject()), [], batchDeps({
+    getSuites: async () => [published],
+    runStructural: async (_root, _runner, suitePaths) => { given = suitePaths; return runnerResult({ report: '{}' }); },
+  }));
+
+  assert.deepEqual(given, [
+    '.unitbob/structural/architecture_map_contracts.test.ts',
+    '.unitbob/structural/reporting.test.ts',
+  ]);
+});
+
 test('a structural stack mismatch becomes that branch suite_error; the behavioral branch still runs', async () => {
   let uploaded: Array<Record<string, unknown>> = [];
   let structuralMaterialized = false;

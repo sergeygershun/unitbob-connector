@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { STRUCTURAL_SETUP_FILE } from '../src/runner/vitest.ts';
 
 function workflow(name: string): string {
   return readFileSync(fileURLToPath(new URL(`../plugin/skills/unitbob/workflows/${name}.md`, import.meta.url)), 'utf8');
@@ -165,6 +166,50 @@ test('the step that reads request.json names the rule for step filenames', () =>
   assert.match(stepTwo, /`requirements`/);
   assert.match(stepTwo, /capability_id.{0,40}where the `\*` is/s);
   assert.match(stepTwo, /Do not look this up in the\s+connector.s source/);
+});
+
+// Spec 39. The shared setup file is an agreement by name and nothing else — no
+// protocol field carries it — so the name is written down in three places across
+// two repositories: this constant, the step that tells the coordinator to write
+// the file, and the structural recipe that tells a worker to leave it alone. A
+// rename reaching only one of them breaks in silence: the file would be written,
+// published, and then never put in front of the imports. This guards the two
+// halves that live in this repository; the recipe's copy is guarded on the brain
+// side, in `spec/prompts/recipe_content_spec.rb`.
+test('the workflow tells the coordinator to write the exact file the connector looks for', () => {
+  const text = workflow('suite');
+  const stepOneA = text.slice(text.indexOf('\n1a. '), text.indexOf('\n2. '));
+
+  assert.ok(text.includes(STRUCTURAL_SETUP_FILE), 'the workflow spells the name the connector knows');
+  assert.match(stepOneA, /before you plan anything/i);
+  // Written by the coordinator and not by a worker, which is the whole reason
+  // this branch's shared file is unlike its peer's.
+  assert.match(stepOneA, /author is you, not a worker/i);
+  // The minimum rule, and the last-resort clause that protects epic-stack's 50.
+  assert.match(stepOneA, /minimum the probe needs/i);
+  assert.match(stepOneA, /last resort/i);
+  // Always written, never empty — the server refuses empty content along with
+  // the whole branch, after every worker has finished.
+  assert.match(stepOneA, /always, even when there is nothing to prepare/i);
+  assert.match(stepOneA, /never leave it\s+empty/i);
+  // The second ask, its one deadline, and the correction that is not a loop.
+  assert.match(stepOneA, /run `suite-prepare` again/i);
+  assert.match(stepOneA, /before step 4 writes/i);
+  assert.match(stepOneA, /one correction, not a loop/i);
+  // And where it does not apply, so nobody writes a `.ts` file beside a Gemfile.
+  assert.match(stepOneA, /Skip all of this on Ruby and Python/i);
+
+  // It has to be listed in the answer, or the next materialization wipes it.
+  const stepNine = text.slice(text.indexOf('\n9. '), text.indexOf('\n10. '));
+  assert.ok(stepNine.includes(STRUCTURAL_SETUP_FILE), 'the assembly step names it too');
+  assert.match(stepNine, /support_files/);
+
+  // And it is repaired by its one owner, never handed out in a repair packet —
+  // said where the failures are being divided up, which is where that decision
+  // is actually made.
+  const stepEleven = text.slice(text.indexOf('\n11. '), text.indexOf('\n12. '));
+  assert.ok(stepEleven.includes(STRUCTURAL_SETUP_FILE), 'the step that assigns failures names it');
+  assert.match(stepEleven, /put it in no repair\s+packet/i);
 });
 
 test('suite-repair-worker validates its owned slice within a 150-turn fuse', () => {

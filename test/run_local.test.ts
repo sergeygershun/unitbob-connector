@@ -119,6 +119,38 @@ test('run-local runs every branch the request asked for, with the connector-owne
   assert.match(out.join(''), /── behavioral ──/);
 });
 
+// Spec 39, criterion 3. The branch's shared setup file travels as an ordinary
+// support file — it has to, or the next materialization wipes it — and every
+// support file is otherwise handed to the runner as a path to collect tests
+// from. It is not a test and never was: vitest would open it looking for cases,
+// find none, and report that as a suite of nothing.
+test('the shared setup file is not handed to the runner as a test path', async () => {
+  const projectRoot = project([{
+    ...structuralAnswer(),
+    suite_file: {
+      path: '.unitbob/structural/billing.test.ts',
+      support_files: [
+        { path: '.unitbob/structural/_setup.ts' },
+        { path: '.unitbob/structural/reporting.test.ts' },
+      ],
+    },
+  }]);
+  for (const name of ['billing.test.ts', '_setup.ts', 'reporting.test.ts']) {
+    writeFileSync(join(projectRoot, '.unitbob', 'structural', name), '// x\n');
+  }
+  let given: string[] = [];
+  const { stdout } = collect();
+
+  await runLocal(config(projectRoot), ['structural'], {
+    runStructural: async (_root, _runner, suitePaths) => { given = suitePaths; return runnerResult(); },
+    runBehavioral: async () => runnerResult(),
+    validateStack: () => okStack,
+    stdout,
+  });
+
+  assert.deepEqual(given, ['.unitbob/structural/billing.test.ts', '.unitbob/structural/reporting.test.ts']);
+});
+
 // The command, on every run including a green one. It is the answer to "how do I
 // run that again", which is what the whole iteration loop is made of.
 test('run-local prints the exact command, the exit code and where the report landed', async () => {

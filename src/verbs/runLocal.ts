@@ -19,6 +19,7 @@ import { placeAdvice } from '../runner/placeAdvice.ts';
 import { runnerEnvironmentPlaceProblem } from '../runner/placeEnvironment.ts';
 import { validateStack } from '../runner/precheck.ts';
 import { runBddSuite } from '../runner/bdd.ts';
+import { testPathsOf } from '../runner/vitest.ts';
 import { runStructuralByRunner } from './run.ts';
 import type { RunnerResult } from '../runner/types.ts';
 
@@ -356,7 +357,11 @@ function artifactPathsOf(output: HostBranchOutput): string[] {
     .map((entry) => (entry as Record<string, unknown> | null)?.path)
     .filter((candidate): candidate is string => typeof candidate === 'string' && candidate.length > 0);
 
-  return [path, ...rest];
+  // Everything but the branch's shared setup file (spec 39): it is a support
+  // file so that it survives materialization, and it is named in `setupFiles`
+  // rather than handed over as a path to collect tests from. Literally the same
+  // filter the check flow uses, because both sides have to mean the one file.
+  return testPathsOf([path, ...rest]);
 }
 
 function branchRoot(config: Config, suiteKind: string): string {
