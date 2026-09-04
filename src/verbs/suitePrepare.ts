@@ -2,7 +2,12 @@ import type { Config } from '../config.ts';
 import { clearRunState } from '../runner/failureDigest.ts';
 import { materializeHelper } from '../files/guardrails.ts';
 import { materializeBehavioralWorld } from '../files/behavioral.ts';
-import { PACKETS_DIR, writeSuitePackets, type SuitePacketsSummary } from '../files/packets.ts';
+import {
+  PACKETS_DIR,
+  structuralSourceFiles,
+  writeSuitePackets,
+  type SuitePacketsSummary,
+} from '../files/packets.ts';
 import {
   movePreviousRunAside,
   recipeNameFor,
@@ -33,7 +38,7 @@ interface SuitePrepareDeps {
   getSuitePacketsBatch: () => Promise<SuitePacket[]>;
   precheck: (projectRoot: string) => { ok: boolean; message?: string; runner?: string };
   confirmRunner: (projectRoot: string, runner: string) => { ok: boolean; message?: string };
-  bootCheck: (projectRoot: string, runner: string | null) => Promise<BootCheck>;
+  bootCheck: (projectRoot: string, runner: string | null, sourceFiles: string[]) => Promise<BootCheck>;
   ensureRunner: (projectRoot: string, runner: string) => Promise<ProvisionResult>;
   ensureStructuralRunner: (projectRoot: string, runner: string) => Promise<ProvisionResult>;
   worldProbe: (projectRoot: string) => Promise<WorldProbeResult>;
@@ -101,7 +106,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     getSuitePacketsBatch: () => wire.getSuitePacketsBatch(),
     precheck: anyStackPrecheck,
     confirmRunner: (projectRoot, runner) => runnerReadyPrecheck(projectRoot, runner),
-    bootCheck: (projectRoot, runner) => bootCheck(projectRoot, runner),
+    bootCheck: (projectRoot, runner, sourceFiles) => bootCheck(projectRoot, runner, sourceFiles),
     ensureRunner: deps?.ensureRunner ?? ensureRunner,
     ensureStructuralRunner: deps?.ensureStructuralRunner ?? ensureStructuralRunner,
     worldProbe: deps?.worldProbe ?? probeBehavioralWorld,
@@ -173,30 +178,10 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     }
   }
 
-  // Spec 32-6. Before anything is fetched or written, find out whether the suite
-  // would get off the ground at all. It runs here, after the boot helper exists
-  // and before the network, so a project whose suite cannot start costs one
-  // command instead of a full generation.
-  //
-  // There is no `--on-broken-boot` flag and no mode. The decision is not a
-  // policy we could reasonably let a user set — it follows from the fact: we
-  // tried to load the thing the suite starts with, it did not load, therefore
-  // not one test would reach its first assertion. Debugging generation against a
-  // knowingly dead project is our problem, not the vibecoder's.
   // The stack the precheck just identified, rather than a second detection of
   // the same thing: on Python that would shell out to pytest all over again.
+  // Used further down, where the boot check now runs.
   const structuralRunner = check.runner ?? null;
-  const boot = await actual.bootCheck(config.projectRoot, structuralRunner);
-  if (boot.status === 'broken') {
-    // "Your environment is not ready" is the one of the two that a container can
-    // answer — the toolchain is missing here and may be sitting in one. A defect
-    // found in the code is a defect wherever it runs, and offering a container
-    // for it would be the noise this spec is trying to remove.
-    throw boot.cause === 'environment_not_ready'
-      ? new ToolchainUnavailableError(bootFinding(boot, structuralRunner), config.projectRoot)
-      : new Error(bootFinding(boot, structuralRunner));
-  }
-  actual.stdout.write(bootFinding(boot, structuralRunner));
 
   const packets = await actual.getSuitePacketsBatch();
 
@@ -276,9 +261,48 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     else blockedNotices.push(`  ${packet.suite_kind}: ${envelopeBlockedReason(packet, runner)}`);
   }
 
+  // Spec 32-6, moved down by spec 38. Before anything is written and before a
+  // single token is spent, find out whether the code this branch's guardrails
+  // will import actually loads.
+  //
+  // Here rather than at the top of the verb, because here the list of those
+  // files exists: it is resolved from the branches that were just assembled,
+  // out of this machine's own graph and route inventory. Nothing is lost by
+  // waiting — `getSuitePacketsBatch` is a GET that writes nothing and costs
+  // nothing, and the generator, which is where the money starts, does not run
+  // until `request.json` is written below.
+  //
+  // What is gained is that a failure here takes one branch and not the run. The
+  // behavioral peer has a runner of its own, touches none of these files, and
+  // used to die of a verdict that was never about it.
+  // Only when there is a branch to check. Ruby's helper ignores the file list
+  // and boots the application for itself, so asking with no structural branch in
+  // the run would start Rails to answer a question nobody put — and a `broken`
+  // answer would then report a branch this build never had.
+  const bootNotices: string[] = [];
+  const structuralIndex = branches.findIndex((branch) => branch.suite_kind === 'structural');
+  if (structuralIndex !== -1) {
+    const boot = await actual.bootCheck(
+      config.projectRoot,
+      structuralRunner,
+      structuralSourceFiles(config.projectRoot, { branches }),
+    );
+    if (boot.status === 'broken') {
+      branches.splice(structuralIndex, 1);
+      bootNotices.push(bootStop(boot, structuralRunner));
+    } else {
+      actual.stdout.write(bootFinding(boot, structuralRunner));
+    }
+  }
+
+  // Every reason a branch is not here, in one place. A run can lose its last
+  // branch to any of the three and the reader needs the one that applies to
+  // them — printing only the envelope reasons left a jest project reading an
+  // empty list under "no suite branch can be built".
   if (branches.length === 0) {
+    const why = [...bootNotices, ...blockedNotices, ...fixableNotices].join('\n');
     throw new Error(
-      `No suite branch can be built this run:\n${blockedNotices.join('\n')}\nNothing was written and nothing was uploaded.`,
+      `No suite branch can be built this run:\n${why}\nNothing was written and nothing was uploaded.`,
     );
   }
 
@@ -369,6 +393,18 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
         : `\nBehavioral steps run under "${runner}", and this connector does not know how that runner ` +
           'finds its step files — it has no strategy of that name. Nothing here tells you what to call ' +
           'them, and this connector will not be able to run the branch either.\n',
+    );
+  }
+
+  // Same shape as the two notices below it, and the same rule: the branch that
+  // could not be prepared drops out, its peer is untouched, and the reason is
+  // printed rather than swallowed.
+  if (bootNotices.length > 0) {
+    actual.stdout.write(
+      '\nThe code-structure suite was left out of this run — the source files its guardrails would ' +
+        'import did not load. None of your own tests were opened; only the files the map named:\n' +
+        bootNotices.join('\n') +
+        '\n',
     );
   }
 
@@ -467,71 +503,68 @@ function stepLoadingNotice(runner: string, loading: BddStepLoading): string {
   );
 }
 
-// What the boot check found, in the vibecoder's terms. Printed on every run,
-// including the quiet ones: "we looked and it starts" and "we could not look"
-// are both worth a line, and a check nobody hears about is a check nobody
-// trusts.
+// What the boot check found when it found nothing wrong, in the vibecoder's
+// terms. Printed on every such run, including the quiet ones: "we looked and it
+// starts" and "we could not look" are both worth a line, and a check nobody
+// hears about is a check nobody trusts.
 //
-// A stop here is a finding, not a refusal, and the wording has to carry that.
-// "We found the defect that stops your suite from starting" and "we could not
-// build your suite" describe the same event and leave the reader in completely
-// different places.
-function bootFinding(boot: BootCheck, runner: string | null): string {
-  // Both halves of "what this answer is worth" travel together, on every
-  // outcome. Splitting them is how the stack caveat came to be missing from
-  // `broken`, and pinning `STRUCTURAL_ONLY` to `ok` alone would have repeated
-  // that in the same breath as the fix: on Rails the stack caveat reads
-  // "whatever stops one stops the other", which is an unscoped claim about a
-  // branch nobody asked — loudest exactly where the run stops for both.
-  // Empties are dropped rather than joined blindly, so a runner with no caveat
-  // of its own does not leave a blank line behind.
-  const caveat = [runner ? SIGNAL_STRENGTH[runner] : '', runner ? STRUCTURAL_ONLY : '']
-    .filter(Boolean)
-    .map((line) => `\n${line}`)
-    .join('');
+// The third answer, `broken`, is the only one that changes what gets built, so
+// it goes to `bootStop` and is printed where every other missing branch is
+// explained.
+function bootFinding(boot: Exclude<BootCheck, { status: 'broken' }>, runner: string | null): string {
+  const caveat = caveatFor(runner);
 
   if (boot.status === 'ok') {
     return `Checked that the suite can start: it does.${caveat}\n`;
   }
 
-  if (boot.status === 'not_checked') {
-    // Not checked is not broken, and nothing downstream may treat it as such.
-    // Conflating the two would block honest projects — the whole reason this
-    // state is named for what happened rather than for what we know.
-    const said = boot.detail ? `\n\n  ${boot.detail}\n` : '';
-    return `${NOT_CHECKED_REASON[boot.reason]}${said} Generation continues.${caveat}\n`;
-  }
+  // Not checked is not broken, and nothing downstream may treat it as such.
+  // Conflating the two would block honest projects — the whole reason this
+  // state is named for what happened rather than for what we know.
+  //
+  // `broken` cannot arrive here: it is the one answer that changes what gets
+  // built, so it goes to `bootStop` and is printed as the reason a branch is
+  // missing.
+  const said = boot.detail ? `\n\n  ${boot.detail}\n` : '';
+  return `${NOT_CHECKED_REASON[boot.reason]}${said} Generation continues.${caveat}\n`;
+}
 
-  const headline =
-    boot.cause === 'defect_in_code'
-      ? 'Found a defect that stops your test suite from starting.'
-      : 'Your test suite cannot start yet — its environment is not ready.';
-
-  // The runner's own words. Everything else on screen is ours; this line is
-  // the one the vibecoder can paste into a search.
+// Why the code-structure branch is not in this run. One indented block, the same
+// shape as every other missing-branch reason, because that is now what this is:
+// its peer carries on, `request.json` is written, and the vibecoder comes away
+// with the guardrails that branch can still give rather than with nothing.
+//
+// The two causes keep their separate next steps. An un-run `pip install` is not
+// somebody's bug and must not be worded as one; a module of theirs that raises
+// on import is theirs to fix and pointing at an install would waste their time.
+function bootStop(boot: Extract<BootCheck, { status: 'broken' }>, runner: string | null): string {
   const next =
     boot.cause === 'defect_in_code'
-      ? 'Fix that, then run `unitbob suite-prepare` again.'
+      ? 'Repair it and run `unitbob suite-prepare` again to build this branch.'
       : 'Unitbob installs the runner, and your declared dependencies with it, into `.unitbob/runners/` — ' +
         'it never writes to your project. Something outside that file is still missing here. Run the ' +
         'install your project needs (`bundle install`, `npm install`, `pip install -r requirements.txt`), ' +
         'then run `unitbob suite-prepare` again.';
 
-  return (
-    `${headline}\n\n` +
-    `  ${boot.message}\n\n` +
-    `${boot.detail}\n\n` +
-    'No suite was written and nothing was uploaded — every test would have died on that line ' +
-    // The caveat belongs here most of all, and this was the one branch it did
-    // not reach — found on the fifth implementation review, 2026-08-03. On
-    // pytest and vitest the check collects the project's whole test tree, so
-    // the line above may come from a test of the project's own that the Unitbob
-    // suite would never have imported. Printing "found a defect" and keeping
-    // that back sends someone to fix a file this product was never going to
-    // touch, which is the same over-claim the spec accepted the wide check only
-    // on condition of disclosing.
-    `before reaching its first assertion. ${next}${caveat}\n`
-  );
+  // `boot.message` is the runner's own words, indented but never paraphrased:
+  // this is the line the vibecoder can paste into a search.
+  return `  ${boot.message}\n\n${boot.detail}\n\n  ${next}${caveatFor(runner, '  ')}\n`;
+}
+
+// What this answer is worth, in two halves that always travel together: how much
+// this stack's check can see, and the fact that it speaks for one branch only.
+// Splitting them is how the stack caveat came to be missing from the outcome
+// that costs a branch — found on the fifth implementation review, 2026-08-03 —
+// so there is one builder and every caller goes through it. `indent` sets how
+// the lines sit, and is the only thing a caller may vary.
+//
+// Empties are dropped rather than joined blindly, so a runner with no caveat of
+// its own does not leave a blank line behind.
+function caveatFor(runner: string | null, indent = ''): string {
+  return [runner ? SIGNAL_STRENGTH[runner] : '', runner ? STRUCTURAL_ONLY : '']
+    .filter(Boolean)
+    .map((line) => `\n${indent}${line}`)
+    .join('');
 }
 
 // Spec 32-6 says the boot rule is one rule for both branches; this check asks
@@ -552,17 +585,11 @@ const STRUCTURAL_ONLY =
   'which has nothing of ours to load until its suite exists, so it was not asked.';
 
 const NOT_CHECKED_REASON: Record<
-  'no_runner' | 'runner_too_old' | 'runner_could_not_answer' | 'timed_out' | 'nothing_to_load' | 'place_failed',
+  'no_runner' | 'runner_could_not_answer' | 'timed_out' | 'nothing_to_load' | 'place_failed',
   string
 > = {
   no_runner: 'Did not check whether the suite can start: no runner available to load it with.',
-  // Distinct from `no_runner` on purpose. The runner is installed and working;
-  // it is only too old to be asked this particular question, and "no runner
-  // available" would send someone to fix a thing that is not broken.
-  runner_too_old:
-    'Did not check whether the suite can start: the installed runner is too old to be asked. ' +
-    'Nothing is wrong with it — this check simply has no way to pose the question to that version.',
-  // Distinct for the same reason, one step further along: the runner is there
+  // Distinct from `no_runner` on purpose: the runner is there
   // and current, it was reached, and it declined to answer — pytest exiting on
   // a usage or internal error of its own. That says nothing about the project,
   // and "no runner available" would again send someone after the wrong thing.

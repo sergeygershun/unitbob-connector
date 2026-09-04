@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { bootCheck, testDatabaseIsSeparate, type BootCheckDeps } from '../src/runner/bootcheck.ts';
+import { bootCheck as askBootCheck, testDatabaseIsSeparate, type BootCheckDeps } from '../src/runner/bootcheck.ts';
 import { UNITBOB_HELPER_RB } from '../src/files/guardrails.ts';
+import { VITEST_BOOT_CONFIG_FILE } from '../src/runner/vitest.ts';
 
 // Spec 32-6 Phase 1. The question this module answers is narrow on purpose:
 // not "is the app healthy" but "would the suite get off the ground". These
@@ -15,6 +16,20 @@ import { UNITBOB_HELPER_RB } from '../src/files/guardrails.ts';
 function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'unitbob-bootcheck-'));
 }
+
+// Spec 38. The check is asked about a list of the project's own source files —
+// the ones this branch's guardrails will import — and never about the project's
+// tests. Every test below that is not about the list itself passes the same
+// one-file list, so the subject stays whatever it was already about.
+//
+// Ruby ignores the list entirely: its helper is the suite's real first line.
+const SOURCES = ['app/billing.rb'];
+const bootCheck = (
+  projectRoot: string,
+  runner: string | null,
+  deps: BootCheckDeps,
+  sourceFiles: string[] = SOURCES,
+) => askBootCheck(projectRoot, runner, sourceFiles, deps);
 
 function railsProject(): string {
   const projectRoot = tmpProject();
@@ -199,7 +214,7 @@ test('a frame in an installed dependency is not the project\'s own code', async 
   assert.equal(result.status === 'broken' && result.cause, 'environment_not_ready');
 });
 
-test('pytest: collection succeeds, so the suite can start', async () => {
+test('pytest: the probe imports cleanly, so the suite can start', async () => {
   const deps = fakeRunner([{ code: 0 }]);
   const result = await bootCheck(tmpProject(), 'pytest', deps);
 
@@ -207,7 +222,53 @@ test('pytest: collection succeeds, so the suite can start', async () => {
   // `-c` with an empty-addopts config, exactly as the real pytest runner does.
   // Without it the project's own `addopts` decide the answer, and a project
   // asking for a plugin it has not installed was refused as `broken`.
-  assert.match(deps.calls[0], /-m pytest -c \.unitbob\/pytest\.ini --collect-only -q/);
+  assert.match(deps.calls[0], /-m pytest -c \.unitbob\/pytest\.ini/);
+  // Spec 38, criterion 1. One path, and it is ours. `.unitbob` is hidden, which
+  // pytest's default norecursedirs skips, so naming it explicitly is the only
+  // way our probe is the thing collected.
+  assert.match(deps.calls[0], /\.unitbob\/structural\/test_unitbob_boot\.py/);
+  assert.ok(!deps.calls[0].includes('--collect-only'), 'the probe is run, not merely collected');
+});
+
+// The heart of criterion 1 on this stack: the project's own test tree is never
+// named, so nothing in it can be opened, and nothing in it can be blamed.
+test('pytest: nothing of the project\'s own test tree is passed to the runner', async () => {
+  const deps = fakeRunner([{ code: 0 }]);
+  await bootCheck(tmpProject(), 'pytest', deps);
+
+  const paths = deps.calls[0].split(' ').filter((word) => word.endsWith('.py'));
+  assert.deepEqual(paths, ['.unitbob/structural/test_unitbob_boot.py']);
+});
+
+// The probe names the files it was given, and is gone by the time anything else
+// looks in that directory — one left behind would be collected by the project's
+// own next test run, which is not ours to change.
+test('pytest: the probe carries the named sources and does not outlive the check', async () => {
+  const projectRoot = tmpProject();
+  const probeFile = join(projectRoot, '.unitbob/structural/test_unitbob_boot.py');
+  let probe = '';
+
+  await bootCheck(projectRoot, 'pytest', {
+    runCmd: async () => {
+      probe = readFileSync(probeFile, 'utf8');
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  }, ['app/services/billing.py']);
+
+  assert.match(probe, /"app\/services\/billing\.py"/);
+  assert.equal(existsSync(probeFile), false);
+});
+
+// Nothing resolved to a file, so there is nothing to import. A hole in the graph
+// is not a broken application, and the runner is not started to find that out.
+test('pytest: an empty list of sources is nothing to load, and starts nothing', async () => {
+  const deps = fakeRunner([{ code: 0 }]);
+
+  assert.deepEqual(await bootCheck(tmpProject(), 'pytest', deps, []), {
+    status: 'not_checked',
+    reason: 'nothing_to_load',
+  });
+  assert.deepEqual(deps.calls, []);
 });
 
 // pytest's own exit vocabulary. Only "your code did not load" is an answer about
@@ -246,62 +307,129 @@ test('pytest: an import error in collected code is broken', async () => {
   assert.equal(result.status, 'broken');
 });
 
-// pytest exits 5 when it collected nothing. A project that came to Unitbob to
-// get tests written is the typical customer, not a broken app — calling this
-// `broken` would refuse exactly the people the product is for.
-test('pytest: no tests to collect is not checked, not broken', async () => {
+// pytest exits 5 when it collected nothing. Since spec 38 the only file offered
+// for collection is our own probe, so this means our probe was not collected —
+// still nothing about the project's code, and still not `broken`.
+test('pytest: nothing collected is not checked, not broken', async () => {
   const result = await bootCheck(tmpProject(), 'pytest', fakeRunner([{ code: 5, stdout: 'no tests ran' }]));
 
   assert.deepEqual(result, { status: 'not_checked', reason: 'nothing_to_load' });
 });
 
-// `list` is a subcommand only from Vitest 2.1, so the version is asked first.
-// Measured on 1.6.0: `vitest list` there is a filename filter, which reported
-// "No test files found" on a project full of tests and, when a name happened to
-// match, started watch mode and hung until the timeout.
-function vitestRunner(version: string, ...results: { code: number | null; stdout?: string; stderr?: string }[]) {
-  return fakeRunner([{ code: 0, stdout: `vitest/${version} darwin-arm64` }, ...results]);
-}
+// --- Spec 38: our runner, our file, never their tests --------------------
 
-test('vitest: listing the test files succeeds', async () => {
-  const deps = vitestRunner('2.1.8', { code: 0 });
+// The test this whole spec came from. It used to assert that the command was
+// exactly `vitest list`, and in doing so it pinned the bug: `list` collects the
+// project's *entire* test tree, so a jest project — 189 green tests of its own —
+// came back "found a defect that stops your test suite from starting" because
+// vitest does not define `describe` the way jest does. A green unit test held
+// that in place for weeks. The assertion is now the opposite one: the command
+// must carry a limit, and the limit must be ours.
+test('vitest: the check runs our own probe under a config we wrote', async () => {
+  const deps = fakeRunner([{ code: 0 }]);
   const result = await bootCheck(vitestProject(), 'vitest', deps);
 
   assert.deepEqual(result, { status: 'ok' });
-  assert.match(deps.calls[0], /vitest --version$/);
-  assert.match(deps.calls[1], /vitest list$/);
+  assert.equal(deps.calls.length, 1, 'one command, no version probe in front of it');
+  assert.match(deps.calls[0], new RegExp(`vitest run --config ${VITEST_BOOT_CONFIG_FILE.replace('.', '\\.')}$`));
+  // Not `list`, and no bare `run` either: a run without the config would collect
+  // whatever the project's own include covers.
+  assert.ok(!/\blist\b/.test(deps.calls[0]));
 });
 
-test('vitest older than the list subcommand is not checked, and never run', async () => {
-  const deps = vitestRunner('1.6.0');
-  const result = await bootCheck(vitestProject(), 'vitest', deps);
+// Said as its own property, because it is the criterion rather than a detail of
+// the command: no path into the project's test tree, and nothing that could
+// widen the collection back out to it.
+test('vitest: no test file of the project\'s own can reach the runner', async () => {
+  const projectRoot = vitestProject();
+  const deps = fakeRunner([{ code: 0 }]);
+  await bootCheck(projectRoot, 'vitest', deps);
 
-  // `runner_too_old`, not `no_runner`: vitest is installed and works. Telling
-  // someone no runner is available while it sits in their node_modules sends
-  // them to fix a thing that is not broken.
-  assert.deepEqual(result, { status: 'not_checked', reason: 'runner_too_old' });
-  // Only the version was asked. `list` is never attempted, so it can neither
-  // answer about the wrong thing nor hang for two minutes.
-  assert.equal(deps.calls.length, 1);
-  assert.match(deps.calls[0], /--version$/);
+  // Every argument is either the subcommand or our own config.
+  const args = deps.calls[0].split(' ').slice(1);
+  assert.deepEqual(args, ['run', '--config', VITEST_BOOT_CONFIG_FILE]);
 });
 
-test('a vitest whose version cannot be read is not checked, not broken', async () => {
-  const deps = fakeRunner([{ code: 0, stdout: 'something unexpected' }]);
+// Both connector-owned files, read at the moment the runner was invoked, since
+// neither survives the call.
+async function bootFiles(projectRoot: string, sourceFiles?: string[]): Promise<{ probe: string; config: string }> {
+  const probeFile = join(projectRoot, '.unitbob/structural/__unitbob_boot.test.mjs');
+  const files = { probe: '', config: '' };
 
-  assert.deepEqual(await bootCheck(vitestProject(), 'vitest', deps), {
+  await bootCheck(projectRoot, 'vitest', {
+    runCmd: async () => {
+      files.probe = readFileSync(probeFile, 'utf8');
+      files.config = readFileSync(join(projectRoot, VITEST_BOOT_CONFIG_FILE), 'utf8');
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  }, sourceFiles);
+
+  assert.equal(existsSync(probeFile), false, 'the probe does not outlive the check');
+  assert.equal(
+    existsSync(join(projectRoot, VITEST_BOOT_CONFIG_FILE)),
+    false,
+    'nor does the config that named it',
+  );
+  return files;
+}
+
+test('vitest: the probe imports the named sources and is removed afterwards', async () => {
+  const { probe, config } = await bootFiles(vitestProject(), [
+    'src/services/billing.ts',
+    'src/controllers/auth.ts',
+  ]);
+
+  // Two levels up from `.unitbob/structural/`, one import per named file.
+  assert.match(probe, /^import "\.\.\/\.\.\/src\/services\/billing\.ts";$/m);
+  assert.match(probe, /^import "\.\.\/\.\.\/src\/controllers\/auth\.ts";$/m);
+  // Vitest refuses a file that declares no test, so the probe declares an empty
+  // one. It asserts nothing: the imports above are the whole question.
+  assert.match(probe, /test\('the modules our guardrails import all load', \(\) => \{\}\)/);
+
+  // And the config names exactly one file to collect: that probe.
+  assert.match(config, /include: \[".unitbob\/structural\/__unitbob_boot\.test\.mjs"\]/);
+  // Globals, because the probe cannot import `test` from a vitest that may live
+  // under `.unitbob/runners/`, out of reach of its own node_modules walk.
+  assert.match(config, /globals: true/);
+});
+
+// The back door into the project's tests. With `test.projects` (or the older
+// `test.workspace`) set, vitest stops deciding anything from the root `include`
+// and runs each sub-project's own test files — so inheriting the project's
+// config wholesale would open exactly the files this spec stopped opening.
+test('vitest: a project workspace cannot widen the check back to the project\'s tests', async () => {
+  const projectRoot = vitestProject();
+  writeFileSync(
+    join(projectRoot, 'vitest.config.ts'),
+    'export default { test: { projects: ["packages/*"] } };\n',
+  );
+
+  const { config } = await bootFiles(projectRoot);
+
+  // The project's config is still inherited — plugins and aliases are what makes
+  // the imports resolve — but those two keys do not come with it.
+  assert.match(config, /import projectConfig from "\.\.\/vitest\.config\.ts"/);
+  assert.match(config, /const \{ projects, workspace, \.\.\.test \} = base\.test \?\? \{\};/);
+  assert.match(config, /test: \{ \.\.\.test, globals: true, include: \[/);
+});
+
+// Nothing resolved to a file — a hole in the graph, not a broken application.
+// The runner is not started to find that out.
+test('vitest: an empty list of sources is nothing to load, and starts nothing', async () => {
+  const deps = fakeRunner([{ code: 0 }]);
+
+  assert.deepEqual(await bootCheck(vitestProject(), 'vitest', deps, []), {
     status: 'not_checked',
-    reason: 'runner_too_old',
+    reason: 'nothing_to_load',
   });
+  assert.deepEqual(deps.calls, []);
 });
 
-// A vitest that is installed but cannot be executed. Before, `spawn` failed
-// with EACCES on the version probe, `supportsList` read that as "cannot be
-// asked", and the answer was `runner_too_old` — a claim about a version nobody
-// managed to read. There is no global fallback for this stack by design, so the
-// honest answer is that there is no vitest to invoke.
-test('vitest: an installed but unrunnable binary is not called too old', async () => {
-  const deps = fakeRunner([{ code: 0, stdout: 'vitest/3.0.0' }]);
+// A vitest that is installed but cannot be executed. There is no global fallback
+// for this stack by design, so the honest answer is that there is no vitest to
+// invoke — and nothing is written to find that out.
+test('vitest: an installed but unrunnable binary is no runner, not a verdict', async () => {
+  const deps = fakeRunner([{ code: 0 }]);
 
   assert.deepEqual(await bootCheck(vitestProject(0o644), 'vitest', deps), {
     status: 'not_checked',
@@ -311,21 +439,26 @@ test('vitest: an installed but unrunnable binary is not called too old', async (
   assert.equal(deps.calls.length, 0);
 });
 
-test('vitest: a project with no test files is not checked, not broken', async () => {
+// Our own probe was not collected. That says nothing about the project's code,
+// so it must not read as a verdict on it.
+test('vitest: a run that collected nothing is not checked, not broken', async () => {
   const result = await bootCheck(
     vitestProject(),
     'vitest',
-    vitestRunner('2.1.8', { code: 1, stderr: 'No test files found, exiting with code 1' }),
+    fakeRunner([{ code: 1, stderr: 'No test files found, exiting with code 1' }]),
   );
 
   assert.deepEqual(result, { status: 'not_checked', reason: 'nothing_to_load' });
 });
 
-test('vitest: an unparseable test file is broken', async () => {
+// A source file the map named that will not parse. It is one of ours to point
+// at now — the probe imports it by name — so "a defect in the code" is a claim
+// we can actually stand behind.
+test('vitest: a named source that will not parse is broken', async () => {
   const result = await bootCheck(
     vitestProject(),
     'vitest',
-    vitestRunner('2.1.8', { code: 1, stderr: 'Error: Transform failed with 1 error:\nsrc/cart.ts:4:2: ERROR: Expected ")"' }),
+    fakeRunner([{ code: 1, stderr: 'Error: Transform failed with 1 error:\nsrc/cart.ts:4:2: ERROR: Expected ")"' }]),
   );
 
   assert.equal(result.status, 'broken');

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { executable, type ProcResult } from '../proc.ts';
 import { projectRootAsSeenByThePlace, runInProject } from './place.ts';
@@ -6,6 +6,7 @@ import { commandFileOnHost, locateRunner } from './toolchain.ts';
 import { GUARDRAILS_DIR, HELPER_FILE } from '../files/guardrails.ts';
 import { PYTEST_INI, PYTEST_INI_FILE } from './pytest.ts';
 import { PROVISION_TIMEOUT_MS } from './provision.ts';
+import { VITEST_BOOT_CONFIG_FILE, vitestBootConfigSource } from './vitest.ts';
 
 // Spec 32-6. `precheck.ts` looks at marker files and starts nothing; this module
 // deliberately does the opposite — it *starts* something, once, before any
@@ -35,7 +36,6 @@ export type BootCheck =
       status: 'not_checked';
       reason:
         | 'no_runner'
-        | 'runner_too_old'
         | 'runner_could_not_answer'
         | 'timed_out'
         | 'nothing_to_load'
@@ -82,29 +82,36 @@ export const SIGNAL_STRENGTH: Record<string, string> = {
     'Full signal on this stack: the check loads the very file the suite starts from, ' +
     'so whatever stops one stops the other.',
   pytest:
-    'Partial signal on this stack: collection only imports what the tests import, so code no ' +
-    'test reaches was not checked — and it imports the whole test tree, so a failure may belong ' +
-    "to one of the project's own tests rather than to the suite that was about to be written.",
+    'Full signal on the files it names: the check imports the very modules the guardrails of this ' +
+    "branch will import, and nothing else — none of this project's own tests are opened. Code that " +
+    'no guardrail imports was not looked at.',
   vitest:
-    'Weak signal on this stack: only test files are parsed and imported, and all of them — so a ' +
-    "failure may belong to one of the project's own tests. Type errors are not checked at all " +
-    '(vite and esbuild strip types without checking them), and a project with no tests yields ' +
-    'no signal.',
+    'Full signal on the files it names: the check imports the very modules the guardrails of this ' +
+    "branch will import, through this project's own vite configuration, and nothing else — none of " +
+    "the project's own tests are opened. Types are not checked (vite strips them without checking " +
+    'them), and code no guardrail imports was not looked at.',
 };
 
 // Does the suite for this stack get off the ground? One attempt, one answer.
+//
+// `sourceFiles` are the project's own source files this branch's guardrails will
+// import, resolved from the map (spec 38). They are what gets loaded on the two
+// stacks that have no boot file of their own — never the project's test tree.
+// Ruby ignores the list: its helper is the suite's real first line and already
+// pulls the application up behind it.
 export async function bootCheck(
   projectRoot: string,
   runner: string | null,
+  sourceFiles: string[],
   deps: BootCheckDeps = defaultDeps,
 ): Promise<BootCheck> {
   switch (runner) {
     case 'rspec':
       return rubyBootCheck(projectRoot, deps);
     case 'pytest':
-      return pytestBootCheck(projectRoot, deps);
+      return pytestBootCheck(projectRoot, sourceFiles, deps);
     case 'vitest':
-      return vitestBootCheck(projectRoot, deps);
+      return vitestBootCheck(projectRoot, sourceFiles, deps);
     default:
       return { status: 'not_checked', reason: 'no_runner' };
   }
@@ -156,7 +163,7 @@ async function loadRubyHelper(
   // executable makes `spawn` throw, `attempt` return null, and the answer come
   // back `no_runner`: "no runner available to load your suite with", said to
   // someone whose bundler is installed and working. That is the mistake
-  // `runner_too_old` and `runner_could_not_answer` were added to stop making,
+  // `runner_could_not_answer` was added to stop making,
   // and the global `bundle` was standing right there the whole time.
   const command = executable(join(projectRoot, 'bin', 'bundle')) ? 'bin/bundle' : 'bundle';
 
@@ -189,9 +196,11 @@ async function loadRubyHelper(
   );
 }
 
-// Python: `pytest --collect-only` imports every test module, which is what the
-// run would do first. It sees import errors in code the tests reach, and only
-// there — recorded as a limitation rather than dressed up as completeness.
+// Python: run one test file of our own, which imports the modules the
+// guardrails will import. Not `--collect-only`, and not the project's test tree:
+// what the run would do first is import *our* suite's targets, and asking pytest
+// to collect everything it can find asks about files this product never touches
+// (spec 38, criterion 1).
 //
 // `-c` with an empty-addopts config, exactly as `runPytestSuite` does and for
 // exactly its reason: the project's own `addopts` (`--cov`, `-n auto`) must not
@@ -200,7 +209,9 @@ async function loadRubyHelper(
 // a `--cov` flag. The run path had already solved this; the check had not
 // inherited the solution, which also made it *stricter* than the thing it
 // predicts, the one rule this whole check is built on.
-async function pytestBootCheck(projectRoot: string, deps: BootCheckDeps): Promise<BootCheck> {
+async function pytestBootCheck(projectRoot: string, sourceFiles: string[], deps: BootCheckDeps): Promise<BootCheck> {
+  if (sourceFiles.length === 0) return { status: 'not_checked', reason: 'nothing_to_load' };
+
   // Its own directory, rather than relying on `materializeHelper` having run
   // first: this check must not fail because a different step was skipped.
   mkdirSync(join(projectRoot, dirname(PYTEST_INI_FILE)), { recursive: true });
@@ -224,18 +235,24 @@ async function pytestBootCheck(projectRoot: string, deps: BootCheckDeps): Promis
         { command: 'python', args: ['-m', 'pytest'], env: undefined },
       ];
 
-  for (const candidate of candidates) {
-    const result = await attempt(
-      deps,
-      candidate.command,
-      [...candidate.args, '-c', PYTEST_INI_FILE, '--collect-only', '-q'],
-      { cwd: projectRoot, env: candidate.env },
-    );
-    if (result === null) continue; // this interpreter is not on the machine
+  return withProbe(projectRoot, { [PYTEST_PROBE_FILE]: pytestProbeSource(sourceFiles) }, async () => {
+    for (const candidate of candidates) {
+      // The probe's path is passed explicitly, and it has to be: `.unitbob` is a
+      // hidden directory, which pytest's default `norecursedirs` skips. Without
+      // the path it would collect the project's tests and not ours — the exact
+      // mistake this spec removes.
+      const result = await attempt(
+        deps,
+        candidate.command,
+        [...candidate.args, '-c', PYTEST_INI_FILE, '--rootdir', '.', PYTEST_PROBE_FILE, '-q'],
+        { cwd: projectRoot, env: candidate.env },
+      );
+      if (result === null) continue; // this interpreter is not on the machine
 
-    return classify(projectRoot, 'pytest', result, (proc) => pytestVerdict(proc.code));
-  }
-  return { status: 'not_checked', reason: 'no_runner' };
+      return classify(projectRoot, 'pytest', result, (proc) => pytestVerdict(proc.code));
+    }
+    return { status: 'not_checked', reason: 'no_runner' };
+  });
 }
 
 // pytest's own exit vocabulary, used rather than "zero or not". The distinction
@@ -245,8 +262,9 @@ function pytestVerdict(code: number | null): Verdict {
   // `classify` turns a timeout into `timed_out` before asking, so this is
   // unreachable — but "no exit code" can only ever mean "we learned nothing".
   if (code === null) return 'runner_could_not_answer';
-  // 5 — collected nothing. A project that came to Unitbob *for* tests is the
-  // typical customer, not a defect.
+  // 5 — collected nothing. Since spec 38 the only file offered for collection is
+  // our own probe, so this now means "our probe was not collected", not "this
+  // project has no tests". Still not a verdict on the code either way.
   if (code === 5) return 'nothing_to_load';
   // 3 — internal error, 4 — bad usage. Both are about the invocation, not the
   // project, so neither may read as "your suite cannot start".
@@ -254,16 +272,34 @@ function pytestVerdict(code: number | null): Verdict {
   return code === 0 ? 'ok' : 'broken';
 }
 
-// JS/TS: `vitest list` parses and imports the test files, which is the closest
-// thing this stack has to a boot.
+// JS/TS: run one test file of our own, which imports the source files the
+// guardrails will import.
+//
+// It used to be `vitest list`, which parses and imports *every* test file the
+// project has. That answered about somebody else's tests: a jest project came
+// back "found a defect that stops your test suite from starting" because its own
+// suites, green under jest, do not define `describe` under vitest. We do not
+// need the project's tests — we write our own — so we stopped opening them
+// (spec 38, criterion 1).
+//
+// Why a test file rather than a plain import: a test runner has no "load this
+// module and tell me if it exploded" command, and a bare `node` cannot stand in,
+// because TypeScript, JSX, path aliases and bundler plugins are exactly what
+// vite resolves from the project's own config. So the probe is a legal vitest
+// test that asserts nothing and imports everything named. Ruby has done the same
+// since spec 29, through `unitbob_helper.rb`.
 //
 // `tsc --noEmit` is deliberately not used. It answers a different question —
 // are the types sound — and a project with a hundred type errors runs perfectly
 // well, because vite, esbuild and tsx strip types without checking them. Type
 // errors accumulate for years in healthy codebases; calling that "broken" would
 // turn away the majority. A file that is genuinely unparseable is caught here
-// anyway, since `vitest list` has to parse it.
-async function vitestBootCheck(projectRoot: string, deps: BootCheckDeps): Promise<BootCheck> {
+// anyway, since the probe's import has to parse it.
+async function vitestBootCheck(projectRoot: string, sourceFiles: string[], deps: BootCheckDeps): Promise<BootCheck> {
+  // Nothing the map resolved to a file, so there is nothing to import. That is a
+  // hole in the graph, not a broken application, and the run carries on.
+  if (sourceFiles.length === 0) return { status: 'not_checked', reason: 'nothing_to_load' };
+
   // A sidecar vitest counts as installed: it is ours, it is on disk, and it is
   // the one the run will spawn. What stays out is `npx`, for the reason below.
   const local = locateRunner(projectRoot, 'vitest')?.command ?? 'node_modules/.bin/vitest';
@@ -272,53 +308,117 @@ async function vitestBootCheck(projectRoot: string, deps: BootCheckDeps): Promis
   // user's project is not this check's business.
   //
   // `executable`, not `existsSync`, and there is no fallback to go to: an
-  // unrunnable binary sends `spawn` into EACCES, `supportsList` reads that as
-  // "cannot be asked", and the answer came back `runner_too_old` — a positive
-  // falsehood about a version nobody looked at. `no_runner` is the honest one
-  // here: there is no vitest this check can invoke.
+  // unrunnable binary sends `spawn` into EACCES and there is nothing left to
+  // ask. `no_runner` is the honest answer: there is no vitest this check can
+  // invoke.
   if (!executable(commandFileOnHost(projectRoot, local))) return { status: 'not_checked', reason: 'no_runner' };
 
-  // `list` is a subcommand only from Vitest 2.1. Older versions read it as a
-  // *filename filter* and go on to run whatever it matches, which was measured
-  // doing two unhelpful things: reporting "No test files found" on a project
-  // that plainly has tests, and — when a file happened to match — starting watch
-  // mode and hanging until the timeout killed it, two minutes for nothing.
-  //
-  // Neither is `broken`, so no healthy project was ever refused. But a check
-  // that quietly answers about the wrong thing is worse than one that says it
-  // did not run, so ask the version first and decline outright when the
-  // subcommand does not exist.
-  // Not `no_runner`: vitest is installed and works, it simply cannot be asked
-  // this question. Telling someone "no runner available" while it sits in their
-  // node_modules sends them to fix the wrong thing.
-  if (!(await supportsList(projectRoot, local, deps))) {
-    return { status: 'not_checked', reason: 'runner_too_old' };
-  }
-
-  const result = await attempt(deps, local, ['list'], { cwd: projectRoot });
-  return classify(projectRoot, 'vitest', result, (proc) => {
-    if (proc.code === 0) return 'ok';
-    if (/no test files found/i.test(`${proc.stdout}\n${proc.stderr}`)) return 'nothing_to_load';
-    return 'broken';
-  });
+  return withProbe(
+    projectRoot,
+    {
+      [VITEST_PROBE_FILE]: vitestProbeSource(sourceFiles),
+      [VITEST_BOOT_CONFIG_FILE]: vitestBootConfigSource(projectRoot, VITEST_PROBE_FILE),
+    },
+    async () => {
+      // `run`, which every version of vitest has. The version probe that used to
+      // stand here existed only for the `list` subcommand, which arrived in 2.1 —
+      // with it goes the `runner_too_old` answer, and with that the case where a
+      // perfectly good runner was declined for its age.
+      const result = await attempt(deps, local, ['run', '--config', VITEST_BOOT_CONFIG_FILE], { cwd: projectRoot });
+      return classify(projectRoot, 'vitest', result, (proc) => {
+        if (proc.code === 0) return 'ok';
+        // Our own probe was not collected. It says nothing about the project's
+        // code, so it must not read as a verdict on it.
+        if (/no test files found/i.test(`${proc.stdout}\n${proc.stderr}`)) return 'nothing_to_load';
+        return 'broken';
+      });
+    },
+  );
 }
 
-// The first Vitest that has a `list` subcommand. Below this it is a filter.
-const VITEST_LIST_FROM = { major: 2, minor: 1 };
+// The probe: one test that asserts nothing and imports everything the map named.
+//
+// The vitest probe lives beside the generated suite because that is where the
+// suite's own imports will resolve from; `materializeGuardrails` wipes that
+// directory before writing a suite, and by then the probe is long gone.
+const VITEST_PROBE_FILE = `${GUARDRAILS_DIR}/__unitbob_boot.test.mjs`;
 
-// `vitest --version` prints e.g. `vitest/1.6.0 darwin-arm64 node-v25.2.1`. A
-// version we cannot read is treated as unsupported: guessing wrong here costs
-// either a silent non-answer or a two-minute hang, and both are worse than
-// saying plainly that the check did not run.
-async function supportsList(projectRoot: string, binary: string, deps: BootCheckDeps): Promise<boolean> {
-  const result = await attempt(deps, binary, ['--version'], { cwd: projectRoot });
-  if (!result || result.code !== 0) return false;
+// `test_` first, on purpose: pytest collects a file by that prefix whatever the
+// project's own `python_files` setting says.
+const PYTEST_PROBE_FILE = `${GUARDRAILS_DIR}/test_unitbob_boot.py`;
 
-  const found = /vitest\/(\d+)\.(\d+)/i.exec(`${result.stdout}\n${result.stderr}`);
-  if (!found) return false;
+// Every file this check puts in somebody's project, written together and removed
+// together whatever happens — the way `worldProbe` treats its own. One of them
+// left behind would be collected by the project's next test run, and changing
+// what that run does is not ours to do.
+//
+// Both stacks go through here, so the write and the removal cannot drift apart
+// on one of them.
+async function withProbe<T>(
+  projectRoot: string,
+  files: Record<string, string>,
+  ask: () => Promise<T>,
+): Promise<T> {
+  for (const [relativePath, source] of Object.entries(files)) {
+    const path = join(projectRoot, relativePath);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, source);
+  }
 
-  const [major, minor] = [Number(found[1]), Number(found[2])];
-  return major > VITEST_LIST_FROM.major || (major === VITEST_LIST_FROM.major && minor >= VITEST_LIST_FROM.minor);
+  try {
+    return await ask();
+  } finally {
+    for (const relativePath of Object.keys(files)) rmSync(join(projectRoot, relativePath), { force: true });
+  }
+}
+
+// Relative from the probe, which sits two levels down (`.unitbob/structural/`).
+// The empty test is not decoration: vitest fails a file that declares none, and
+// `globals: true` in the config we write is what lets it be named without an
+// import (see `writeVitestBootConfig`).
+function vitestProbeSource(sourceFiles: string[]): string {
+  const imports = sourceFiles.map((file) => `import ${JSON.stringify(`../../${file}`)};`).join('\n');
+  return `// Written by the unitbob connector before the boot check — do not edit.
+${imports}
+
+test('the modules our guardrails import all load', () => {});
+`;
+}
+
+// Python imports modules, not files, so the probe does the translation itself.
+// The module is registered in `sys.modules` before it is executed, because a
+// module that is not there yet cannot be the target of its own relative
+// imports.
+//
+// This is the one part of spec 38 that no live project has exercised: there was
+// no Python project on the bench. Worth watching on the first Python run.
+function pytestProbeSource(sourceFiles: string[]): string {
+  return `# Written by the unitbob connector before the boot check — do not edit.
+import importlib.util
+import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+TARGETS = ${JSON.stringify(sourceFiles)}
+
+
+def test_the_modules_our_guardrails_import_all_load():
+    for rel in TARGETS:
+        # A path we cannot build a module out of is our resolution falling
+        # short, never this project's code, so it is passed over in silence.
+        # Blaming somebody's application for a name our own map handed us is
+        # the whole mistake this check was rewritten to stop making.
+        if not rel.endswith(".py"):
+            continue
+        name = rel[:-3].replace("/", ".")
+        spec = importlib.util.spec_from_file_location(name, ROOT / rel)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+`;
 }
 
 // Runs one command, turning "this binary is not on the machine" into null (the
@@ -341,8 +441,7 @@ async function attempt(
 // `no_runner`: the runner is installed and was reached, it simply refused the
 // question — a bad invocation, an internal error of its own. Saying "no runner
 // available" to someone whose pytest is right there sends them to fix something
-// that is not broken, which is the same mistake `runner_too_old` was added to
-// stop making about vitest.
+// that is not broken.
 type Verdict = 'ok' | 'broken' | 'nothing_to_load' | 'runner_could_not_answer';
 
 function classify(

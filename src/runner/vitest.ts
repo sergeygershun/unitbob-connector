@@ -14,6 +14,13 @@ export const VITEST_RESULT_FILE = join(GUARDRAILS_DIR, 'vitest_result.json');
 // part of the suite digest.
 export const VITEST_CONFIG_FILE = join('.unitbob', 'vitest.config.mjs');
 
+// The boot check's own config (spec 38), kept in a separate file from the one
+// above rather than shared with it. The two answer different questions and are
+// alive at different moments — the run's config names the branch's suite files
+// and is rewritten immediately before every run, so a boot check that reused it
+// would either be overwritten or leave the run pointing at a probe.
+export const VITEST_BOOT_CONFIG_FILE = join('.unitbob', 'vitest.boot.config.mjs');
+
 // The project configs we inherit from, most specific first. Vitest reads a
 // project's own config even when we pass `--config`, so we must merge ours with
 // it rather than replace it (plugins, path aliases and resolve settings the
@@ -89,12 +96,22 @@ export async function runVitestSuite(projectRoot: string, suitePaths: string[]):
 // the branch's files have to be in `include` or nothing is collected, and the
 // names a worker gives its slice are not something to bet a whole run on.
 function writeMergedConfig(projectRoot: string, suitePaths: string[]): string[] {
-  const projectConfig = PROJECT_CONFIGS.find((name) => existsSync(join(projectRoot, name)));
-
   const path = join(projectRoot, VITEST_CONFIG_FILE);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, configSource(projectConfig, suitePaths));
+  writeFileSync(path, configSource(projectConfigOf(projectRoot), suitePaths, 'run'));
   return ['--config', VITEST_CONFIG_FILE];
+}
+
+// The same config, shaped for the boot check's probe (spec 38). Returned as text
+// rather than written, because the boot check owns the lifetime of every file it
+// puts in the project: it writes them together and removes them together, and a
+// writer here would take half of that away from the one place that can see it.
+export function vitestBootConfigSource(projectRoot: string, probePath: string): string {
+  return configSource(projectConfigOf(projectRoot), [probePath], 'boot');
+}
+
+function projectConfigOf(projectRoot: string): string | undefined {
+  return PROJECT_CONFIGS.find((name) => existsSync(join(projectRoot, name)));
 }
 
 // The .unitbob/ config sits one level below the project root, so the project
@@ -113,15 +130,37 @@ function writeMergedConfig(projectRoot: string, suitePaths: string[]): string[] 
 // ERR_MODULE_NOT_FOUND before a single test is collected, on exactly the
 // projects the sidecar exists for. A spread does the same job with no import,
 // and `defineConfig` is a typing helper that buys a generated file nothing.
-function configSource(projectConfig: string | undefined, suitePaths: string[]): string {
-  const include = `include: ${JSON.stringify(suitePaths)}`;
+// `mode` is the boot check's two differences from the run, and they go together:
+// globals on, and a workspace refused. See `vitestBootConfigSource`.
+function configSource(projectConfig: string | undefined, suitePaths: string[], mode: 'run' | 'boot'): string {
+  // After the project's own `test`, never before it: ours has to win.
+  const settings = `${mode === 'boot' ? 'globals: true, ' : ''}include: ${JSON.stringify(suitePaths)}`;
   const header = '// Written by the unitbob connector before each vitest run — do not edit.';
 
   if (!projectConfig) {
     return `${header}
-export default { test: { ${include} } };
+export default { test: { ${settings} } };
 `;
   }
+
+  // Globals, because the probe lives in `.unitbob/structural/`: an
+  // `import { test } from 'vitest'` there resolves by walking up from that
+  // directory, which never reaches `.unitbob/runners/node_modules` — where the
+  // vitest we installed for a project that had none is kept. We write this file,
+  // so we turn the globals on and the probe needs no import at all.
+  //
+  // A workspace is dropped for a harder reason. With `test.projects` (or the
+  // older `test.workspace`) set, the root `include` stops deciding anything and
+  // vitest runs each sub-project's own test files — which would open the
+  // project's tests again through the back door, the one thing spec 38 removes.
+  const narrow =
+    mode === 'boot'
+      ? `
+const { projects, workspace, ...test } = base.test ?? {};
+`
+      : `
+const test = base.test ?? {};
+`;
 
   return `${header}
 import projectConfig from ${JSON.stringify(`../${projectConfig}`)};
@@ -129,7 +168,7 @@ import projectConfig from ${JSON.stringify(`../${projectConfig}`)};
 const base = typeof projectConfig === 'function'
   ? await projectConfig({ command: 'serve', mode: 'test' })
   : projectConfig;
-
-export default { ...base, test: { ...(base.test ?? {}), ${include} } };
+${narrow}
+export default { ...base, test: { ...test, ${settings} } };
 `;
 }

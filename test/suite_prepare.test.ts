@@ -581,68 +581,124 @@ test('the behavioral runner follows the structural stack, not a package.json nex
 
 // --- Spec 32-6 Phase 1: the boot check gates the request -----------------
 
-// The decisive property. A request on disk is a job the host picks up, so a
-// suite that cannot start must leave nothing behind — otherwise the run
-// continues and every test written dies before its first assertion.
-test('a suite that cannot start writes no request at all', async () => {
+// Spec 38, criterion 3. The decisive property, and it changed sides. A failed
+// boot used to end the whole run: a jest project came away with nothing at all,
+// including the behavioral branch, whose runner had never been asked and touches
+// none of these files. Now the branch that could not be prepared is the only
+// thing lost.
+const brokenBoot = async () => ({
+  status: 'broken' as const,
+  cause: 'defect_in_code' as const,
+  message: "undefined method `before_validation' for main:Object",
+  detail: 'app/models/report.rb:1',
+});
+
+test('a structural branch that cannot start drops out, and its peer is still built', async () => {
   const projectRoot = railsProject();
   let output = '';
 
-  await assert.rejects(
-    suitePrepare(config(projectRoot), ['--no-known-defect'], {
-      precheck: okPrecheck,
-      bootCheck: async () => ({
-        status: 'broken',
-        cause: 'defect_in_code',
-        message: "undefined method `before_validation' for main:Object",
-        detail: 'app/models/report.rb:1',
-      }),
-      ensureRunner: okRunner,
-      runnerEnvelope: okEnvelope,
-      getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
-      getSuitePacketsBatch: async () => packets(),
-      stdout: { write: (chunk) => { output += chunk; return true; } },
-    }),
-    (err: Error) => {
-      // The runner's own words, and framed as something found rather than
-      // something refused.
-      assert.match(err.message, /Found a defect that stops your test suite from starting/);
-      assert.match(err.message, /undefined method `before_validation'/);
-      assert.match(err.message, /No suite was written and nothing was uploaded/);
-      return true;
-    },
-  );
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: brokenBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
 
-  assert.equal(existsSync(join(projectRoot, '.unitbob', 'suite-build', 'request.json')), false);
-  assert.equal(output, '', 'nothing was reported as progress before the stop');
+  // The request exists, and holds exactly the branch that can be built.
+  const request = readSuiteBuildRequest(projectRoot);
+  assert.deepEqual(request.branches.map((branch) => branch.suite_kind), ['behavioral']);
+
+  // The reason is said, in the runner's own words, as a missing branch rather
+  // than as a refusal of the run.
+  assert.match(output, /code-structure suite was left out of this run/);
+  assert.match(output, /undefined method `before_validation'/);
+  assert.match(output, /None of your own tests were opened/);
+  // Not the old stop. Nothing was refused, so nothing may be worded as a refusal.
+  assert.doesNotMatch(output, /Found a defect that stops your test suite from starting/);
+  assert.doesNotMatch(output, /Fix that, then run/);
+  assert.doesNotMatch(output, /No suite was written and nothing was uploaded/);
 });
 
-// Same stop, different words: an un-run `bundle install` is not the user's bug,
+// Same drop, different words: an un-run `bundle install` is not the user's bug,
 // and we say which install to run rather than installing it ourselves.
-test('an environment that is not ready stops with the install named, not performed', async () => {
+test('an environment that is not ready names the install, and still builds the peer', async () => {
+  const projectRoot = railsProject();
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: async () => ({
+      status: 'broken',
+      cause: 'environment_not_ready',
+      message: 'Bundler::GemNotFound: Could not find rake-13.0.6',
+      detail: 'bundler: failed to load command: rspec',
+    }),
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  assert.deepEqual(readSuiteBuildRequest(projectRoot).branches.map((b) => b.suite_kind), ['behavioral']);
+  // The runner and the project's declared dependencies are installed under
+  // `.unitbob/runners/`, so the wording does not claim we install nothing. What
+  // is left for the reader is whatever their declaration does not cover.
+  assert.match(output, /installs the runner.*into `\.unitbob\/runners\/`/);
+  assert.match(output, /never writes to your project/);
+  assert.match(output, /bundle install/);
+});
+
+// Ruby's boot check ignores the file list and boots the application for itself,
+// so asking it with no structural branch in the run would start Rails to answer
+// a question nobody put — and a `broken` answer would then report a branch this
+// build never had.
+test('with no structural branch in the run, the boot check is not made at all', async () => {
+  const projectRoot = railsProject();
+  let asked = false;
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: async () => { asked = true; return { status: 'ok' }; },
+    ensureRunner: okRunner,
+    // The structural branch has no envelope, so it never reaches `branches[]`.
+    runnerEnvelope: (packet) => (packet.suite_kind === 'behavioral' ? { runner: 'cucumber' } : null),
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  assert.equal(asked, false, 'nothing was booted for a branch that is not being built');
+  assert.deepEqual(readSuiteBuildRequest(projectRoot).branches.map((b) => b.suite_kind), ['behavioral']);
+  // And no finding is claimed about a check that was never made.
+  assert.doesNotMatch(output, /Checked that the suite can start/);
+  assert.doesNotMatch(output, /Did not check whether the suite can start/);
+});
+
+// The one case that still stops everything: no branch survived. Both reasons
+// have to be in the message — printing only the envelope ones left a reader
+// staring at an empty list under "no suite branch can be built".
+test('a run that loses both branches stops, naming why each one went', async () => {
   await assert.rejects(
     suitePrepare(config(railsProject()), ['--no-known-defect'], {
       precheck: okPrecheck,
-      bootCheck: async () => ({
-        status: 'broken',
-        cause: 'environment_not_ready',
-        message: 'Bundler::GemNotFound: Could not find rake-13.0.6',
-        detail: 'bundler: failed to load command: rspec',
-      }),
+      bootCheck: brokenBoot,
       ensureRunner: okRunner,
-      runnerEnvelope: okEnvelope,
+      // No envelope for the behavioral branch, so it is not offered either.
+      runnerEnvelope: (packet) => (packet.suite_kind === 'structural' ? { runner: 'rspec' } : null),
       getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
       getSuitePacketsBatch: async () => packets(),
       stdout: { write: () => true },
     }),
     (err: Error) => {
-      assert.match(err.message, /environment is not ready/);
-      // The runner and the project's declared dependencies are installed under
-      // `.unitbob/runners/`, so the wording no longer claims we install nothing.
-      // What is left for the reader is whatever their declaration does not cover.
-      assert.match(err.message, /installs the runner.*into `\.unitbob\/runners\/`/);
-      assert.match(err.message, /never writes to your project/);
-      assert.match(err.message, /bundle install/);
+      assert.match(err.message, /No suite branch can be built this run/);
+      assert.match(err.message, /undefined method `before_validation'/);
+      assert.match(err.message, /behavioral: /);
+      assert.match(err.message, /Nothing was written and nothing was uploaded/);
       return true;
     },
   );
@@ -691,39 +747,35 @@ test('the finding is printed even when the suite starts, with the stack caveat',
   assert.match(output, /Full signal on this stack/);
 });
 
-// Found on the fifth implementation review, 2026-08-03. The caveat rode along
+// Found on the fifth implementation review, 2026-08-03: the caveat rode along
 // with `ok` and with `not_checked` and fell off `broken` — the one answer that
-// stops the run. On pytest and vitest the check collects the project's *whole*
-// test tree, so a failure can belong to a test of the project's own that the
-// Unitbob suite would never have imported. Withholding that where generation
-// stops sends the vibecoder to fix a file this product was never going to touch.
-test('a stop on a wide-signal stack carries the caveat that made it wide', async () => {
-  await assert.rejects(
-    suitePrepare(config(railsProject()), ['--no-known-defect'], {
-      precheck: () => ({ ok: true, runner: 'pytest' }),
-      bootCheck: async () => ({
-        status: 'broken',
-        cause: 'defect_in_code',
-        message: "ModuleNotFoundError: No module named 'legacy'",
-        detail: 'tests/test_legacy.py:3',
-      }),
-      ensureRunner: okRunner,
-      runnerEnvelope: okEnvelope,
-      getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
-      getSuitePacketsBatch: async () => packets(),
-      stdout: { write: () => true },
+// changes what gets built. It still has to travel, and what it says has changed:
+// the check reads only the files the map named, so what it cannot speak for is
+// the code no guardrail imports, not somebody else's tests.
+test('a dropped branch carries what this stack\'s answer is worth', async () => {
+  const projectRoot = railsProject();
+  let output = '';
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: () => ({ ok: true, runner: 'pytest' }),
+    bootCheck: async () => ({
+      status: 'broken',
+      cause: 'defect_in_code',
+      message: "ModuleNotFoundError: No module named 'legacy'",
+      detail: 'app/services/billing.py:3',
     }),
-    (err: Error) => {
-      assert.match(err.message, /Found a defect that stops your test suite from starting/);
-      assert.match(err.message, /Partial signal on this stack/);
-      assert.match(err.message, /one of the project's own tests/);
-      // Both halves of the caveat, or the stop claims more than was asked: this
-      // refuses the behavioural branch too, on the word of a check that never
-      // looked at it.
-      assert.match(err.message, /says nothing about the product-behaviour branch/i);
-      return true;
-    },
-  );
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { output += chunk; return true; } },
+  });
+
+  assert.match(output, /Full signal on the files it names/);
+  assert.match(output, /Code that no guardrail imports was not looked at/);
+  // The retired claim, and the one the whole spec is about: this check no longer
+  // opens anybody's tests, so it may never hedge that a failure might be theirs.
+  assert.doesNotMatch(output, /one of the project's own tests/);
 });
 
 // Recorded on the fifth implementation review, 2026-08-03. One branch was

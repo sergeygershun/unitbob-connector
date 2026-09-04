@@ -70,13 +70,18 @@ test('vitest: fails without package.json (stack mismatch, fail closed)', () => {
   assert.match(check.message ?? '', /no package\.json/);
 });
 
-test('vitest: a Jest-only project is refused — MVP v2 requires Vitest', () => {
+// Spec 38. What a project runs its own tests with is not asked here and is not
+// a reason to stop — we never open those tests. What stops this project is the
+// plain absence of a vitest to run *our* guardrails with, and the message says
+// that without a word about the runner they chose. (On the build path it is not
+// reached at all: suite-prepare installs a vitest under `.unitbob/` first.)
+test('vitest: a project with no vitest is refused for that, and jest is never mentioned', () => {
   const dir = tmpProject();
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ devDependencies: { jest: '^29.0.0' } }));
   const check = validateStack(dir, 'vitest');
   assert.equal(check.ok, false);
-  assert.match(check.message ?? '', /require Vitest/);
-  assert.match(check.message ?? '', /Jest is not supported/);
+  assert.match(check.message ?? '', /no vitest was found/);
+  assert.doesNotMatch(check.message ?? '', /jest/i);
 });
 
 test('pytest: passes with a Python project marker when pytest is importable', () => {

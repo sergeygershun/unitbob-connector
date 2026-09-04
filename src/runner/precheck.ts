@@ -330,13 +330,20 @@ function vitestPrecheck(projectRoot: string, deps: PrecheckDeps): PrecheckResult
     sidecarProvides(projectRoot, 'vitest', deps) ||
     /"vitest"/.test(readFileSync(packageJson, 'utf8')) ||
     existsSync(join(projectRoot, 'node_modules', '.bin', 'vitest'));
+  // What the project runs its own tests with is not asked here and is not a
+  // reason to stop (spec 38): we never open those tests, so jest, mocha or
+  // nothing at all is none of our business. The only question is whether there
+  // is a vitest to run *our* guardrails with — and suite-prepare installs one
+  // under `.unitbob/` when there is not, which is why this sentence is not
+  // reached on the build path at all. It stands for `run` and `run-local`,
+  // where nothing has been provisioned yet.
   if (!hasVitest) {
     return {
       ok: false,
       message:
-        'JS/TS guardrails require Vitest (Jest is not supported in MVP v2), and vitest was not ' +
-        "found in this project's package.json or node_modules. Offer the user to add it " +
-        '(`npm i -D vitest`); change dependencies only with their consent, then retry.',
+        'Unitbob runs its own guardrails with Vitest, and no vitest was found in this project\'s ' +
+        'package.json or node_modules — nor one installed by Unitbob under `.unitbob/`. Offer the ' +
+        'user to add it (`npm i -D vitest`); change dependencies only with their consent, then retry.',
     };
   }
   return { ok: true };

@@ -8,6 +8,7 @@ import {
   PACKETS_DIR,
   packetIndexPath,
   readPacketIndex,
+  structuralSourceFiles,
   writeSuitePackets,
 } from '../src/files/packets.ts';
 import type { SuiteBuildRequest } from '../src/files/suiteBuild.ts';
@@ -379,6 +380,119 @@ test('a packet is never named in the request, so the request digest is untouched
   // paid for again and again, and its bytes are the request_digest.
   assert.equal(JSON.stringify(built), before);
   assert.doesNotMatch(before, /class User/);
+});
+
+// --- Spec 38, criterion 2: the list the boot check loads -----------------
+
+// The same resolve, read rather than copied. What the boot check needs is not a
+// folder full of files but the paths our own guardrails will import — so it can
+// load those and nothing else, and never open a test the project wrote.
+
+test('the structural branch\'s resolved files are the list, with no duplicates', () => {
+  const root = project();
+  write(root, 'app/models.py', 'class User: pass\n');
+  graph(root, [
+    { id: 'n0', label: 'User', source_file: 'app/models.py' },
+    { id: 'n1', label: 'get_token()', source_file: 'app/models.py' },
+    { id: 'n2', label: 'revoke_token()', source_file: 'app/models.py' },
+  ]);
+
+  const files = structuralSourceFiles(
+    root,
+    request([structural([block('i1', ['User#get_token', 'User#revoke_token'])])]),
+  );
+
+  // Two entrypoints, one file, one import to write.
+  assert.deepEqual(files, ['app/models.py']);
+});
+
+test('a name that resolves to no single file is left out, not made into a refusal', () => {
+  const root = project();
+  write(root, 'app/translate/api.py', 'def translate(): pass\n');
+  write(root, 'app/translate/legacy.py', 'def translate(): pass\n');
+  write(root, 'app/models.py', 'class User: pass\n');
+  graph(root, [
+    { id: 'n1', label: 'translate()', source_file: 'app/translate/api.py' },
+    { id: 'n2', label: 'translate()', source_file: 'app/translate/legacy.py' },
+    { id: 'n3', label: 'User', source_file: 'app/models.py' },
+    { id: 'n4', label: 'get_token()', source_file: 'app/models.py' },
+  ]);
+
+  const files = structuralSourceFiles(
+    root,
+    request([structural([block('i1', ['Translate.translate', 'User#get_token'])])]),
+  );
+
+  assert.deepEqual(files, ['app/models.py']);
+});
+
+// The list is what the *structural* guardrails import. The behavioral branch
+// has a runner of its own and no boot check, and pulling its files in would
+// widen the check past the thing it predicts.
+test('the behavioral branch contributes nothing to the list', () => {
+  const root = project();
+  write(root, 'app/api/tokens.py', 'def post_token(): pass\n');
+  graph(root, []);
+  surfaces(root, [
+    { kind: 'route', id: 'POST /api/tokens', source_file: 'app/api/tokens.py', handler_label: 'Tokens.post' },
+  ]);
+
+  const files = structuralSourceFiles(
+    root,
+    request([behavioral([{ capability_id: 'api-access-tokens', surfaces: ['POST /api/tokens'] }])]),
+  );
+
+  assert.deepEqual(files, []);
+});
+
+// Nothing resolved is an empty list, never an error. The boot check reads that
+// as "there was nothing to load" and the run carries on — a hole in the graph
+// must not cost somebody their guardrails.
+test('a request nothing resolves for yields an empty list, not a throw', () => {
+  const root = project();
+  graph(root, []);
+
+  assert.deepEqual(structuralSourceFiles(root, request([structural([block('i1', ['Ghost#vanish'])])])), []);
+});
+
+// The misdiagnosis this whole spec exists to stop, one layer further in. The
+// graph keeps a name after the file moves; the probe would `import` it; the
+// runner answers "Failed to resolve import"; and the vibecoder is told to repair
+// code that is fine, over a hole in our own map. `writeSuitePackets` already
+// refuses this file in words — the list must refuse it in silence.
+test('a file the graph names but the disk does not have is not in the list', () => {
+  const root = project();
+  write(root, 'app/models.py', 'class User: pass\n');
+  graph(root, [
+    { id: 'n1', label: 'gone()', source_file: 'app/gone.py' },
+    { id: 'n2', label: 'User', source_file: 'app/models.py' },
+    { id: 'n3', label: 'get_token()', source_file: 'app/models.py' },
+  ]);
+
+  const files = structuralSourceFiles(
+    root,
+    request([structural([block('i1', ['Gone#gone', 'User#get_token'])])]),
+  );
+
+  assert.deepEqual(files, ['app/models.py']);
+});
+
+// graph.json is written by a tool, and this list becomes `import` statements.
+// An absolute path or a `..` would point the probe at something outside the
+// checkout, so neither is carried.
+test('a path that leaves the checkout is not in the list', () => {
+  const root = project();
+  graph(root, [
+    { id: 'n1', label: 'escape()', source_file: '../elsewhere/secrets.py' },
+    { id: 'n2', label: 'absolute()', source_file: '/etc/passwd' },
+  ]);
+
+  const files = structuralSourceFiles(
+    root,
+    request([structural([block('i1', ['Escape.escape', 'Absolute.absolute'])])]),
+  );
+
+  assert.deepEqual(files, []);
 });
 
 test('building a packet reaches no further than the local filesystem', () => {

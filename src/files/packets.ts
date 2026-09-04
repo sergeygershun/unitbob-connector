@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { graphNodes, methodNameOf } from '../surfaces/graph.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
 import { surfacesPath } from './mapBuild.ts';
@@ -85,9 +85,8 @@ export function readPacketIndex(projectRoot: string): PacketIndex | null {
 // written, and before any plan exists: the entrypoints are known from the
 // request, the workers are not, so a packet belongs to an entrypoint and two
 // entrypoints in one file share one packet.
-export function writeSuitePackets(projectRoot: string, request: SuiteBuildRequest): SuitePacketsSummary {
-  const targets = targetsOf(request);
-  const lookup = buildLookup(projectRoot);
+export function writeSuitePackets(projectRoot: string, request: BranchesOf): SuitePacketsSummary {
+  const targets = resolveTargets(projectRoot, request);
   const notes = new Map<string, number>();
 
   // Regenerated whole, every run. A packet left over from a previous assignment
@@ -99,16 +98,12 @@ export function writeSuitePackets(projectRoot: string, request: SuiteBuildReques
   const written = new Map<string, number>();
   const refused = new Map<string, Refusal>();
   for (const target of targets) {
-    const sourceFile = lookup(target.entrypoint);
+    const sourceFile = target.source_file;
     if (!sourceFile) {
-      target.note = 'no single file in graph.json or surfaces.json answers to this name — find it yourself';
       count(notes, 'did not resolve to one file');
       continue;
     }
 
-    // The path travels even when the contents do not: a worker told which file
-    // to open has still been saved the search.
-    target.source_file = sourceFile;
     // Two entrypoints in one file get one packet, written once, referenced twice.
     if (!written.has(sourceFile) && !refused.has(sourceFile)) {
       const copied = copyPacket(projectRoot, sourceFile);
@@ -143,11 +138,70 @@ export function writeSuitePackets(projectRoot: string, request: SuiteBuildReques
   };
 }
 
+// Everything either caller needs from a request, and nothing more. The boot
+// check of spec 38 asks this question before `request.json` is written, so it
+// has branches in hand and no request yet.
+type BranchesOf = Pick<SuiteBuildRequest, 'branches'>;
+
+// Every entrypoint the request names, each with the file behind it when one file
+// answers. The one place a name is turned into a path: `writeSuitePackets` copies
+// what comes out of here, and `structuralSourceFiles` only reads it. Two
+// resolvers would be two chances to disagree about which file serves a name, and
+// the boot check and the packets have to be talking about the same files.
+//
+// The words for a name nothing answered to are set here rather than by the
+// caller, because they are part of the answer.
+function resolveTargets(projectRoot: string, request: BranchesOf): PacketTarget[] {
+  const targets = targetsOf(request);
+  const lookup = buildLookup(projectRoot);
+
+  for (const target of targets) {
+    const sourceFile = lookup(target.entrypoint);
+    // The path travels even when the contents do not: a worker told which file
+    // to open has still been saved the search.
+    if (sourceFile) target.source_file = sourceFile;
+    else target.note = 'no single file in graph.json or surfaces.json answers to this name — find it yourself';
+  }
+  return targets;
+}
+
+// Spec 38, criterion 2. The source files the structural guardrails of this
+// request will import — the list the boot check loads instead of the project's
+// own tests. Computed from two artifacts already on this machine, so it costs no
+// token and no network call.
+//
+// A name nothing answered to is simply absent. That gap is already a visible
+// number — "the source behind N of M entrypoints" — and turning it into a
+// refusal would stop a run over a hole in the graph (see В3 of the requirements).
+export function structuralSourceFiles(projectRoot: string, request: BranchesOf): string[] {
+  const files: string[] = [];
+  for (const target of resolveTargets(projectRoot, request)) {
+    if (target.branch !== 'structural' || !target.source_file) continue;
+    // Only a path that is plainly inside this checkout, and only a file that is
+    // really there. graph.json is written by a tool, not by us, and what comes
+    // out of here becomes an `import` statement — so an absolute path or a `..`
+    // would load something this project does not contain, and a name the graph
+    // kept after the file moved would fail to resolve.
+    //
+    // That last one is the whole reason this check exists. A stale graph entry
+    // reaches the runner as "Failed to resolve import" or "FileNotFoundError",
+    // which reads as a dependency that is not installed or a module that will
+    // not load — and the vibecoder would be sent to repair their code over a
+    // hole in *our* map. `writeSuitePackets` already refuses all three, in
+    // words, one file further down; here silence is right, because nothing reads
+    // this list but the probe.
+    if (isAbsolute(target.source_file) || target.source_file.split('/').includes('..')) continue;
+    if (!existsSync(join(projectRoot, target.source_file))) continue;
+    if (!files.includes(target.source_file)) files.push(target.source_file);
+  }
+  return files;
+}
+
 // The two names a request carries. Structural interfaces name methods
 // (`User#get_token`); behavioral capabilities name addresses (`POST /api/tokens`).
 // Both are entrypoints, both resolve to a file, and both produce the same kind
 // of packet — a worker on either branch opens the same thing the same way.
-function targetsOf(request: SuiteBuildRequest): PacketTarget[] {
+function targetsOf(request: BranchesOf): PacketTarget[] {
   const targets: PacketTarget[] = [];
   for (const branch of request.branches) {
     const assignment = branch.assignment as Record<string, unknown> | undefined;
