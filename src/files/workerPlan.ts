@@ -48,6 +48,37 @@ export function workerPlanDigest(projectRoot: string): string {
   return exactFileDigest(workerPlanPath(projectRoot));
 }
 
+// The addresses the request handed to each capability, indexed by id. Spec 41
+// needs them in two places — the checkpoint gate, to refuse an address the slice
+// was never given, and the upload, to work out what was left over — and both read
+// them from the one file that carries them.
+//
+// A capability whose assignment lists no surfaces is absent from the map rather
+// than present with an empty list: "this assignment does not say" and "this
+// capability has no addresses" are different, and only the first must leave
+// membership unchecked.
+export function assignedSurfaces(projectRoot: string): Map<string, string[]> {
+  const path = requestPath(projectRoot);
+  let request: Record<string, unknown>;
+  try {
+    request = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`${path} is not valid JSON: ${(error as Error).message}`);
+  }
+  const byId = new Map<string, string[]>();
+  for (const branch of Array.isArray(request.branches) ? request.branches as Array<Record<string, unknown>> : []) {
+    const assignment = branch.assignment as Record<string, unknown> | undefined;
+    for (const entry of Array.isArray(assignment?.capabilities) ? assignment.capabilities as unknown[] : []) {
+      const capability = entry as Record<string, unknown> | null;
+      const id = capability?.capability_id;
+      const surfaces = capability?.surfaces;
+      if (!isNonEmptyString(id) || !Array.isArray(surfaces) || surfaces.length === 0) continue;
+      byId.set(id, surfaces.filter(isNonEmptyString));
+    }
+  }
+  return byId;
+}
+
 export function readWorkerPlan(projectRoot: string): WorkerPlan {
   const path = workerPlanPath(projectRoot);
   if (!existsSync(path)) throw new Error(`${path} not found — write the complete worker plan before fan-out.`);
@@ -141,9 +172,15 @@ function seedFor(item: WorkerPlanItem, request_digest: string, plan_digest: stri
     written_paths: [],
     decisions: [],
     known_problems: [],
-    // Behavioral only, and absent rather than empty elsewhere — it joins Gherkin
-    // Scenarios to addresses, and the structural branch has no Scenarios.
-    ...(item.branch === 'behavioral' ? { surface_coverage: [] } : {}),
+    // Behavioral only, and absent rather than empty elsewhere — they are about
+    // addresses, and the structural branch has none.
+    //
+    // `unreachable_surfaces` is seeded empty because empty is the honest common
+    // answer and the gate wants the key present either way. Its peer bucket,
+    // `deferred_surfaces`, is deliberately not here: what a slice did not take is
+    // the remainder of what it did, and it is worked out where the upload is
+    // assembled. Two places to answer one question is how the two drift.
+    ...(item.branch === 'behavioral' ? { surface_coverage: [], unreachable_surfaces: [] } : {}),
     facts: [],
   };
 }

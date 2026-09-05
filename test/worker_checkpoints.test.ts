@@ -31,18 +31,26 @@ function documentedFactExamples(): unknown[] {
 
 const READ_FACT = { fact: 'The route creates an order.', source_refs: ['app/x.rb:12'], established_by: 'read' };
 const SCENARIO_JOIN = [{ capability_id: 'c1', scenario: 'A partner cancels an invoice', surfaces: ['POST /bills/:id/cancel'] }];
+const ASSIGNED_SURFACES = ['POST /bills/:id/cancel', 'GET /oauth2callback', 'GET /bills/new'];
+const UNREACHABLE = [{
+  surface: 'GET /oauth2callback',
+  reason: 'The payment provider sends the payer back to this address, and nothing we control can cause that request.',
+}];
 
 interface FixtureOptions {
   facts?: unknown[];
   branch?: 'behavioral' | 'structural';
   surfaceCoverage?: unknown;
+  unreachableSurfaces?: unknown;
+  assignedSurfaces?: string[];
 }
 
 function fixture(options: FixtureOptions = {}): string {
-  const { facts = [READ_FACT], branch = 'behavioral' } = options;
+  const { facts = [READ_FACT], branch = 'behavioral', assignedSurfaces = ASSIGNED_SURFACES } = options;
   const root = mkdtempSync(join(tmpdir(), 'unitbob-checkpoints-'));
   mkdirSync(join(root, '.unitbob/suite-build'), { recursive: true });
-  const requestBytes = `{"budget":{"workers":4},"branches":[{"suite_kind":"${branch}","assignment":{"capabilities":[{"capability_id":"c1"}]}}]}\n`;
+  const assignment = JSON.stringify({ capabilities: [{ capability_id: 'c1', surfaces: assignedSurfaces }] });
+  const requestBytes = `{"budget":{"workers":4},"branches":[{"suite_kind":"${branch}","assignment":${assignment}}]}\n`;
   writeFileSync(join(root, '.unitbob/suite-build/request.json'), requestBytes);
   const requestDigest = createHash('sha256').update(requestBytes).digest('hex');
   const ownedPath = branch === 'behavioral'
@@ -68,6 +76,8 @@ function fixture(options: FixtureOptions = {}): string {
   };
   if ('surfaceCoverage' in options) checkpoint.surface_coverage = options.surfaceCoverage;
   else if (branch === 'behavioral') checkpoint.surface_coverage = SCENARIO_JOIN;
+  if ('unreachableSurfaces' in options) checkpoint.unreachable_surfaces = options.unreachableSurfaces;
+  else if (branch === 'behavioral') checkpoint.unreachable_surfaces = [];
   mkdirSync(join(root, '.unitbob/suite-build/checkpoints'), { recursive: true });
   writeFileSync(checkpointPath(root, plan.workers[0]), JSON.stringify(checkpoint));
   return root;
@@ -163,6 +173,82 @@ test('does not ask a structural slice for a behavioral join', async () => {
   const result = await validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } });
 
   assert.deepEqual(result.valid_workers, ['structural:b1']);
+});
+
+// Spec 41, criterion 1. An address nothing can drive was knowable only to the
+// worker that tried, and it had nowhere to write it: the checkpoint carried what
+// was driven and nothing else, so unreachability travelled to the coordinator as
+// closing prose — the exact arrangement spec 37-2 threw out for `surface_coverage`.
+// It rides with the work that produced it now.
+test('accepts a slice that declares an address nothing can drive', async () => {
+  const root = fixture({ unreachableSurfaces: UNREACHABLE });
+
+  const result = await validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } });
+
+  assert.deepEqual(result.valid_workers, ['behavioral:b1']);
+});
+
+test('requires a behavioral checkpoint to carry the unreachable bucket at all', async () => {
+  const root = fixture({ unreachableSurfaces: undefined });
+
+  await assert.rejects(
+    validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    /behavioral:b1: unreachable_surfaces must be an array/,
+  );
+});
+
+// A reason per address, never one reason for a list — the rule the server states
+// and the one thing that keeps this from becoming the door every inconvenient
+// address goes through. A sentence you cannot write about *this* address is the
+// signal it is not really unreachable.
+test('refuses an unreachable address with no reason of its own', async () => {
+  const root = fixture({ unreachableSurfaces: [{ surface: 'GET /oauth2callback', reason: '  ' }] });
+
+  await assert.rejects(
+    validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    /unreachable_surfaces\[0\]\.reason must say what has to happen elsewhere/,
+  );
+});
+
+// The two answers the machine cannot compute for the slice. Everything else it
+// works out itself: what is left over after driven and unreachable is deferred,
+// and that arithmetic happens where the upload is assembled.
+test('refuses an address that is both driven and unreachable, and one outside the assignment', async () => {
+  const root = fixture({ unreachableSurfaces: [
+    { surface: 'POST /bills/:id/cancel', reason: 'Only the provider can send this.' },
+    { surface: 'GET /invented', reason: 'Nothing reaches it.' },
+  ] });
+
+  await assert.rejects(
+    validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    (error: Error) => {
+      assert.match(error.message, /POST \/bills\/:id\/cancel is driven by a Scenario and declared unreachable/);
+      assert.match(error.message, /GET \/invented was not assigned to this slice/);
+      return true;
+    },
+  );
+});
+
+test('refuses the same unreachable address named twice', async () => {
+  const root = fixture({ unreachableSurfaces: [...UNREACHABLE, ...UNREACHABLE] });
+
+  await assert.rejects(
+    validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } }),
+    /unreachable_surfaces names GET \/oauth2callback more than once/,
+  );
+});
+
+// An assignment that lists no addresses for a capability cannot say whether one
+// belongs to it. Refusing there would refuse honest slices over an absence.
+test('does not check membership when the assignment lists no surfaces', async () => {
+  const root = fixture({
+    assignedSurfaces: [],
+    unreachableSurfaces: [{ surface: 'GET /whatever', reason: 'Only a vendor can call it.' }],
+  });
+
+  const result = await validateWorkerCheckpoints({ server: '', repoId: 1, projectRoot: root }, [], { stdout: { write: () => true } });
+
+  assert.deepEqual(result.valid_workers, ['behavioral:b1']);
 });
 
 // a2time, 2026-08-17, again: a seeded fact said a dismissed employee cannot sign
