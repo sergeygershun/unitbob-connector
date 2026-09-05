@@ -64,6 +64,49 @@ test('each command is a thin pointer at the workflow it shares with the skill', 
   }
 });
 
+// Spec 40, criterion 3. `known_defect_probe` is the only mechanical proof in the
+// whole system that a lamp really goes red when the thing it names breaks: the
+// server re-runs the new scenario against the revision before the fix. Across six
+// bench projects on 2026-09-05 it never ran once — every build carried
+// `{"status": "not_supplied"}` — because step 1 offered both options and nothing
+// anywhere said where a known defect would come from, so the coordinator reached
+// for the default every time. It comes from what the user already said.
+//
+// Two files, and deliberately not three. The workflow is where the flag is
+// chosen, so the rule for choosing it belongs there; the skill carries the policy
+// around it, the way it carries every other rule about spending a user's turn.
+// `commands/suite.md` stays the thin pointer it is elsewhere — a third copy would
+// be the drift this file's other tests exist to prevent.
+test('the workflow and the skill carry a bug the user just fixed into the run', () => {
+  for (const [where, text] of [
+    ['SKILL.md', skill],
+    ['workflows/suite.md', workflow('suite')],
+  ] as const) {
+    assert.match(text, /--known-defect=/, `${where} must name the flag`);
+    assert.match(text, /--fixed-revision=/, `${where} must name the revision that can go with it`);
+    assert.match(text, /--no-known-defect/, `${where} must name the default it replaces`);
+    // The user's own words are the source, and nothing here may read as a licence
+    // to open a second question — not about the defect and not about the
+    // revision. `suite.md` defends its single question as the only turn in the
+    // whole workflow worth spending, and "is there a known defect?" would come
+    // back "no" nearly always: a vibecoder installs Unitbob to find the defects
+    // nobody could name.
+    assert.match(text, /Never a question/, `${where} must rule out asking for it`);
+  }
+
+  // `--fixed-revision` is optional at the command line — `knownDefectContext` in
+  // `suitePrepare.ts` rejects only the pairing with `--no-known-defect` — and it
+  // has to stay optional in the prose too. A user's sentence about this morning's
+  // fix names a bug, almost never a revision, so wording that demands one is
+  // wording that sends the coordinator back to ask.
+  for (const [where, text] of [
+    ['SKILL.md', skill],
+    ['workflows/suite.md', workflow('suite')],
+  ] as const) {
+    assert.match(text, /--fixed-revision=[\s\S]{0,200}\bonly\b/, `${where} must keep the revision optional`);
+  }
+});
+
 test('map workflow stitches connector hands and is self-contained', () => {
   const text = workflow('map');
 

@@ -628,7 +628,23 @@ async function provisionRuby(
     // the exact shape of failure 35-1 closes. A project that does carry it keeps
     // its own version, and now actually gets to: see the comment on the helper
     // for what asking twice cost A2.Time.
-    gemLineUnlessTheProjectHasIt('webmock');
+    gemLineUnlessTheProjectHasIt('webmock') +
+    // The connector-owned World does not merely mention rspec — it requires
+    // `rspec/expectations` and `rspec/mocks` at load and runs a full mock
+    // lifecycle per scenario (`src/files/behavioral.ts`). Until spec 40 the
+    // sidecar never asked for either, so a Rails project on minitest got a World
+    // that could not load: noahsat-web died on `cannot load such file --
+    // rspec/expectations` and lost its behavioral branch entirely.
+    //
+    // Unpinned, and that is a safety condition rather than a taste. A project
+    // carrying `rspec-rails` does not declare `rspec-expectations` explicitly —
+    // it arrives transitively — so the guard above does not fire and our line is
+    // added. It resolves without conflict because the sidecar starts from a copy
+    // of the project's own lock (below) and `>= 0` constrains nothing, leaving
+    // the version rspec-rails already chose. A pin that missed that line would be
+    // a `Bundler::VersionConflict` at install instead.
+    gemLineUnlessTheProjectHasIt('rspec-expectations') +
+    gemLineUnlessTheProjectHasIt('rspec-mocks');
 
   if (!existsSync(sidecarGemfile) || readFileSync(sidecarGemfile, 'utf8') !== sidecarContent) {
     writeFileSync(sidecarGemfile, sidecarContent);

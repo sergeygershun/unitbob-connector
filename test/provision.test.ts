@@ -52,6 +52,55 @@ test('ensureRunner for Ruby generates sidecar Gemfile and does not touch root Ge
   assert.equal(rootGemfileBefore, rootGemfileAfter);
 });
 
+// Spec 40, criterion 2. The connector-owned World requires `rspec/expectations`
+// and `rspec/mocks` and installs a full mock lifecycle per scenario, but the
+// sidecar Gemfile only ever asked for cucumber and webmock. On noahsat-web (Rails
+// on minitest, no rspec of its own) the behavioral branch did not build at all —
+// `cannot load such file -- rspec/expectations`. Half the product, lost on a
+// whole class of projects.
+test('ensureRunner for Ruby asks for the rspec gems the connector-owned World requires', async () => {
+  const projectRoot = tmpProject();
+
+  const mockDeps: ProvisionDeps = { runCmd: async () => ({ code: 0, stdout: '', stderr: '' }) };
+
+  const result = await ensureRunner(projectRoot, 'cucumber', mockDeps);
+  assert.equal(result.status, 'provisioned');
+
+  const sidecarContent = readFileSync(join(projectRoot, '.unitbob', 'behavioral', 'Gemfile'), 'utf8');
+  assert.match(sidecarContent, /gem "rspec-expectations", require: false unless dependencies\.any\?/);
+  assert.match(sidecarContent, /gem "rspec-mocks", require: false unless dependencies\.any\?/);
+});
+
+// The safety condition, which guards the projects that already work: the two
+// lines must stay unpinned. See `provisionRuby` for why a pin would break a
+// project carrying rspec-rails rather than help it.
+//
+// Be honest about the reach of this one. The sidecar Gemfile is a fixed string —
+// the `unless dependencies.any?` guard is bundler's to evaluate at parse time,
+// not the connector's — so the rspec-rails Gemfile below cannot make this test
+// red on its own; it is here to say which project the assertion is about. What
+// the assertion really catches is a pin, and that is the mistake worth catching.
+// Proof that such a project still resolves end to end is a live run, spec 40 task
+// 12; the real-bundler test further down takes it as far as parsing.
+test('ensureRunner for Ruby leaves the rspec gems unpinned so a project with rspec-rails still resolves', async () => {
+  const projectRoot = tmpProject();
+  writeFileSync(
+    join(projectRoot, 'Gemfile'),
+    'source "https://rubygems.org"\ngem "rails", "5.2.0"\ngroup :test do\n  gem "rspec-rails", "~> 6.1"\nend\n',
+  );
+
+  const mockDeps: ProvisionDeps = { runCmd: async () => ({ code: 0, stdout: '', stderr: '' }) };
+
+  await ensureRunner(projectRoot, 'cucumber', mockDeps);
+
+  const sidecarContent = readFileSync(join(projectRoot, '.unitbob', 'behavioral', 'Gemfile'), 'utf8');
+  for (const gem of ['rspec-expectations', 'rspec-mocks']) {
+    const line = sidecarContent.split('\n').find((each) => each.startsWith(`gem "${gem}"`));
+    assert.ok(line, `the sidecar Gemfile declares no ${gem}`);
+    assert.equal(line, `gem "${gem}", require: false unless dependencies.any? { |d| d.name == "${gem}" }`);
+  }
+});
+
 // The sidecar must resolve *from* the project's lock, not beside it. Resolving
 // from scratch moved 285 gems on a2time and left the branch unable to load Rails.
 test('ensureRunner for Ruby seeds the sidecar lock from the project before installing', async () => {
@@ -127,6 +176,13 @@ test('the sidecar Gemfile parses under a real bundler when the project pins the 
       'group :test do\n' +
       '  gem "webmock", "~> 3.23"\n' +
       '  gem "cucumber", "~> 8.0"\n' +
+      // Spec 40: the rspec gems go in on the same terms, and this is the project
+      // shape that has to keep working. `rspec-rails` pulls rspec-expectations
+      // and rspec-mocks in transitively rather than declaring them, so the guard
+      // does not fire and our two lines are added next to it — which is only safe
+      // while they carry no pin. Parsing is as far as this reaches; the
+      // resolution itself is a live run, spec 40 task 12.
+      '  gem "rspec-rails", "~> 6.1"\n' +
       'end\n',
   );
 

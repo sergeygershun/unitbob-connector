@@ -48,9 +48,14 @@ after its bounded phase.
    will not help, and it costs the user everything else in the session.
 
 1. Run `npx -y --loglevel=error unitbob@0.7.4 suite-prepare` with exactly one
-   defect-context option. Use `--known-defect='<exact description>'` (and
-   `--fixed-revision='<revision>'` when supplied), otherwise use
-   `--no-known-defect`. This command checks the supported stack, provisions the
+   defect-context option, and what settles it is something the user has already
+   said. If they mentioned a bug they just fixed, use
+   `--known-defect='<their own description>'`, adding
+   `--fixed-revision='<the revision from before the fix>'` only where git history
+   already names one. Otherwise use `--no-known-defect`. **Never a question** —
+   not about the defect and not about the revision; the one turn this workflow
+   spends on the user is the scope question further down. This command checks the
+   supported stack, provisions the
    runner, materializes the structural helper and connector-owned behavioral
    World, probes that World, and writes
    `.unitbob/suite-build/request.json`. **If it does not write that file, relay
