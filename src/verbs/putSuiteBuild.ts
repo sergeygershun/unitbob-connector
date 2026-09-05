@@ -3,6 +3,7 @@ import {
   readHostSuiteOutputsPerBranch,
   readSuiteBuildRequest,
   type SuiteBuildBranch,
+  type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
 import { placeProblem } from '../runner/place.ts';
 import { collectBuildProblems } from './validateBuild.ts';
@@ -33,7 +34,7 @@ interface PutSuiteBuildDeps {
 // on top of them (spec 32-4) without parsing the lines printed here.
 export async function putSuiteBuild(
   config: Config,
-  _args: string[] = [],
+  args: string[] = [],
   deps?: Partial<PutSuiteBuildDeps>,
 ): Promise<SuiteBuildResult[]> {
   // Spec 36, criterion 7. Publishing is followed immediately by a first run, so
@@ -42,10 +43,17 @@ export async function putSuiteBuild(
   const unusable = placeProblem(config.projectRoot);
   if (unusable) throw new Error(`${unusable}\nNothing was uploaded.`);
 
-  const request = readSuiteBuildRequest(config.projectRoot);
+  const only = namedBranch(readSuiteBuildRequest(config.projectRoot), args);
+  const request = narrowedToBranch(readSuiteBuildRequest(config.projectRoot), only);
   // Spec 32-6: read branch by branch, so one unreadable entry neither hides the
   // next branch's problems nor sinks a peer that is finished and correct.
-  const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
+  const answer = readHostSuiteOutputsPerBranch(request.output_path, request);
+  // The answer file is the whole run's, not this call's: when a branch is named,
+  // its peer's entry is somebody else's business — already published by an
+  // earlier call, or still being repaired — and reading it here would report the
+  // peer as unpublishable for the sole reason that this call was not about it.
+  const outputs = answer.outputs.filter((output) => !only || output.suite_kind === only);
+  const unreadable = answer.unreadable.filter((entry) => !only || entry.suite_kind === only);
   const d: PutSuiteBuildDeps = {
     putSuiteBuilds: (items) => new Wire(config).putSuiteBuilds(items),
     stdout: process.stdout,
@@ -107,6 +115,38 @@ export async function putSuiteBuild(
     d.stdout.write(`${printResult(result)}\n`);
   }
   return all;
+}
+
+// Spec 41, criterion 3. The one thing a caller may say about scope: publish this
+// branch, and only this branch.
+//
+// a2time, 2026-09-05. A two-hour run was interrupted mid-repair and left nothing
+// on the server, because the answer file is written at the very end and the
+// recipe called this command exactly once. Uploading one branch was never the
+// problem — a missing branch has always been named against itself and never sunk
+// the batch. What was missing is a way to say the peer's absence is the plan: the
+// line that catches a silently abandoned branch (`collectBuildProblems`) would
+// otherwise cry wolf on every branch-at-a-time publish, and a warning that is
+// always wrong is a warning nobody reads.
+//
+// Narrowed here, once, by cutting the request down — so every later step is
+// answering the same question about the same list, rather than each remembering
+// to skip the peer.
+function namedBranch(request: SuiteBuildRequest, args: string[]): string | undefined {
+  const named = args.find((arg) => !arg.startsWith('-'));
+  if (!named) return undefined;
+
+  const kinds = request.branches.map((branch) => branch.suite_kind);
+  if (!kinds.includes(named)) {
+    throw new Error(`${named} is not a branch this build asked for (${kinds.join(', ')}).\nNothing was uploaded.`);
+  }
+  return named;
+}
+
+function narrowedToBranch(request: SuiteBuildRequest, only: string | undefined): SuiteBuildRequest {
+  if (!only) return request;
+
+  return { ...request, branches: request.branches.filter((branch) => branch.suite_kind === only) };
 }
 
 // A branch that cannot be assembled locally: its review is missing, stale, or

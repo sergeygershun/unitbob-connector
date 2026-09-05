@@ -370,7 +370,12 @@ test('repair packets run sequentially and validate owned cases before one final 
   assert.match(flat, /edit → run-local <branch> → inspect.*may repeat that loop/i);
   assert.match(flat, /only.*owned paths.*case markers/i);
   assert.match(flat, /does not require.*green.*whole branch/i);
-  assert.match(flat, /after all.*repair packets.*exactly once as the final run/i);
+  // Spec 41, criterion 3: per branch, not per run. A branch that has finished
+  // repair runs and publishes while its peer is still being repaired, so an
+  // interruption costs one branch instead of both.
+  assert.match(flat, /after a branch's repair packets finish, run that branch exactly once as its final run/i);
+  assert.match(flat, /run every structural packet before the first behavioral one/i);
+  assert.match(flat, /put-suite-build structural/);
   assert.doesNotMatch(flat, /run repair packets (?:together|in parallel)/i);
 });
 

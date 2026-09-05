@@ -60,8 +60,11 @@ Verbs:
                        every slice it names, before fan-out.
   validate-worker-checkpoints
                        Internal: validate every worker checkpoint before assembly or repair.
-  put-suite-build      Internal: upload the host-built guardrail suite (whole spec file + test_metadata),
-                       then run every branch it published and report the server's results.
+  put-suite-build [branch]
+                       Internal: upload the host-built guardrail suite (whole spec file + test_metadata),
+                       then run every branch it published and report the server's results. Name a branch
+                       to publish that one alone, as soon as it is finished; with no argument both are
+                       expected, and one the answer never mentions is reported.
   run-local [branch]   Internal: run the suite you just wrote, before publishing it, with the same runner
                        that will run it afterwards. No argument runs every branch the build asked for.
   fix-prepare <id>     Internal: fetch the per-capability repair packet for one red guard (by interface_id).

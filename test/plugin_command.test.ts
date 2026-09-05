@@ -146,12 +146,21 @@ test('suite workflow stitches suite-prepare, the host agent, and put-suite-build
 // lamp on the map". Nothing had ever run the published suite, so the map was gray.
 // Two things had to change: one command now publishes *and* runs, and the workflow
 // may only source colors from that run's server summaries.
-test('the suite workflow ends in one publish-and-run command, with no second user turn', () => {
+//
+// Spec 41, criterion 3 made it one publish *per branch* rather than one per run:
+// a2time, 2026-09-05 was interrupted mid-repair and left nothing on the server,
+// with the structural branch minutes from done. Each call still publishes and
+// runs what it published, which is the part 32-4 bought and this must not spend.
+test('the suite workflow publishes and runs each branch as it finishes, with no second user turn', () => {
   const text = workflow('suite');
-  const publishes = text.match(new RegExp(`${unitbobPattern} put-suite-build`, 'g')) ?? [];
+  const publishes = text.match(new RegExp(`${unitbobPattern} put-suite-build \\w+`, 'g')) ?? [];
 
-  assert.equal(publishes.length, 1, 'exactly one final publish command, which runs what it published');
-  assert.match(text, /runs every branch it published/i);
+  assert.deepEqual(
+    publishes.map((line) => line.split(' ').pop()),
+    ['structural', 'behavioral'],
+    'one publish per branch, named, structural first',
+  );
+  assert.match(text, /publishes that branch, runs it/i);
   // Asking for the first run as a second turn is the failure this spec removed.
   assert.match(text, /never\s+ask\s+the\s+user\s+to\s+run\s+the\s+checks\s+to\s+finish\s+generating/i);
 });

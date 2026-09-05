@@ -574,7 +574,13 @@ after its bounded phase.
 
 12. Launch one fresh named repair role per failure packet:
     `unitbob:suite-repair-worker` on Claude Code and `suite-repair-worker` on
-    Codex. Run repair packets sequentially so they never share the project test DB.
+    Codex. Run repair packets sequentially so they never share the project test DB,
+    and **run every structural packet before the first behavioral one**. Sequential
+    is sequential either way, so the order costs no time — and it is what lets the
+    structural branch finish, publish, and survive an interruption that catches the
+    behavioral branch still in repair. On a2time, 2026-09-05, two hours of work
+    reached the server as nothing at all because both branches were half repaired
+    when the run was stopped.
     Each role completes `unresolved_promises` first while preserving finished files,
     then runs the same loop: `edit → run-local <branch> → inspect`. It may repeat
     that loop within its bounded incarnation. After each run it reads only cases
@@ -613,9 +619,19 @@ after its bounded phase.
     your hands, and this only says it.
 
     Preserve spec 35 after a repair ceiling: keep files and checkpoint, then ask
-    `[Continue once / Stop]`; never auto-resume. After all sequential repair
-    packets finish, run each affected branch exactly once as the final run.
+    `[Continue once / Stop]`; never auto-resume. After a branch's repair packets
+    finish, run that branch exactly once as its final run.
     Confirmed production defects remain executable and red.
+
+    **The structural branch is finished at that point — publish it now.** Run
+    `npx -y --loglevel=error unitbob@0.7.5 put-suite-build structural`. It needs no
+    review, so nothing else is owed for it, and from here its lamps are on the map
+    whatever happens to the rest of the run. Naming the branch is what tells the
+    command to publish that one alone rather than expecting its peer. The answer
+    file written in step 9 already describes both branches and needs no editing;
+    if repair added or dropped a file this branch owns, list it there first, since
+    a file the answer does not name is a file the server never sees. Then start
+    the behavioral packets.
 
 13. If behavioral is a `build_error`, skip review and keep the structural peer.
     Otherwise run
@@ -661,10 +677,14 @@ after its bounded phase.
     protected. Run `validate-build` once more after this step to get the server's
     verdict on the whole branch, review included.
 
-15. Run `npx -y --loglevel=error unitbob@0.7.5 put-suite-build` exactly once. It
-    validates and publishes each branch independently, runs every branch it published,
-    and prints the server summaries and map URL. Never ask the user
-    to run the checks to finish generating.
+15. Run `npx -y --loglevel=error unitbob@0.7.5 put-suite-build behavioral`. It
+    validates and publishes that branch, runs it, and prints the server summary
+    and the map URL. Never ask the user to run the checks to finish generating.
+
+    Once per branch, not once per run: the structural branch went up at the end of
+    step 12, and each call is told which branch it is for. If neither branch has
+    been published yet — the structural one was skipped, or the run is being
+    resumed — call it with no argument and both are expected.
 
 Report publication only from upload lines and colors only from the server's run
 summaries. Never turn a local build run into a claim about the map. Say plainly
