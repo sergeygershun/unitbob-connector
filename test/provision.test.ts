@@ -80,8 +80,8 @@ test('ensureRunner for Ruby asks for the rspec gems the connector-owned World re
 // not the connector's — so the rspec-rails Gemfile below cannot make this test
 // red on its own; it is here to say which project the assertion is about. What
 // the assertion really catches is a pin, and that is the mistake worth catching.
-// Proof that such a project still resolves end to end is a live run, spec 40 task
-// 12; the real-bundler test further down takes it as far as parsing.
+// Proof that such a project still resolves end to end takes a live run on one;
+// the real-bundler test further down takes it as far as parsing.
 test('ensureRunner for Ruby leaves the rspec gems unpinned so a project with rspec-rails still resolves', async () => {
   const projectRoot = tmpProject();
   writeFileSync(
@@ -181,7 +181,7 @@ test('the sidecar Gemfile parses under a real bundler when the project pins the 
       // and rspec-mocks in transitively rather than declaring them, so the guard
       // does not fire and our two lines are added next to it — which is only safe
       // while they carry no pin. Parsing is as far as this reaches; the
-      // resolution itself is a live run, spec 40 task 12.
+      // resolution itself only a live run on such a project can show.
       '  gem "rspec-rails", "~> 6.1"\n' +
       'end\n',
   );
