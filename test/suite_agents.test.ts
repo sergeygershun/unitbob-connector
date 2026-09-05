@@ -85,6 +85,24 @@ test('the worker records what its Scenarios drive, and the coordinator copies th
   assert.match(stepNine, /never search the generated files for a marker/i);
 });
 
+// Spec 41, criterion 1. The other bucket a worker fills, held to the same chain:
+// only the worker that tried to drive an address knows nothing can, and the value
+// of knowing dies at the checkpoint unless the coordinator carries it up. A field
+// written, gated, and read by the map but never copied into the upload is a field
+// with no reader at all — which is what 44 refuses to let anyone introduce.
+test('the worker records an address nothing can drive, and the coordinator carries it up', () => {
+  const { body } = agent('suite-worker');
+  const text = workflow('suite');
+  const stepNine = text.slice(text.indexOf('\n9. '), text.indexOf('\n10. '));
+
+  assert.match(body, /`unreachable_surfaces`/);
+  assert.match(body, /nothing you can do\*{0,2} makes that request happen/i);
+  // And the half that is now nobody's job to write down.
+  assert.match(body, /do \*{0,2}not\*{0,2} list the addresses you simply did not take/i);
+  assert.match(stepNine, /unreachable_surfaces.*copy through/is);
+  assert.match(stepNine, /not taken this time/i);
+});
+
 // The seeded checkpoint is where both halves start, so the shape is stated where
 // it is written — the lesson `decisions` and `known_problems` already taught,
 // and the seed example is the part a reader copies.
@@ -93,6 +111,7 @@ test('the seed names the behavioral join and says how a seeded fact was establis
   const stepSix = text.slice(text.indexOf('\n6. '), text.indexOf('\n7. '));
 
   assert.match(stepSix, /"surface_coverage": \[\]/);
+  assert.match(stepSix, /"unreachable_surfaces": \[\]/);
   assert.match(stepSix, /"established_by"/);
   assert.match(stepSix, /ran: /);
   assert.match(stepSix, /Nothing you\s+remember about this project is a fact/i);

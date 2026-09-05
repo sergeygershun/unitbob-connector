@@ -48,23 +48,19 @@ export function workerPlanDigest(projectRoot: string): string {
   return exactFileDigest(workerPlanPath(projectRoot));
 }
 
-// The addresses the request handed to each capability, indexed by id. Spec 41
-// needs them in two places — the checkpoint gate, to refuse an address the slice
-// was never given, and the upload, to work out what was left over — and both read
-// them from the one file that carries them.
+// The addresses the request handed to each capability, indexed by id. The
+// checkpoint gate needs them for one question only: was this address given to
+// this slice at all (spec 41, criterion 1). What a slice *left* is not worked out
+// anywhere in this repo — answering that means reading how much of a capability
+// is guarded, which is Rails' to say and, as the architecture guard notes, not a
+// sentence `src/` is even allowed to write.
 //
 // A capability whose assignment lists no surfaces is absent from the map rather
 // than present with an empty list: "this assignment does not say" and "this
 // capability has no addresses" are different, and only the first must leave
 // membership unchecked.
 export function assignedSurfaces(projectRoot: string): Map<string, string[]> {
-  const path = requestPath(projectRoot);
-  let request: Record<string, unknown>;
-  try {
-    request = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-  } catch (error) {
-    throw new Error(`${path} is not valid JSON: ${(error as Error).message}`);
-  }
+  const request = readRequest(projectRoot);
   const byId = new Map<string, string[]>();
   for (const branch of Array.isArray(request.branches) ? request.branches as Array<Record<string, unknown>> : []) {
     const assignment = branch.assignment as Record<string, unknown> | undefined;
@@ -77,6 +73,21 @@ export function assignedSurfaces(projectRoot: string): Map<string, string[]> {
     }
   }
   return byId;
+}
+
+// The task, read as loosely typed JSON.
+//
+// `readSuiteBuildRequest` in `suiteBuild.ts` returns the same file typed, and is
+// the obvious thing to call — but that module imports this one, so calling it
+// back would close an import cycle. This is the price, written down so the next
+// reader does not spend the same minutes finding out why.
+function readRequest(projectRoot: string): Record<string, unknown> {
+  const path = requestPath(projectRoot);
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`${path} is not valid JSON: ${(error as Error).message}`);
+  }
 }
 
 export function readWorkerPlan(projectRoot: string): WorkerPlan {
@@ -194,12 +205,7 @@ export function validateWorkerPlanFiles(projectRoot: string): string[] {
   const errors: string[] = [];
   const rubyProject = detectStructuralRunner(projectRoot) === 'rspec';
   const plan = readWorkerPlan(projectRoot);
-  let request: Record<string, unknown>;
-  try {
-    request = JSON.parse(readFileSync(requestPath(projectRoot), 'utf8')) as Record<string, unknown>;
-  } catch (error) {
-    throw new Error(`${requestPath(projectRoot)} is not valid JSON: ${(error as Error).message}`);
-  }
+  const request = readRequest(projectRoot);
 
   if (!plan || typeof plan !== 'object') return ['worker plan must be an object'];
   if (plan.request_digest !== requestDigest(projectRoot)) errors.push('request_digest does not match the exact request.json bytes');

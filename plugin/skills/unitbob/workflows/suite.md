@@ -260,8 +260,11 @@ after its bounded phase.
    A promise may have several planned behavioral scenario intents. Plan the
    scenarios the business outcome actually needs — no quota, in either
    direction. Route aliases and technical mirrors do not earn scenarios without
-   a different business outcome. `surface_budget` is a ceiling, never a quota;
-   unselected assigned surfaces are `deferred_surfaces`, not `unreachable`.
+   a different business outcome. `surface_budget` is a ceiling, never a quota, and
+   guarding only some of a capability's addresses is a legal answer: the map
+   counts what was guarded against what was assigned. Nobody lists the ones not
+   taken — only an address *nothing* can drive is named, and it goes in
+   `unreachable_surfaces` with its own reason.
 
 5. Run `npx -y --loglevel=error unitbob@0.7.5 accept-worker-plan`. If it exits
    non-zero, fix the whole reported batch and run it again. If it remains
@@ -303,7 +306,8 @@ after its bounded phase.
      "branch": "behavioral", "worker_id": "w1",
      "unresolved_promises": ["<every assigned promise>"],
      "completed_promises": [], "written_paths": [],
-     "decisions": [], "known_problems": [], "surface_coverage": [],
+     "decisions": [], "known_problems": [],
+     "surface_coverage": [], "unreachable_surfaces": [],
      "facts": [{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"],"established_by":"read"}]
    }
    ```
@@ -456,7 +460,12 @@ after its bounded phase.
    its slice completed the promises and wrote the cases, and its
    `surface_coverage` is that slice's entries for that `capability_id`, each one
    copied through as `{scenario, surfaces}` — the id groups them and does not
-   travel. **Never search the generated files for a marker to decide any of
+   travel. Its `unreachable_surfaces` copy through the same way, `{surface,
+   reason}` each, filtered to that `capability_id`'s assigned addresses: the
+   worker is the only one who tried to drive them, and a bucket that stops at the
+   checkpoint is a bucket nobody reads. Nothing else about addresses travels —
+   what a slice neither drove nor called unreachable is worked out from the map,
+   and the lamp shows it as *not taken this time*. **Never search the generated files for a marker to decide any of
    this.** On a2time, 2026-08-17, the coordinator wrote itself a check that
    looked for the marker anywhere in the file text, so a marker sitting in a
    comment that explained why an interface was *not* covered counted as coverage,

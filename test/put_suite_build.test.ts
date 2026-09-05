@@ -645,6 +645,6 @@ test('put-suite-build refuses a branch the task never asked for', async () => {
       putSuiteBuilds: async () => [],
       stdout: { write: () => true },
     }),
-    /mystery is not a branch this build asked for \(structural, behavioral\)/,
+    /This suite build has no branch called mystery\. It asked for: structural, behavioral\./,
   );
 });

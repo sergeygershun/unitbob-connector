@@ -1,6 +1,7 @@
 import type { Config } from '../config.ts';
 import {
   branchRunner,
+  namedBranches,
   readHostSuiteOutputsPerBranch,
   readSuiteBuildRequest,
   type HostBranchOutput,
@@ -149,22 +150,11 @@ function compareFailures(
   return true;
 }
 
-// Which branches to run. No argument runs every branch the request asked for —
-// the same "one suite, one run" shape both recipes insist on, so the default
-// never teaches the habit the recipes forbid. A named branch is for the repair
-// loop, where re-running the finished peer is pure cost.
+// Which branches to run: the ones named, or every branch the request asked for.
+// The parse and the error live in `namedBranches`, shared with the publish side.
 function selectBranches(request: SuiteBuildRequest, args: string[]): string[] {
-  const all = request.branches.map((branch) => branch.suite_kind);
-  const named = args.filter((arg) => !arg.startsWith('-'));
-  if (named.length === 0) return all;
-
-  const unknown = named.filter((name) => !all.includes(name));
-  if (unknown.length > 0) {
-    throw new Error(
-      `This suite build has no branch called ${unknown.join(', ')}. It asked for: ${all.join(', ')}.`,
-    );
-  }
-  return named;
+  const named = namedBranches(request, args);
+  return named.length > 0 ? named : request.branches.map((branch) => branch.suite_kind);
 }
 
 // What a run that actually happened hands back: the strategy that ran it, which
