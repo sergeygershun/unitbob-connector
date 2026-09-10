@@ -11,7 +11,7 @@ as green or red lamps. A red lamp is the only signal the user needs: something t
 structure depended on just broke.
 
 There is a `unitbob` command-line tool, run via
-`npx -y --loglevel=error unitbob@0.7.4 <verb>`. It is
+`npx -y --loglevel=error unitbob@0.7.5 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
 (the coding agent) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.
@@ -176,6 +176,28 @@ environment must work. Three rules:
 - **A server the environment depends on isn't running** (the database, the
   Unitbob server) → surface that calmly as a prerequisite — a message, not a
   debugging session.
+
+## A bug the user just fixed is worth naming
+
+Suite generation takes exactly one defect-context option, and it falls back to
+`--no-known-defect` unless something tells it otherwise. That something is the
+user's own words. When they say they have just fixed a bug — "I fixed the
+double-charge on retries this morning" — carry it into the run as
+`--known-defect='<their own description>'`. Add
+`--fixed-revision='<the revision from before the fix>'` only where git history
+already names one: the flag is optional, and going looking for a revision by
+asking spends the very turn this section exists to save.
+
+With a revision it buys the behavioral branch its one mechanical proof: the
+server re-runs the new scenario against that older revision and checks it really
+goes red there and green now, so the user is shown their bug being caught rather
+than told that it would be.
+
+**Never a question.** Do not ask whether there is a known defect, and do not ask
+for a revision. The answer would be "no" almost every time — a vibecoder installs
+Unitbob precisely to find the defects nobody could name — and the suite run
+defends its single question, the one about scope, as the only turn in the whole
+workflow worth spending.
 
 ## Important
 

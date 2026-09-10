@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { behavioralWorldFor } from '../src/files/behavioral.ts';
+import { BEHAVIORAL_WORLD, behavioralWorldFor } from '../src/files/behavioral.ts';
+import { ensureRunner } from '../src/runner/provision.ts';
 import { runProcess } from '../src/proc.ts';
 
 // Spec 35-1, criterion 2. The JS and Python harnesses are not probed by a live
@@ -113,6 +114,38 @@ test('the pytest-bdd harness refuses a connection that leaves the machine and ke
   });
 
   assert.deepEqual(output.stdout.trim().split('\n'), ['BLOCKED', 'REACHED'], output.stderr);
+});
+
+// Spec 40, criterion 2. The Ruby World is the one harness a live probe already
+// covers, so what is missing here is not another execution but a tie: the World
+// names gems, the sidecar Gemfile declares them, and the two lived in different
+// files with nothing holding them together. They drifted, and noahsat-web paid
+// for it — `cannot load such file -- rspec/expectations`, behavioral branch not
+// built at all. Adding a `require` to the World now fails this test until the gem
+// is asked for too.
+const GEM_FOR_REQUIRE = new Map([
+  ['rspec/expectations', 'rspec-expectations'],
+  ['rspec/mocks', 'rspec-mocks'],
+]);
+
+test('every rspec the Ruby World requires is a gem the sidecar Gemfile asks for', async () => {
+  const required = [...BEHAVIORAL_WORLD.matchAll(/^require '(rspec\/[^']+)'$/gm)].map((match) => match[1]);
+  assert.ok(required.length > 0, 'the World stopped requiring rspec at all — this guard is reading the wrong thing');
+
+  const projectRoot = mkdtempSync(join(tmpdir(), 'unitbob-world-gems-'));
+  writeFileSync(join(projectRoot, 'Gemfile'), 'source "https://rubygems.org"\ngem "rails", "5.2.0"\n');
+  await ensureRunner(projectRoot, 'cucumber', { runCmd: async () => ({ code: 0, stdout: '', stderr: '' }) });
+  const sidecarGemfile = readFileSync(join(projectRoot, '.unitbob', 'behavioral', 'Gemfile'), 'utf8');
+
+  for (const path of required) {
+    const gem = GEM_FOR_REQUIRE.get(path);
+    assert.ok(gem, `the World requires '${path}' and nothing here says which gem carries it — name it in GEM_FOR_REQUIRE`);
+    assert.match(
+      sidecarGemfile,
+      new RegExp(`^gem "${gem}"`, 'm'),
+      `the World requires '${path}' but the sidecar Gemfile never asks for ${gem}`,
+    );
+  }
 });
 
 async function firstWorkingPython(): Promise<string | null> {

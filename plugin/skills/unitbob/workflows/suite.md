@@ -47,10 +47,15 @@ after its bounded phase.
    missing it. Report that error as it stands and **do not** advise a restart: it
    will not help, and it costs the user everything else in the session.
 
-1. Run `npx -y --loglevel=error unitbob@0.7.4 suite-prepare` with exactly one
-   defect-context option. Use `--known-defect='<exact description>'` (and
-   `--fixed-revision='<revision>'` when supplied), otherwise use
-   `--no-known-defect`. This command checks the supported stack, provisions the
+1. Run `npx -y --loglevel=error unitbob@0.7.5 suite-prepare` with exactly one
+   defect-context option, and what settles it is something the user has already
+   said. If they mentioned a bug they just fixed, use
+   `--known-defect='<their own description>'`, adding
+   `--fixed-revision='<the revision from before the fix>'` only where git history
+   already names one. Otherwise use `--no-known-defect`. **Never a question** —
+   not about the defect and not about the revision; the one turn this workflow
+   spends on the user is the scope question further down. This command checks the
+   supported stack, provisions the
    runner, materializes the structural helper and connector-owned behavioral
    World, probes that World, and writes
    `.unitbob/suite-build/request.json`. **If it does not write that file, relay
@@ -258,7 +263,7 @@ after its bounded phase.
    a different business outcome. `surface_budget` is a ceiling, never a quota;
    unselected assigned surfaces are `deferred_surfaces`, not `unreachable`.
 
-5. Run `npx -y --loglevel=error unitbob@0.7.4 accept-worker-plan`. If it exits
+5. Run `npx -y --loglevel=error unitbob@0.7.5 accept-worker-plan`. If it exits
    non-zero, fix the whole reported batch and run it again. If it remains
    non-zero, stop before fan-out. The gate checks that the plan is intact —
    digests, ids, paths, capabilities that were actually assigned — and no longer
@@ -334,7 +339,7 @@ after its bounded phase.
    sixteen packets marked as verified.
 
    When the facts are in, run
-   `npx -y --loglevel=error unitbob@0.7.4 validate-worker-checkpoints` here,
+   `npx -y --loglevel=error unitbob@0.7.5 validate-worker-checkpoints` here,
    before fan-out. It is step 8's gate, it costs seconds, and it reads every
    checkpoint against the plan — so a fact it would refuse is refused now, rather
    than after sixteen workers have been launched on it. Skip it only if you added
@@ -381,7 +386,7 @@ after its bounded phase.
 
    On Codex, the Unitbob definitions must also be discoverable on disk in
    `~/.codex/agents/`; if they are missing, stop and run
-   `npx -y --loglevel=error unitbob@0.7.4 codex-install`, then tell the user to
+   `npx -y --loglevel=error unitbob@0.7.5 codex-install`, then tell the user to
    start a new Codex thread. That is a different question from the one above —
    files on disk are exactly what both lost runs already had — so ask both. No Codex version is currently qualified by Unitbob
    for a per-named-agent rollout budget. Before the first bounded role, ask:
@@ -422,7 +427,7 @@ after its bounded phase.
    incarnation. Stop follows the existing incomplete/checkpoint path. Never
    auto-resume or report the incomplete slice as successful after a budget stop.
 
-8. Run `npx -y --loglevel=error unitbob@0.7.4 validate-worker-checkpoints` after
+8. Run `npx -y --loglevel=error unitbob@0.7.5 validate-worker-checkpoints` after
    fan-out and before assembly or repair. It verifies one compact checkpoint per
    plan item against the exact request and plan digests, worker id, promises,
    and owned paths. A stale or invalid checkpoint never goes to repair: record a
@@ -505,7 +510,7 @@ after its bounded phase.
    `known_defect_probe`, `known_defect_context`, or runner reports in generator
    `test_metadata`.
 
-10. Run `npx -y --loglevel=error unitbob@0.7.4 validate-build` after assembly. It
+10. Run `npx -y --loglevel=error unitbob@0.7.5 validate-build` after assembly. It
     checks locally only what the server cannot see — that the files the answer
     names exist under `.unitbob/`, and that every branch the request asked for
     has an entry — and then sends the exact batch the publish would send as a
@@ -522,7 +527,7 @@ after its bounded phase.
     a verdict on the whole branch, and it is the cheapest possible insurance for
     the single publication step 15 allows.
 
-11. Run `npx -y --loglevel=error unitbob@0.7.4 run-local` once for the assembled
+11. Run `npx -y --loglevel=error unitbob@0.7.5 run-local` once for the assembled
     branches. The connector owns the exact runner commands. A runner that never
     starts is a harness failure, not a red test. If the runner never started, it
     died before the first test or scenario; report its exact error, upload nothing
@@ -614,7 +619,7 @@ after its bounded phase.
 
 13. If behavioral is a `build_error`, skip review and keep the structural peer.
     Otherwise run
-    `npx -y --loglevel=error unitbob@0.7.4 suite-review-prepare`. It runs and binds
+    `npx -y --loglevel=error unitbob@0.7.5 suite-review-prepare`. It runs and binds
     the exact candidate, then writes
     `.unitbob/suite-build/review-request.json`. That request includes the
     original behavioral assignment, its worker-plan items, and exact
@@ -656,7 +661,7 @@ after its bounded phase.
     protected. Run `validate-build` once more after this step to get the server's
     verdict on the whole branch, review included.
 
-15. Run `npx -y --loglevel=error unitbob@0.7.4 put-suite-build` exactly once. It
+15. Run `npx -y --loglevel=error unitbob@0.7.5 put-suite-build` exactly once. It
     validates and publishes each branch independently, runs every branch it published,
     and prints the server summaries and map URL. Never ask the user
     to run the checks to finish generating.
