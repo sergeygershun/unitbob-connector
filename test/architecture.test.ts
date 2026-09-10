@@ -60,6 +60,17 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   // `retired` still fail here, and the day this file starts deciding *which*
   // capabilities are covered — the server's job, and the rule spec one-place-per-rule tore out of
   // `validateBuild.ts` — the guard fires again.
+  //
+  // Spec 41, criterion 1 widened what the gate asks, and the widening is written
+  // here because that is where this repo argues with itself. The slice now also
+  // answers with `unreachable_surfaces`, and the gate asks two more mechanical
+  // questions of it: is this address one the request gave *this slice*, and is it
+  // claimed as driven and unreachable at once. Neither is a copy of a server rule
+  // — the server has no idea slices exist, so it can only ask whether an address
+  // belongs to the capability, never whether it belongs to the worker that named
+  // it. And what a slice did *not* take is deliberately not asked here at all:
+  // that is the arithmetic this guard turned back when it was first written into
+  // `suiteBuildUpload.ts`, and it lives on Rails.
   [join('verbs', 'validateWorkerCheckpoints.ts')]: [/\bcoverage\b/i],
 
   // Spec 43, §7. `put-suite-build` prints the server's own `unguarded_by_review`

@@ -568,3 +568,83 @@ test('a branch the answer leaves out is reported, and its peer still publishes',
   assert.deepEqual(classifyPublication(results), { digests: ['s'], unpublished: ['behavioral'] });
   assert.match(printed.join(''), /behavioral: not published/);
 });
+
+// Spec 41, criterion 3. a2time, 2026-09-05: a two-hour run was interrupted during
+// repair and left nothing on the server, because the coordinator writes the
+// answer file at the very end and the recipe called this command exactly once.
+// Both branches were still in repair, so there was nothing to salvage even
+// though one of them was minutes from done.
+//
+// Naming a branch is the whole change on this side. Uploading one branch already
+// worked — a missing branch has always been named against itself and never sunk
+// the batch — but its absence was always reported as a problem. When the caller
+// says which branch it is publishing, the peer's absence is the plan, not a gap,
+// and the line that exists to catch a silently abandoned branch would be a false
+// alarm on every run.
+test('put-suite-build <branch> uploads that branch and says nothing about its peer', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch()] }));
+
+  let uploaded: SuiteBuildItem[] = [];
+  const printed: string[] = [];
+  const results = await putSuiteBuild(config(projectRoot), ['structural'], {
+    putSuiteBuilds: async (items) => { uploaded = items; return [okResults[0]]; },
+    stdout: { write: (chunk) => printed.push(String(chunk)) },
+  });
+
+  assert.deepEqual(uploaded.map((item) => item.suite_kind), ['structural']);
+  assert.deepEqual(results.map((result) => result.suite_kind), ['structural']);
+  assert.equal(printed.join('').includes('behavioral'), false);
+});
+
+// The same answer file, the same missing branch, no branch named: the gap is
+// reported exactly as it always was. This is the guard on the change above —
+// naming a branch narrows what is looked at, it does not soften anything.
+test('put-suite-build with no branch still names a branch the answer never mentions', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch()] }));
+
+  const results = await putSuiteBuild(config(projectRoot), [], {
+    putSuiteBuilds: async () => [okResults[0]],
+    stdout: { write: () => true },
+  });
+
+  const behavioral = results.find((result) => result.suite_kind === 'behavioral');
+  assert.equal(behavioral?.status, 'not_ready');
+});
+
+// A second call publishes the branch that is ready now, and the one already
+// published is not re-sent — the answer file grows a branch at a time, and each
+// call is told which one it is for.
+test('put-suite-build behavioral uploads only the peer the earlier call left', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  const behavioral = behavioralBranch();
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch(), behavioral] }));
+  writeReview(projectRoot, behavioral);
+
+  let uploaded: SuiteBuildItem[] = [];
+  const results = await putSuiteBuild(config(projectRoot), ['behavioral'], {
+    putSuiteBuilds: async (items) => { uploaded = items; return [okResults[1]]; },
+    stdout: { write: () => true },
+  });
+
+  assert.deepEqual(uploaded.map((item) => item.suite_kind), ['behavioral']);
+  assert.deepEqual(classifyPublication(results), { digests: ['b'], unpublished: [] });
+});
+
+test('put-suite-build refuses a branch the task never asked for', async () => {
+  const projectRoot = tmpProject();
+  writeTask(projectRoot);
+  writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [structuralBranch()] }));
+
+  await assert.rejects(
+    putSuiteBuild(config(projectRoot), ['mystery'], {
+      putSuiteBuilds: async () => [],
+      stdout: { write: () => true },
+    }),
+    /This suite build has no branch called mystery\. It asked for: structural, behavioral\./,
+  );
+});

@@ -421,6 +421,28 @@ export function writeSuiteBuildRequest(
   return request;
 }
 
+// Which branches a command was told to work on. No name means all of them — the
+// "one suite, one run" shape both recipes insist on, so the default never teaches
+// the habit the recipes forbid. A name narrows: `run-local` uses it for the
+// repair loop, where re-running the finished peer is pure cost, and
+// `put-suite-build` for publishing a branch the moment it is done (spec 41,
+// criterion 3).
+//
+// One parse and one sentence for both, because it is one rule. They had a copy
+// each and worded the same user error two different ways, which makes a person
+// who has met one of them read the other as a different problem.
+export function namedBranches(request: SuiteBuildRequest, args: string[]): string[] {
+  const all = request.branches.map((branch) => branch.suite_kind);
+  const named = args.filter((arg) => !arg.startsWith('-'));
+  if (named.length === 0) return [];
+
+  const unknown = named.filter((name) => !all.includes(name));
+  if (unknown.length > 0) {
+    throw new Error(`This suite build has no branch called ${unknown.join(', ')}. It asked for: ${all.join(', ')}.`);
+  }
+  return named;
+}
+
 export function readSuiteBuildRequest(projectRoot: string): SuiteBuildRequest {
   const path = requestPath(projectRoot);
   if (!existsSync(path)) {

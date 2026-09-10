@@ -28,7 +28,7 @@ Do this:
    missing it. Report that error as it stands and **do not** advise a restart: it
    will not help, and it costs the user everything else in the session.
 
-1. Run `npx -y --loglevel=error unitbob@0.7.5 map-prepare`. It refreshes the code
+1. Run `npx -y --loglevel=error unitbob@0.7.6 map-prepare`. It refreshes the code
    graph and writes the build request.
 
    **The environment is never yours to repair.** Building an interpreter,
@@ -48,7 +48,7 @@ Do this:
 3. Read the graph at `graph_path`. **This is your input — both maps are built
    from it (plus, for the surface map, the project source).**
 4. Build **both** lenses locally (see below).
-5. Run `npx -y --loglevel=error unitbob@0.7.5 put-map-build`. It uploads the
+5. Run `npx -y --loglevel=error unitbob@0.7.6 put-map-build`. It uploads the
    graph, `map_document.json`, `surfaces.json`, and `surface_document.json`
    together; if either lens is missing or invalid the whole upload is rejected
    and the previous map stays current.

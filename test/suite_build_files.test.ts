@@ -310,3 +310,4 @@ test('a suite file edit moves it', () => {
 
   assert.notEqual(suiteCandidateDigest(edited), suiteCandidateDigest(behavioralBranch()));
 });
+

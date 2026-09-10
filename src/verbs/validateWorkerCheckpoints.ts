@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { Config } from '../config.ts';
 import {
+  assignedSurfaces,
   checkpointPath,
   readWorkerPlan,
   requestDigest,
@@ -19,6 +20,7 @@ export async function validateWorkerCheckpoints(
   const plan = readWorkerPlan(config.projectRoot);
   const expectedRequestDigest = requestDigest(config.projectRoot);
   const expectedPlanDigest = workerPlanDigest(config.projectRoot);
+  const assigned = assignedSurfaces(config.projectRoot);
   const errors: string[] = [];
 
   for (const item of plan.workers) {
@@ -61,6 +63,7 @@ export async function validateWorkerCheckpoints(
     }
     validateCompactFacts(checkpoint.facts, label, errors);
     validateSurfaceCoverage(checkpoint.surface_coverage, item, label, errors);
+    validateUnreachableSurfaces(checkpoint.unreachable_surfaces, item, checkpoint.surface_coverage, assigned, label, errors);
     stringArray(checkpoint.decisions, `${label}: decisions`, errors);
     stringArray(checkpoint.known_problems, `${label}: known_problems`, errors);
   }
@@ -153,6 +156,82 @@ function validateSurfaceCoverage(
       errors.push(`${label}: surface_coverage[${index}].surfaces must name at least one surface the Scenario drives`);
     }
   }
+}
+
+// Spec 41, criterion 1. Every assigned address ends in one of three places:
+// driven by a Scenario, unreachable, or deferred. Only the first two are answers
+// a worker can give — deferred is whatever is left, worked out where the upload
+// is assembled, so a slice never has to enumerate what it did not do.
+//
+// a2time, 2026-09-05. Eight capabilities left 81 addresses in none of the three,
+// and the server refused the publication after two hours. The workers were not
+// careless: `deferred_surfaces` was only legal past the ceiling of twenty, six of
+// those eight never came near it, and silence was the only move left. Widening
+// the deferred bucket gave them a legal answer; computing it gave them a free
+// one. What stays here is the pair the machine cannot work out on its own.
+//
+// Behavioral only, for the same reason as its neighbour: the structural branch
+// has no addresses to account for.
+function validateUnreachableSurfaces(
+  value: unknown,
+  item: Pick<WorkerPlanItem, 'branch' | 'capability_ids'>,
+  coverage: unknown,
+  assigned: Map<string, string[]>,
+  label: string,
+  errors: string[],
+): void {
+  if (value === undefined && item.branch !== 'behavioral') return;
+  if (!Array.isArray(value)) {
+    errors.push(`${label}: unreachable_surfaces must be an array of {surface, reason} entries, empty when the slice can drive everything it was given`);
+    return;
+  }
+
+  const driven = new Set(drivenSurfaces(coverage));
+  // Membership is measured against the addresses this slice's own capabilities
+  // were given, never the whole assignment: a neighbour's address is as foreign
+  // as an invented one.
+  const mine = item.capability_ids.flatMap((id) => assigned.get(id) ?? []);
+  const known = new Set(mine);
+  const seen = new Set<string>();
+
+  for (const [index, entry] of value.entries()) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(`${label}: unreachable_surfaces[${index}] must be an object with surface and reason; got ${jsonType(entry)}`);
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const surface = record.surface;
+    if (typeof surface !== 'string' || !surface.trim()) {
+      errors.push(`${label}: unreachable_surfaces[${index}].surface must name one address`);
+      continue;
+    }
+    // A reason per address, never one reason for a list. A sentence you cannot
+    // write about *this* address is the signal it is not really unreachable —
+    // which is the whole guard, and the reason this bucket stays narrow while
+    // its neighbour widened.
+    if (typeof record.reason !== 'string' || !record.reason.trim()) {
+      errors.push(`${label}: unreachable_surfaces[${index}].reason must say what has to happen elsewhere for ${surface} to be called`);
+    }
+    if (driven.has(surface)) {
+      errors.push(`${label}: ${surface} is driven by a Scenario and declared unreachable — it is one or the other`);
+    }
+    // Only when the assignment actually listed addresses for this capability.
+    // An assignment that says nothing cannot say a surface is foreign, and
+    // refusing there would refuse honest slices over an absence.
+    if (known.size > 0 && !known.has(surface)) {
+      errors.push(`${label}: ${surface} was not assigned to this slice`);
+    }
+    if (seen.has(surface)) errors.push(`${label}: unreachable_surfaces names ${surface} more than once`);
+    else seen.add(surface);
+  }
+}
+
+function drivenSurfaces(coverage: unknown): string[] {
+  if (!Array.isArray(coverage)) return [];
+  return coverage.flatMap((entry) => {
+    const surfaces = (entry as Record<string, unknown> | null)?.surfaces;
+    return Array.isArray(surfaces) ? surfaces.filter((surface): surface is string => typeof surface === 'string') : [];
+  });
 }
 
 function jsonType(value: unknown): string {

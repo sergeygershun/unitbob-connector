@@ -47,7 +47,7 @@ after its bounded phase.
    missing it. Report that error as it stands and **do not** advise a restart: it
    will not help, and it costs the user everything else in the session.
 
-1. Run `npx -y --loglevel=error unitbob@0.7.5 suite-prepare` with exactly one
+1. Run `npx -y --loglevel=error unitbob@0.7.6 suite-prepare` with exactly one
    defect-context option, and what settles it is something the user has already
    said. If they mentioned a bug they just fixed, use
    `--known-defect='<their own description>'`, adding
@@ -260,10 +260,13 @@ after its bounded phase.
    A promise may have several planned behavioral scenario intents. Plan the
    scenarios the business outcome actually needs — no quota, in either
    direction. Route aliases and technical mirrors do not earn scenarios without
-   a different business outcome. `surface_budget` is a ceiling, never a quota;
-   unselected assigned surfaces are `deferred_surfaces`, not `unreachable`.
+   a different business outcome. `surface_budget` is a ceiling, never a quota, and
+   guarding only some of a capability's addresses is a legal answer: the map
+   counts what was guarded against what was assigned. Nobody lists the ones not
+   taken — only an address *nothing* can drive is named, and it goes in
+   `unreachable_surfaces` with its own reason.
 
-5. Run `npx -y --loglevel=error unitbob@0.7.5 accept-worker-plan`. If it exits
+5. Run `npx -y --loglevel=error unitbob@0.7.6 accept-worker-plan`. If it exits
    non-zero, fix the whole reported batch and run it again. If it remains
    non-zero, stop before fan-out. The gate checks that the plan is intact —
    digests, ids, paths, capabilities that were actually assigned — and no longer
@@ -303,7 +306,8 @@ after its bounded phase.
      "branch": "behavioral", "worker_id": "w1",
      "unresolved_promises": ["<every assigned promise>"],
      "completed_promises": [], "written_paths": [],
-     "decisions": [], "known_problems": [], "surface_coverage": [],
+     "decisions": [], "known_problems": [],
+     "surface_coverage": [], "unreachable_surfaces": [],
      "facts": [{"fact":"The route creates an order.","source_refs":["app/orders.rb:12"],"established_by":"read"}]
    }
    ```
@@ -339,7 +343,7 @@ after its bounded phase.
    sixteen packets marked as verified.
 
    When the facts are in, run
-   `npx -y --loglevel=error unitbob@0.7.5 validate-worker-checkpoints` here,
+   `npx -y --loglevel=error unitbob@0.7.6 validate-worker-checkpoints` here,
    before fan-out. It is step 8's gate, it costs seconds, and it reads every
    checkpoint against the plan — so a fact it would refuse is refused now, rather
    than after sixteen workers have been launched on it. Skip it only if you added
@@ -386,7 +390,7 @@ after its bounded phase.
 
    On Codex, the Unitbob definitions must also be discoverable on disk in
    `~/.codex/agents/`; if they are missing, stop and run
-   `npx -y --loglevel=error unitbob@0.7.5 codex-install`, then tell the user to
+   `npx -y --loglevel=error unitbob@0.7.6 codex-install`, then tell the user to
    start a new Codex thread. That is a different question from the one above —
    files on disk are exactly what both lost runs already had — so ask both. No Codex version is currently qualified by Unitbob
    for a per-named-agent rollout budget. Before the first bounded role, ask:
@@ -427,7 +431,7 @@ after its bounded phase.
    incarnation. Stop follows the existing incomplete/checkpoint path. Never
    auto-resume or report the incomplete slice as successful after a budget stop.
 
-8. Run `npx -y --loglevel=error unitbob@0.7.5 validate-worker-checkpoints` after
+8. Run `npx -y --loglevel=error unitbob@0.7.6 validate-worker-checkpoints` after
    fan-out and before assembly or repair. It verifies one compact checkpoint per
    plan item against the exact request and plan digests, worker id, promises,
    and owned paths. A stale or invalid checkpoint never goes to repair: record a
@@ -456,7 +460,12 @@ after its bounded phase.
    its slice completed the promises and wrote the cases, and its
    `surface_coverage` is that slice's entries for that `capability_id`, each one
    copied through as `{scenario, surfaces}` — the id groups them and does not
-   travel. **Never search the generated files for a marker to decide any of
+   travel. Its `unreachable_surfaces` copy through the same way, `{surface,
+   reason}` each, filtered to that `capability_id`'s assigned addresses: the
+   worker is the only one who tried to drive them, and a bucket that stops at the
+   checkpoint is a bucket nobody reads. Nothing else about addresses travels —
+   what a slice neither drove nor called unreachable is worked out from the map,
+   and the lamp shows it as *not taken this time*. **Never search the generated files for a marker to decide any of
    this.** On a2time, 2026-08-17, the coordinator wrote itself a check that
    looked for the marker anywhere in the file text, so a marker sitting in a
    comment that explained why an interface was *not* covered counted as coverage,
@@ -510,7 +519,7 @@ after its bounded phase.
    `known_defect_probe`, `known_defect_context`, or runner reports in generator
    `test_metadata`.
 
-10. Run `npx -y --loglevel=error unitbob@0.7.5 validate-build` after assembly. It
+10. Run `npx -y --loglevel=error unitbob@0.7.6 validate-build` after assembly. It
     checks locally only what the server cannot see — that the files the answer
     names exist under `.unitbob/`, and that every branch the request asked for
     has an entry — and then sends the exact batch the publish would send as a
@@ -527,7 +536,7 @@ after its bounded phase.
     a verdict on the whole branch, and it is the cheapest possible insurance for
     the single publication step 15 allows.
 
-11. Run `npx -y --loglevel=error unitbob@0.7.5 run-local` once for the assembled
+11. Run `npx -y --loglevel=error unitbob@0.7.6 run-local` once for the assembled
     branches. The connector owns the exact runner commands. A runner that never
     starts is a harness failure, not a red test. If the runner never started, it
     died before the first test or scenario; report its exact error, upload nothing
@@ -574,7 +583,13 @@ after its bounded phase.
 
 12. Launch one fresh named repair role per failure packet:
     `unitbob:suite-repair-worker` on Claude Code and `suite-repair-worker` on
-    Codex. Run repair packets sequentially so they never share the project test DB.
+    Codex. Run repair packets sequentially so they never share the project test DB,
+    and **run every structural packet before the first behavioral one**. Sequential
+    is sequential either way, so the order costs no time — and it is what lets the
+    structural branch finish, publish, and survive an interruption that catches the
+    behavioral branch still in repair. On a2time, 2026-09-05, two hours of work
+    reached the server as nothing at all because both branches were half repaired
+    when the run was stopped.
     Each role completes `unresolved_promises` first while preserving finished files,
     then runs the same loop: `edit → run-local <branch> → inspect`. It may repeat
     that loop within its bounded incarnation. After each run it reads only cases
@@ -613,13 +628,23 @@ after its bounded phase.
     your hands, and this only says it.
 
     Preserve spec 35 after a repair ceiling: keep files and checkpoint, then ask
-    `[Continue once / Stop]`; never auto-resume. After all sequential repair
-    packets finish, run each affected branch exactly once as the final run.
+    `[Continue once / Stop]`; never auto-resume. After a branch's repair packets
+    finish, run that branch exactly once as its final run.
     Confirmed production defects remain executable and red.
+
+    **The structural branch is finished at that point — publish it now.** Run
+    `npx -y --loglevel=error unitbob@0.7.6 put-suite-build structural`. It needs no
+    review, so nothing else is owed for it, and from here its lamps are on the map
+    whatever happens to the rest of the run. Naming the branch is what tells the
+    command to publish that one alone rather than expecting its peer. The answer
+    file written in step 9 already describes both branches and needs no editing;
+    if repair added or dropped a file this branch owns, list it there first, since
+    a file the answer does not name is a file the server never sees. Then start
+    the behavioral packets.
 
 13. If behavioral is a `build_error`, skip review and keep the structural peer.
     Otherwise run
-    `npx -y --loglevel=error unitbob@0.7.5 suite-review-prepare`. It runs and binds
+    `npx -y --loglevel=error unitbob@0.7.6 suite-review-prepare`. It runs and binds
     the exact candidate, then writes
     `.unitbob/suite-build/review-request.json`. That request includes the
     original behavioral assignment, its worker-plan items, and exact
@@ -661,10 +686,14 @@ after its bounded phase.
     protected. Run `validate-build` once more after this step to get the server's
     verdict on the whole branch, review included.
 
-15. Run `npx -y --loglevel=error unitbob@0.7.5 put-suite-build` exactly once. It
-    validates and publishes each branch independently, runs every branch it published,
-    and prints the server summaries and map URL. Never ask the user
-    to run the checks to finish generating.
+15. Run `npx -y --loglevel=error unitbob@0.7.6 put-suite-build behavioral`. It
+    validates and publishes that branch, runs it, and prints the server summary
+    and the map URL. Never ask the user to run the checks to finish generating.
+
+    Once per branch, not once per run: the structural branch went up at the end of
+    step 12, and each call is told which branch it is for. If neither branch has
+    been published yet — the structural one was skipped, or the run is being
+    resumed — call it with no argument and both are expected.
 
 Report publication only from upload lines and colors only from the server's run
 summaries. Never turn a local build run into a claim about the map. Say plainly

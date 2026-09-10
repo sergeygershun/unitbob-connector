@@ -1,5 +1,6 @@
 import type { Config } from '../config.ts';
 import {
+  namedBranches,
   readHostSuiteOutputsPerBranch,
   readSuiteBuildRequest,
   type SuiteBuildBranch,
@@ -33,7 +34,7 @@ interface PutSuiteBuildDeps {
 // on top of them (spec 32-4) without parsing the lines printed here.
 export async function putSuiteBuild(
   config: Config,
-  _args: string[] = [],
+  args: string[] = [],
   deps?: Partial<PutSuiteBuildDeps>,
 ): Promise<SuiteBuildResult[]> {
   // Spec 36, criterion 7. Publishing is followed immediately by a first run, so
@@ -42,10 +43,33 @@ export async function putSuiteBuild(
   const unusable = placeProblem(config.projectRoot);
   if (unusable) throw new Error(`${unusable}\nNothing was uploaded.`);
 
-  const request = readSuiteBuildRequest(config.projectRoot);
+  // Spec 41, criterion 3. The one thing a caller may say about scope: publish
+  // these branches, and only these.
+  //
+  // a2time, 2026-09-05. A two-hour run was interrupted mid-repair and left
+  // nothing on the server, though a complete answer for both branches had been
+  // sitting on disk since before the first run. Uploading one branch was never
+  // the problem — a missing branch has always been named against itself and never
+  // sunk the batch. What was missing is a way to say the peer's absence is the
+  // plan: `collectBuildProblems` exists to catch a branch abandoned in silence,
+  // and on a branch-at-a-time publish it would cry wolf every run.
+  //
+  // The request is cut down once, here, so every later step answers the same
+  // question about the same list instead of each remembering to skip the peer.
+  const whole = readSuiteBuildRequest(config.projectRoot);
+  const only = namedBranches(whole, args);
+  const request = only.length > 0
+    ? { ...whole, branches: whole.branches.filter((branch) => only.includes(branch.suite_kind)) }
+    : whole;
   // Spec 32-6: read branch by branch, so one unreadable entry neither hides the
   // next branch's problems nor sinks a peer that is finished and correct.
-  const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
+  const answer = readHostSuiteOutputsPerBranch(request.output_path, request);
+  // The answer file is the whole run's, not this call's: when a branch is named,
+  // its peer's entry is somebody else's business — already published by an
+  // earlier call, or still being repaired — and reading it here would report the
+  // peer as unpublishable for the sole reason that this call was not about it.
+  const outputs = answer.outputs.filter((output) => only.length === 0 || only.includes(output.suite_kind));
+  const unreadable = answer.unreadable.filter((entry) => only.length === 0 || only.includes(entry.suite_kind));
   const d: PutSuiteBuildDeps = {
     putSuiteBuilds: (items) => new Wire(config).putSuiteBuilds(items),
     stdout: process.stdout,

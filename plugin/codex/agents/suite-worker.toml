@@ -46,6 +46,22 @@ said about their work; the independent reviewer read the steps instead, six
 Scenarios claimed addresses their steps never drove, and the server refused the
 publication.
 
+Your checkpoint also carries `unreachable_surfaces`, and it is usually empty. An
+address goes there only when *nothing you can do* makes that request happen — a
+third party's callback, a vendor's webhook, a redirect a real account has to
+send. Each one needs its own sentence saying what has to happen elsewhere:
+```json
+{"surface":"GET /oauth2callback","reason":"The provider sends the user back here after they approve access, and no test can cause that."}
+```
+Hard is not unreachable. Authentication, a fixture that takes work, a background
+job, a paid API with a sandbox — all drivable, so drive them.
+
+You do **not** list the addresses you simply did not take. Whatever you neither
+drove nor declared unreachable is the remainder, and the map shows it beside the
+capability as *not taken this time* — "6 of 21 addresses guarded". So take the
+ones that matter first: money, then authorization, then the addresses the rest of
+the code points at most.
+
 Write first, then find out. Start with the planned cases your seeded facts
 already support and get them onto disk; go reading only for what you still lack
 after that. The opposite order — survey the sources, then write — is what spent
