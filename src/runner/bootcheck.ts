@@ -385,16 +385,27 @@ test('the modules our guardrails import all load', () => {});
 `;
 }
 
-// Python imports modules, not files, so the probe does the translation itself.
-// The module is registered in `sys.modules` before it is executed, because a
-// module that is not there yet cannot be the target of its own relative
-// imports.
-//
-// This is the one part of spec 38 that no live project has exercised: there was
-// no Python project on the bench. Worth watching on the first Python run.
+// Python imports modules, not files, so the probe does the translation itself —
+// and then imports by name, exactly as a guardrail's `from app.models import
+// User` will (spec 50). Not `spec_from_file_location` + `exec_module`, which is
+// what stood here until 2026-09-11: that executes the file whether or not it is
+// already loaded. On microblog the first target, `app/__init__.py`, does `from
+// app import models`, so by the time the loop reached `app/models.py` the module
+// was in `sys.modules` and got run a second time — SQLAlchemy answered "Table
+// 'followers' is already defined for this MetaData instance", and a healthy
+// Flask application lost its structural branch. `import_module` reads
+// `sys.modules` first, names `app/__init__.py` `app` rather than `app.__init__`,
+// and goes through the finders, so the probe asks the run's question and no
+// stricter one (`docs/adr/0001`). Where it still differs: `sys.path.insert(0,
+// ROOT)` puts the project root first, which `-m pytest` run from that root does
+// on its own — every interpreter `locateRunner` returns is invoked that way — so
+// the line is the run's assumption made visible, not an addition to it. A
+// src-layout project, whose guardrails import `pkg.mod` with `src/` on the
+// path, is named `src.pkg.mod` here and would be refused; no such project has
+// reached the bench, and the spec records it as work not done.
 function pytestProbeSource(sourceFiles: string[]): string {
   return `# Written by the unitbob connector before the boot check — do not edit.
-import importlib.util
+import importlib
 import pathlib
 import sys
 
@@ -412,12 +423,9 @@ def test_the_modules_our_guardrails_import_all_load():
         if not rel.endswith(".py"):
             continue
         name = rel[:-3].replace("/", ".")
-        spec = importlib.util.spec_from_file_location(name, ROOT / rel)
-        if spec is None or spec.loader is None:
-            continue
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
+        if name.endswith(".__init__"):
+            name = name[: -len(".__init__")]
+        importlib.import_module(name)
 `;
 }
 

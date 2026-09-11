@@ -352,19 +352,34 @@ export function filesLostOnMaterialize(projectRoot: string, artifact: SuiteArtif
   const behavioralRoot = join(projectRoot, BEHAVIORAL_DIR);
   if (!existsSync(behavioralRoot)) return [];
 
-  const connectorWorld = behavioralWorldFor(runner);
-  const listed = new Set([
-    artifact.path,
-    ...(artifact.support_files ?? []).map((file) => file.path),
-    ...(connectorWorld ? [connectorWorld.path] : []),
-  ]);
-  const runnerEntries = RUNNER_ENVIRONMENT_ENTRIES[runner] ?? EMPTY_ENTRIES;
+  const listed = new Set([artifact.path, ...(artifact.support_files ?? []).map((file) => file.path)]);
+  const kept = behavioralKeptByConnector(runner);
 
   return readdirSync(behavioralRoot)
-    .filter((entry) => !runnerEntries.has(entry) && !CONNECTOR_RUN_ARTIFACTS.has(entry))
+    .filter((entry) => !kept.has(entry))
     .flatMap((entry) => filesUnder(projectRoot, `${BEHAVIORAL_DIR}/${entry}`))
-    .filter((path) => !listed.has(path) && !isRuntimeByProduct(path))
+    .filter((path) => !listed.has(path) && !kept.has(path.slice(BEHAVIORAL_DIR.length + 1)) && !isRuntimeByProduct(path))
     .sort();
+}
+
+// What under the behavioral root is the connector's or the runner's rather than
+// the build's, as paths relative to that root: the installed environment, the
+// connector-owned World, and the report files the run itself writes. One set,
+// read by two callers that must agree — the review warning above, which stays
+// quiet about these, and `movePreviousRunAside` (spec 49), which leaves them in
+// place while everything else the last build wrote goes to `previous/`. A
+// second hand-kept list would let the warning and the move disagree about
+// whose file something is.
+//
+// A runner this connector has no table for keeps nothing but the run's own
+// artifacts, which is the same answer `materializeBehavioral` gives it.
+export function behavioralKeptByConnector(runner: string | null): ReadonlySet<string> {
+  const world = runner ? behavioralWorldFor(runner) : undefined;
+  return new Set([
+    ...(runner ? RUNNER_ENVIRONMENT_ENTRIES[runner] ?? EMPTY_ENTRIES : EMPTY_ENTRIES),
+    ...(world ? [world.path.slice(BEHAVIORAL_DIR.length + 1)] : []),
+    ...CONNECTOR_RUN_ARTIFACTS,
+  ]);
 }
 
 // The real files under `relative`. Symlinks are not followed: materialization
@@ -389,10 +404,14 @@ function filesUnder(projectRoot: string, relative: string): string[] {
 //
 // Matched anywhere in the path, not only at the top: `__pycache__` sits inside
 // `step_definitions/`, where the top-level filter above never looks.
+//
+// Exported for `movePreviousRunAside` (spec 49), which deletes exactly these
+// rather than carrying them to `previous/` — the same list, so what the warning
+// does not name is what the move does not keep.
 const RUNTIME_BY_PRODUCT_DIRS: ReadonlySet<string> = new Set(['__pycache__', '.pytest_cache']);
 const RUNTIME_BY_PRODUCT_FILE = /\.(pyc|sqlite|sqlite3|db|db-shm|db-wal|db-journal)$/;
 
-function isRuntimeByProduct(relativePath: string): boolean {
+export function isRuntimeByProduct(relativePath: string): boolean {
   const parts = relativePath.split('/');
   return parts.some((part) => RUNTIME_BY_PRODUCT_DIRS.has(part)) || RUNTIME_BY_PRODUCT_FILE.test(parts[parts.length - 1]);
 }

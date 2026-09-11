@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { suitePrepare as runSuitePrepare } from '../src/verbs/suitePrepare.ts';
 import { UNITBOB_HELPER_RB } from '../src/files/guardrails.ts';
 import { BEHAVIORAL_WORLD, BEHAVIORAL_WORLD_PATH, behavioralWorldFor } from '../src/files/behavioral.ts';
-import { readSuiteBuildRequest } from '../src/files/suiteBuild.ts';
+import { isNewBuild, readSuiteBuildRequest } from '../src/files/suiteBuild.ts';
 import type { Config } from '../src/config.ts';
 import type { SuitePacket } from '../src/wire.ts';
 
@@ -596,9 +596,16 @@ const brokenBoot = async () => ({
 // Spec 39. The coordinator's shared setup file, on disk. Its presence is the
 // whole of the switch between the probe's two questions, so a test that wants
 // the verdict has to write it and a test that wants the finding must not.
+//
+// Written after the first `suite-prepare` of a build, so that run's request is
+// on disk beside it. Without it this would be a new build (spec 49, criterion
+// 3), and the file would go to `previous/` as the last build's preparation
+// before the probe could go through it.
 function withPreparation(projectRoot: string): string {
   mkdirSync(join(projectRoot, '.unitbob', 'structural'), { recursive: true });
   writeFileSync(join(projectRoot, '.unitbob', 'structural', '_setup.ts'), '// nothing to prepare here\n');
+  mkdirSync(join(projectRoot, '.unitbob', 'suite-build'), { recursive: true });
+  writeFileSync(join(projectRoot, '.unitbob', 'suite-build', 'request.json'), '{"branches":[]}\n');
   return projectRoot;
 }
 
@@ -1244,4 +1251,152 @@ test('moving aside twice replaces only what was displaced this time', async () =
   // and would have cost a finished run: a build interrupted between writing the
   // plan and seeding its checkpoints displaces only `worker-plan.json`.
   assert.equal(readFileSync(join(buildDir, 'previous', 'suite_output.json'), 'utf8'), '{"from":"two runs ago"}\n');
+});
+
+// Spec 49, criterion 3. What counts as a new build: the build before it left a
+// plan, checkpoints or an answer — or there is no `request.json` at all. A
+// request with no plan yet is a repeat inside a build (the coordinator's second
+// question of the probe, spec 39), and nothing moves then.
+test('isNewBuild: a plan from before, or no request at all, is a new build; a request without a plan is not', () => {
+  const withPlan = tmpProject();
+  mkdirSync(join(withPlan, '.unitbob', 'suite-build'), { recursive: true });
+  writeFileSync(join(withPlan, '.unitbob', 'suite-build', 'request.json'), '{}');
+  writeFileSync(join(withPlan, '.unitbob', 'suite-build', 'worker-plan.json'), '{}');
+  assert.equal(isNewBuild(withPlan), true);
+
+  const neverBuilt = tmpProject();
+  assert.equal(isNewBuild(neverBuilt), true);
+
+  const insideBuild = tmpProject();
+  mkdirSync(join(insideBuild, '.unitbob', 'suite-build'), { recursive: true });
+  writeFileSync(join(insideBuild, '.unitbob', 'suite-build', 'request.json'), '{}');
+  assert.equal(isNewBuild(insideBuild), false);
+});
+
+// Spec 49, criterion 4. The move happens before the probe, not after the
+// request: a `conftest.py` from the last build is loaded by pytest alongside our
+// probe, and a leftover `_setup.ts` turns the probe's scouting into a sentence.
+// The fake boot check reads the directory at the moment it is asked.
+test('a new build clears both branch directories before the boot check reads them', async () => {
+  const projectRoot = tmpProject();
+  const buildDir = join(projectRoot, '.unitbob', 'suite-build');
+  mkdirSync(buildDir, { recursive: true });
+  writeFileSync(join(buildDir, 'worker-plan.json'), '{"request_digest":"old"}\n');
+  const structural = join(projectRoot, '.unitbob', 'structural');
+  const behavioral = join(projectRoot, '.unitbob', 'behavioral', 'features');
+  mkdirSync(structural, { recursive: true });
+  mkdirSync(behavioral, { recursive: true });
+  writeFileSync(join(structural, 'conftest.py'), '# last build\n');
+  writeFileSync(join(structural, 'st-accounts.test.ts'), '// last build\n');
+  writeFileSync(join(behavioral, 'cards.feature'), 'Feature: cards\n');
+  let seenByProbe: string[] = [];
+  const written: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: async () => {
+      seenByProbe = existsSync(structural) ? readdirSync(structural) : [];
+      return { status: 'ok' as const };
+    },
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { written.push(chunk); return true; } },
+  });
+
+  assert.ok(!seenByProbe.includes('conftest.py'), `the probe still saw ${seenByProbe.join(', ')}`);
+  const previous = join(buildDir, 'previous');
+  assert.equal(readFileSync(join(previous, 'structural', 'conftest.py'), 'utf8'), '# last build\n');
+  assert.equal(readFileSync(join(previous, 'behavioral', 'features', 'cards.feature'), 'utf8'), 'Feature: cards\n');
+  assert.equal(existsSync(join(projectRoot, '.unitbob', 'behavioral', 'features', 'cards.feature')), false);
+  // Criterion 5: the line names everything that moved, per branch.
+  assert.match(
+    written.join(''),
+    /The previous run's worker-plan\.json, 2 structural files, 1 behavioral file moved to .*\/\.unitbob\/suite-build\/previous\/ — none of it is left where this build will look, and none of it was deleted\./,
+  );
+});
+
+// The repeat inside a build (spec 39): `request.json` is there, no plan yet, and
+// the setup file written between the two runs must survive.
+test('a repeated suite-prepare inside a build leaves the setup file where it is', async () => {
+  const projectRoot = tmpProject();
+  const buildDir = join(projectRoot, '.unitbob', 'suite-build');
+  mkdirSync(buildDir, { recursive: true });
+  writeFileSync(join(buildDir, 'request.json'), '{"branches":[]}\n');
+  const setup = join(projectRoot, '.unitbob', 'structural', '_setup.ts');
+  mkdirSync(join(projectRoot, '.unitbob', 'structural'), { recursive: true });
+  writeFileSync(setup, '// the coordinator\'s preparation\n');
+  const written: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { written.push(chunk); return true; } },
+  });
+
+  assert.equal(readFileSync(setup, 'utf8'), '// the coordinator\'s preparation\n');
+  assert.equal(existsSync(join(buildDir, 'previous')), false);
+  assert.doesNotMatch(written.join(''), /moved to/);
+});
+
+// A move that cannot be made is a note, not a dead build — and the note now
+// says what the branch directories still hold, because a run of that branch
+// will load it.
+test('a move that fails says the branch will include files from the previous build', async () => {
+  const projectRoot = tmpProject();
+  const buildDir = join(projectRoot, '.unitbob', 'suite-build');
+  mkdirSync(buildDir, { recursive: true });
+  writeFileSync(join(buildDir, 'worker-plan.json'), '{"request_digest":"old"}\n');
+  // `previous` as a file where a directory is needed: `mkdirSync` refuses.
+  writeFileSync(join(buildDir, 'previous'), 'not a directory\n');
+  const written: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { written.push(chunk); return true; } },
+  });
+
+  assert.equal(existsSync(join(buildDir, 'request.json')), true);
+  assert.match(written.join(''), /could not be moved out of the way/);
+  assert.match(written.join(''), /will include files from the previous build/);
+});
+
+// Spec 49, criterion 3, second example: a machine that has never built here,
+// holding a suite `check` materialized from the published one. No request at
+// all is a new build, so the suite moves — the published one is on the server
+// and `check` materializes it again. And with no behavioral directory there is
+// nothing to say about that branch, so the line does not mention it.
+test('a first build on a machine moves a materialized suite, and names only the branch it moved', async () => {
+  const projectRoot = tmpProject();
+  const structural = join(projectRoot, '.unitbob', 'structural');
+  mkdirSync(structural, { recursive: true });
+  writeFileSync(join(structural, 'st-accounts.test.ts'), '// materialized by check\n');
+  writeFileSync(join(structural, 'st-billing.test.ts'), '// materialized by check\n');
+  const written: string[] = [];
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    precheck: okPrecheck,
+    bootCheck: okBoot,
+    ensureRunner: okRunner,
+    runnerEnvelope: okEnvelope,
+    getRecipe: async (name) => ({ name, version: 'v1', text: 'recipe' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: (chunk) => { written.push(chunk); return true; } },
+  });
+
+  const previous = join(projectRoot, '.unitbob', 'suite-build', 'previous');
+  assert.equal(existsSync(join(previous, 'structural', 'st-accounts.test.ts')), true);
+  assert.equal(existsSync(join(structural, 'st-accounts.test.ts')), false);
+  assert.match(written.join(''), /The previous run's 2 structural files moved to/);
+  assert.doesNotMatch(written.join(''), /behavioral files? moved/);
 });

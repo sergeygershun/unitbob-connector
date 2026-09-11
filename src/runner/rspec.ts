@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { GUARDRAILS_DIR, OPTIONS_FILE } from '../files/guardrails.ts';
+import { GUARDRAILS_DIR, OPTIONS_FILE, RSPEC_RESULT_NAME } from '../files/guardrails.ts';
 import { projectRootAsSeenByThePlace, runInProject, type ProjectRun } from './place.ts';
 import { locateRunner } from './toolchain.ts';
 import { clearReport, readFreshReport, type RunnerResult } from './types.ts';
@@ -11,7 +11,7 @@ export const RSPEC_TIMEOUT_MS = 10 * 60 * 1000;
 // the project's random ordering.
 export const RSPEC_SEED = '1';
 
-export const RSPEC_RESULT_FILE = join(GUARDRAILS_DIR, 'rspec_result.json');
+export const RSPEC_RESULT_FILE = join(GUARDRAILS_DIR, RSPEC_RESULT_NAME);
 
 // Run the materialised Unitbob guardrail suite (spec 26). Only these files run —
 // never the project's full suite — under RAILS_ENV=test with a fixed order/seed.

@@ -1,13 +1,13 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { GUARDRAILS_DIR } from '../files/guardrails.ts';
+import { GUARDRAILS_DIR, VITEST_RESULT_NAME } from '../files/guardrails.ts';
 import { projectRootAsSeenByThePlace, runInProject } from './place.ts';
 import { locateRunner } from './toolchain.ts';
 import { clearReport, readFreshReport, type RunnerResult } from './types.ts';
 
 export const VITEST_TIMEOUT_MS = 10 * 60 * 1000;
 
-export const VITEST_RESULT_FILE = join(GUARDRAILS_DIR, 'vitest_result.json');
+export const VITEST_RESULT_FILE = join(GUARDRAILS_DIR, VITEST_RESULT_NAME);
 
 // A connector-owned Vitest config, written next to .unitbob/ before a run when
 // the project has its own config. Connector-owned: never stored in Rails, never

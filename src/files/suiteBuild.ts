@@ -1,10 +1,22 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, sep } from 'node:path';
 import type { Recipe, SuitePacket } from '../wire.ts';
 import type { RunnerEnvelope } from '../runner/manifest.ts';
 import type { BddStepLoading } from '../runner/bdd.ts';
 import { assertUnitbobPath } from './artifactPath.ts';
+import { BEHAVIORAL_DIR, behavioralKeptByConnector, isRuntimeByProduct } from './behavioral.ts';
+import { GUARDRAILS_DIR, STRUCTURAL_KEPT_BY_CONNECTOR } from './guardrails.ts';
 import { readWorkerPlan, validateWorkerPlanFiles, workerPlanDigest, workerPlanPath } from './workerPlan.ts';
 
 // The task the host reads (spec 32): the two peer assignments to build, one per
@@ -119,14 +131,38 @@ export function candidateRunPath(projectRoot: string): string {
   return join(projectRoot, '.unitbob', 'suite-build', 'candidate-run.json');
 }
 
-// Spec 37-2, criterion 3. What a new build leaves behind, in the order a reader
+// Spec 37-2, criterion 3. What a build leaves behind, in the order a reader
 // meets it: the plan, the checkpoints written against that plan, and the answer
 // assembled from them. All three are bound to the `request.json` this run is
 // about to overwrite, so from the next line on they are a previous run's papers
 // wearing this run's filenames — which is exactly the confusion the coordinator
 // used to spend a turn untangling before fan-out.
-const PREVIOUS_RUN_ARTIFACTS = ['worker-plan.json', 'checkpoints', 'suite_output.json'];
+const BUILD_PAPERS = ['worker-plan.json', 'checkpoints', 'suite_output.json'];
+// Spec 49. And the three the review writes, bound to the candidate that build
+// ran: left behind, a stale `behavioral_review.json` fails `validate-build` with
+// a sentence about the reviewer.
+const PREVIOUS_RUN_ARTIFACTS = [...BUILD_PAPERS, 'behavioral_review.json', 'candidate-run.json', 'review-request.json'];
 const PREVIOUS_DIR = 'previous';
+
+// Is the `suite-prepare` about to run the first step of a new build, or a
+// repeat inside one? Spec 49, criterion 3. A new build is one with a plan, a
+// checkpoint set or an answer on disk from the build before — or no
+// `request.json` at all, which is a machine that has never built here (and may
+// hold a suite that `check` materialized from the published one). A request
+// with no plan yet is the coordinator's second question of the probe (spec 39):
+// nothing moves then, so the `_setup.ts` written between the two runs survives.
+export function isNewBuild(projectRoot: string): boolean {
+  const buildDir = join(projectRoot, '.unitbob', 'suite-build');
+  return !existsSync(requestPath(projectRoot)) || BUILD_PAPERS.some((name) => existsSync(join(buildDir, name)));
+}
+
+// The two peer branches of a suite build, as `suite_kind` names them.
+export type BranchKind = 'structural' | 'behavioral';
+
+export interface PreviousRunMoved {
+  artifacts: string[];
+  branches: Record<BranchKind, number>;
+}
 
 // Moved, never removed. A run costs hours and real money, and one interrupt plus
 // one restart must not be able to spend that twice — `previous/` is one line
@@ -139,18 +175,102 @@ const PREVIOUS_DIR = 'previous';
 // finished checkpoints and answer of the run before it with no way back. A
 // `previous/` holding pieces of two runs is worth strictly more than an empty
 // one, and every piece in it is named by the file it kept.
-export function movePreviousRunAside(projectRoot: string): string[] {
+//
+// Since spec 49 the same rule covers the branches' own directories. The
+// behavioral runner loads its directory whole, so a `.feature` the last build
+// wrote runs under this build's markers and a dead step file argues with a live
+// one over the same step text; on the bench (2026-09-11) two workers reworded
+// their steps to dodge files nobody had written this build. Every file the last
+// build wrote under `.unitbob/structural/` and `.unitbob/behavioral/` goes to
+// `previous/<branch>/` under the same relative path — `_setup.ts` and a
+// `conftest.py` included, since they are the last build's preparation, written
+// against its files. What stays is what the connector and the runner own
+// (`STRUCTURAL_KEPT_BY_CONNECTOR`, `behavioralKeptByConnector`); what the run
+// itself dropped — byte-code caches, the World's database — is deleted, because
+// nobody wrote it and the next run makes it again.
+//
+// `behavioralRunner` is the runner that branch is under, so the move knows
+// which installed environment and which World are that runner's; null when
+// none is known, and then only what every runner shares is kept. The structural
+// side needs no runner: its kept set is the same for all three.
+export function movePreviousRunAside(projectRoot: string, behavioralRunner: string | null): PreviousRunMoved {
   const buildDir = join(projectRoot, '.unitbob', 'suite-build');
-  const found = PREVIOUS_RUN_ARTIFACTS.filter((name) => existsSync(join(buildDir, name)));
-  if (found.length === 0) return [];
-
   const previous = join(buildDir, PREVIOUS_DIR);
-  mkdirSync(previous, { recursive: true });
+
+  const found = PREVIOUS_RUN_ARTIFACTS.filter((name) => existsSync(join(buildDir, name)));
+  if (found.length > 0) mkdirSync(previous, { recursive: true });
   for (const name of found) {
     rmSync(join(previous, name), { recursive: true, force: true });
     renameSync(join(buildDir, name), join(previous, name));
   }
-  return found;
+
+  return {
+    artifacts: found,
+    branches: {
+      structural: moveBranchAside(join(projectRoot, GUARDRAILS_DIR), join(previous, 'structural'), STRUCTURAL_KEPT_BY_CONNECTOR),
+      behavioral: moveBranchAside(
+        join(projectRoot, BEHAVIORAL_DIR),
+        join(previous, 'behavioral'),
+        behavioralKeptByConnector(behavioralRunner),
+      ),
+    },
+  };
+}
+
+// One branch directory: the build's files to `target` under the same relative
+// paths, `kept` left where it is, by-products deleted. Returns how many files
+// moved.
+//
+// Collected first, moved second, so that a branch with nothing of the build's
+// in it leaves the `previous/<branch>/` of the build before alone — the
+// per-artifact rule above, applied to a directory. When there is something to
+// move, the target is replaced whole: `previous/` holds one previous build, not
+// an archive. The clearing happens before the first rename, so a rename that
+// fails halfway (a full disk, a permission) leaves `previous/<branch>/` holding
+// only what moved so far; the files that did not move are still where they
+// were, and nothing is lost, which is the promise this function makes.
+//
+// The directories the files leave behind are removed too, so the branch root
+// reads as what it is — empty of the last build — rather than as its skeleton.
+// Deepest first, and only when empty: a directory holding a kept file (the
+// World inside `step_definitions/`) keeps its file and stays.
+function moveBranchAside(root: string, target: string, kept: ReadonlySet<string>): number {
+  if (!existsSync(root)) return 0;
+
+  const moving: string[] = [];
+  collectBuildFiles(root, '', kept, moving);
+  if (moving.length === 0) return 0;
+
+  rmSync(target, { recursive: true, force: true });
+  for (const relative of moving) {
+    const destination = join(target, relative);
+    mkdirSync(dirname(destination), { recursive: true });
+    renameSync(join(root, relative), destination);
+  }
+
+  const emptied = new Set(moving.map((relative) => dirname(relative)).filter((dir) => dir !== '.'));
+  for (const dir of [...emptied].sort((a, b) => b.length - a.length)) {
+    for (let ancestor = dir; ancestor !== '.'; ancestor = dirname(ancestor)) {
+      if (readdirSync(join(root, ancestor)).length > 0) break;
+      rmSync(join(root, ancestor), { recursive: true });
+    }
+  }
+  return moving.length;
+}
+
+// A symlink is a file here: it moves as a link, and what it points at is never
+// touched — the same reading `filesUnder` gives the review warning.
+function collectBuildFiles(root: string, relative: string, kept: ReadonlySet<string>, into: string[]): void {
+  for (const entry of readdirSync(join(root, relative))) {
+    const path = relative ? `${relative}/${entry}` : entry;
+    if (kept.has(path)) continue;
+    if (isRuntimeByProduct(path)) {
+      rmSync(join(root, path), { recursive: true, force: true });
+      continue;
+    }
+    if (lstatSync(join(root, path)).isDirectory()) collectBuildFiles(root, path, kept, into);
+    else into.push(path);
+  }
 }
 
 export function writeBehavioralReviewRequest(

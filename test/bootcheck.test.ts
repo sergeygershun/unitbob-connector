@@ -259,6 +259,83 @@ test('pytest: the probe carries the named sources and does not outlive the check
   assert.equal(existsSync(probeFile), false);
 });
 
+// Spec 50. The probe imports modules by name, the way the guardrails will,
+// rather than executing files by path: a file already imported through a
+// neighbour (`app/models.py` behind `from app import db`) is taken from
+// `sys.modules` instead of being run a second time, and `app/__init__.py` is
+// the package `app`, not a module called `app.__init__`.
+test('pytest: the probe imports the named modules the way the run imports them', async () => {
+  const projectRoot = tmpProject();
+  const probeFile = join(projectRoot, '.unitbob/structural/test_unitbob_boot.py');
+  let probe = '';
+
+  await bootCheck(projectRoot, 'pytest', {
+    runCmd: async () => {
+      probe = readFileSync(probeFile, 'utf8');
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  }, ['app/__init__.py', 'app/models.py']);
+
+  assert.match(probe, /importlib\.import_module\(name\)/);
+  assert.doesNotMatch(probe, /spec_from_file_location|exec_module|module_from_spec/);
+  // `app/__init__.py` is `app`: the `.__init__` tail is dropped before the import.
+  assert.match(probe, /"\.__init__"/);
+  assert.match(probe, /sys\.path\.insert\(0, str\(ROOT\)\)/);
+});
+
+// Spec 50, criterion 4, with a real interpreter. The shape of microblog on the
+// bench, 2026-09-11: a package whose `__init__` imports its models, and models
+// that refuse to be declared twice — SQLAlchemy's "Table 'followers' is already
+// defined". Executing the file by path ran it a second time and the branch was
+// refused; importing it by name finds it already loaded. Skipped where no
+// pytest answers, as the graphify test in `proc.test.ts` is.
+async function pytestOnThisMachine(): Promise<boolean> {
+  const { runProcess } = await import('../src/proc.ts');
+  try {
+    const result = await runProcess('python3', ['-m', 'pytest', '--version'], { cwd: tmpdir(), timeoutMs: 30_000 });
+    return result.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+function pythonPackageProject(): string {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, 'app'), { recursive: true });
+  writeFileSync(join(projectRoot, 'app', 'registry.py'), 'TABLES = set()\n');
+  writeFileSync(
+    join(projectRoot, 'app', 'models.py'),
+    'from app.registry import TABLES\n' +
+      'if "followers" in TABLES:\n' +
+      '    raise RuntimeError("Table \'followers\' is already defined for this MetaData instance")\n' +
+      'TABLES.add("followers")\n',
+  );
+  writeFileSync(join(projectRoot, 'app', '__init__.py'), 'from . import models\n');
+  return projectRoot;
+}
+
+test('pytest: a module already imported through its package is not executed twice', async (t) => {
+  if (!(await pytestOnThisMachine())) {
+    t.skip('python3 -m pytest does not answer on this machine');
+    return;
+  }
+  const { runInProject } = await import('../src/runner/place.ts');
+  const real: BootCheckDeps = {
+    runCmd: (command, args, options) => runInProject(options.cwd, command, args, { timeoutMs: 60_000, env: options.env }),
+  };
+
+  const projectRoot = pythonPackageProject();
+  assert.deepEqual(await bootCheck(projectRoot, 'pytest', real, ['app/__init__.py', 'app/models.py']), { status: 'ok' });
+
+  // Criterion 3: red stays red. A module whose import needs a package nobody
+  // has is still the environment, with the same cause as before.
+  writeFileSync(join(projectRoot, 'app', 'billing.py'), 'import a_package_nobody_has\n');
+  const broken = await bootCheck(projectRoot, 'pytest', real, ['app/__init__.py', 'app/models.py', 'app/billing.py']);
+  assert.equal(broken.status, 'broken');
+  assert.equal((broken as { cause: string }).cause, 'environment_not_ready');
+  assert.match((broken as { detail: string }).detail, /app\/billing\.py:1/);
+});
+
 // Nothing resolved to a file, so there is nothing to import. A hole in the graph
 // is not a broken application, and the runner is not started to find that out.
 test('pytest: an empty list of sources is nothing to load, and starts nothing', async () => {

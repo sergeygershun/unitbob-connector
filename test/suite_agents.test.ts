@@ -286,3 +286,14 @@ test('the reviewer judges surface_coverage by the When, as the worker writes it'
   assert.match(reviewer, /not missing from `surface_coverage` and not a finding/);
   assert.match(reviewer, /A Scenario whose `When` also drives an address belonging to another capability/);
 });
+
+// Spec 49, criterion 5. Step 1 promised that "nothing from a previous run is
+// left where this one will look" while three things out of six were moved: the
+// suite files of both branches and the review artifacts stayed. The promise
+// now lists everything that moves, and "never go hunting for leftovers" is
+// finally true of the branch directories too.
+test('step 1 promises that every generated file of both branches is moved aside', () => {
+  const step = workflow('suite');
+  assert.match(step, /an earlier build's plan, checkpoints,\s+answer, review artifacts and every generated file of both branches/);
+  assert.match(step, /never go\s+hunting for leftovers/);
+});

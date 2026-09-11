@@ -41,6 +41,28 @@ export const HELPER_FILE = 'unitbob_helper.rb';
 // the project's own .rspec (stray --require lines, extra stdout formatters)
 // out of guardrail runs, whose JSON output must stay parseable.
 export const OPTIONS_FILE = 'rspec.opts';
+// The report each structural runner writes beside the suite. Named here rather
+// than in `runner/{rspec,vitest,pytest}.ts`, which build their full paths from
+// these: those modules import this one, and the names are needed below — the
+// same reason `BDD_RUN_ARTIFACTS` is listed where it is written.
+export const RSPEC_RESULT_NAME = 'rspec_result.json';
+export const VITEST_RESULT_NAME = 'vitest_result.json';
+export const PYTEST_RESULT_NAME = 'pytest_result.xml';
+
+// What under the structural root is the connector's rather than the build's,
+// as paths relative to that root (spec 49): the Ruby boot kit and the runners'
+// reports. `movePreviousRunAside` leaves these in place and moves everything
+// else — including `_setup.ts` and a `conftest.py`, which are the *last*
+// build's preparation, written against its files. The same set whatever the
+// runner: a Ruby helper in a Python project is litter `suite-prepare` no longer
+// writes, and moving it to `previous/` would only move the litter.
+export const STRUCTURAL_KEPT_BY_CONNECTOR: ReadonlySet<string> = new Set([
+  HELPER_FILE,
+  OPTIONS_FILE,
+  RSPEC_RESULT_NAME,
+  VITEST_RESULT_NAME,
+  PYTEST_RESULT_NAME,
+]);
 
 // The one place that decides whether a host-provided suite path is safe to
 // write: relative, anchored under .unitbob/guardrails/, no traversal. Anything

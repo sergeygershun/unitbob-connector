@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
+  movePreviousRunAside,
   outputPath,
   readHostSuiteOutputs,
   readSuiteBuildRequest,
@@ -13,7 +14,7 @@ import {
   writeSuiteBuildRequest,
   type SuiteBuildBranch,
 } from '../src/files/suiteBuild.ts';
-import { filesLostOnMaterialize } from '../src/files/behavioral.ts';
+import { behavioralWorldFor, filesLostOnMaterialize } from '../src/files/behavioral.ts';
 import type { SuitePacket } from '../src/wire.ts';
 
 function tmpProject(): string {
@@ -270,6 +271,163 @@ test('the run\'s own by-products are not named among the files it would delete',
   }, 'pytest-bdd');
 
   assert.deepEqual(lost, ['.unitbob/behavioral/step_definitions/test_billing.py']);
+});
+
+// Spec 49. What `suite-prepare` promises — "nothing from a previous run is left
+// where this one will look" — was true of three files out of six. The suite
+// files of the last build stayed under `.unitbob/structural/` and
+// `.unitbob/behavioral/`, the behavioral runner takes the directory whole, and
+// on the bench (2026-09-11) dead scenarios ran under live markers while two
+// workers reworded their steps to dodge dead step files. Everything the last
+// build wrote moves to `previous/<branch>/` under the same relative path.
+function writeUnder(projectRoot: string, relative: string, content = '#\n'): void {
+  const path = join(projectRoot, relative);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content);
+}
+
+test('a new build moves the suite files of both branches to previous/<branch>/', () => {
+  const projectRoot = tmpProject();
+  writeUnder(projectRoot, '.unitbob/structural/st-accounts.test.ts', '// dead\n');
+  writeUnder(projectRoot, '.unitbob/structural/_setup.ts', '// last build\'s preparation\n');
+  writeUnder(projectRoot, '.unitbob/structural/conftest.py', '# last build\'s harness\n');
+  writeUnder(projectRoot, '.unitbob/behavioral/features/cards.feature', 'Feature: cards\n');
+  writeUnder(projectRoot, '.unitbob/behavioral/step_definitions/test_cards.py', '# steps\n');
+
+  const moved = movePreviousRunAside(projectRoot, 'pytest-bdd');
+
+  const previous = join(projectRoot, '.unitbob', 'suite-build', 'previous');
+  assert.equal(readFileSync(join(previous, 'structural', 'st-accounts.test.ts'), 'utf8'), '// dead\n');
+  assert.equal(readFileSync(join(previous, 'structural', '_setup.ts'), 'utf8'), '// last build\'s preparation\n');
+  assert.equal(readFileSync(join(previous, 'structural', 'conftest.py'), 'utf8'), '# last build\'s harness\n');
+  assert.equal(readFileSync(join(previous, 'behavioral', 'features', 'cards.feature'), 'utf8'), 'Feature: cards\n');
+  assert.equal(readFileSync(join(previous, 'behavioral', 'step_definitions', 'test_cards.py'), 'utf8'), '# steps\n');
+  for (const gone of [
+    '.unitbob/structural/st-accounts.test.ts',
+    '.unitbob/structural/_setup.ts',
+    '.unitbob/structural/conftest.py',
+    '.unitbob/behavioral/features/cards.feature',
+    '.unitbob/behavioral/step_definitions/test_cards.py',
+  ]) {
+    assert.equal(existsSync(join(projectRoot, gone)), false, `${gone} is still where the build will look`);
+  }
+  assert.deepEqual(moved, { artifacts: [], branches: { structural: 3, behavioral: 2 } });
+});
+
+// The connector's and the runner's own files are not the build's, and the next
+// `suite-prepare` rewrites or re-provisions every one of them. By-products of
+// the run — byte-code caches, the World's SQLite file — are deleted rather than
+// carried: nobody wrote them and the next run makes them again.
+test('what the connector and the runner own stays; the run\'s by-products are deleted', () => {
+  const projectRoot = tmpProject();
+  const world = behavioralWorldFor('pytest-bdd')!;
+  writeUnder(projectRoot, '.unitbob/structural/unitbob_helper.rb', '# helper\n');
+  writeUnder(projectRoot, '.unitbob/structural/rspec.opts', '');
+  writeUnder(projectRoot, '.unitbob/structural/pytest_result.xml', '<xml/>');
+  writeUnder(projectRoot, '.unitbob/structural/rspec_result.json', '{}');
+  writeUnder(projectRoot, '.unitbob/structural/vitest_result.json', '{}');
+  writeUnder(projectRoot, '.unitbob/structural/__pycache__/st_accounts.cpython-311.pyc', 'x');
+  writeUnder(projectRoot, '.unitbob/structural/test_accounts.py', '# suite\n');
+  writeUnder(projectRoot, '.unitbob/behavioral/.venv/bin/python', '');
+  writeUnder(projectRoot, world.path, world.content);
+  writeUnder(projectRoot, '.unitbob/behavioral/pytest_bdd_report.json', '{}');
+  writeUnder(projectRoot, '.unitbob/behavioral/unitbob_pytest_bdd_plugin.py', '#');
+  writeUnder(projectRoot, '.unitbob/behavioral/pytest.ini', '[pytest]\n');
+  writeUnder(projectRoot, '.unitbob/behavioral/step_definitions/test_cards.py', '# steps\n');
+  writeUnder(projectRoot, '.unitbob/behavioral/step_definitions/__pycache__/test_cards.cpython-311.pyc', 'x');
+  writeUnder(projectRoot, '.unitbob/behavioral/.pytest_cache/v/nodeids', '[]');
+  writeUnder(projectRoot, '.unitbob/behavioral/behavioral.db-wal', '');
+  // A link moves as a link — the target is never touched (the rule `filesUnder`
+  // follows for the review warning).
+  writeUnder(projectRoot, 'lib/shared_steps.py', '# target\n');
+  symlinkSync(join(projectRoot, 'lib', 'shared_steps.py'), join(projectRoot, '.unitbob', 'behavioral', 'step_definitions', 'link.py'));
+
+  const moved = movePreviousRunAside(projectRoot, 'pytest-bdd');
+
+  for (const kept of [
+    '.unitbob/structural/unitbob_helper.rb',
+    '.unitbob/structural/rspec.opts',
+    '.unitbob/structural/pytest_result.xml',
+    '.unitbob/structural/rspec_result.json',
+    '.unitbob/structural/vitest_result.json',
+    '.unitbob/behavioral/.venv/bin/python',
+    world.path,
+    '.unitbob/behavioral/pytest_bdd_report.json',
+    '.unitbob/behavioral/unitbob_pytest_bdd_plugin.py',
+    '.unitbob/behavioral/pytest.ini',
+  ]) {
+    assert.equal(existsSync(join(projectRoot, kept)), true, `${kept} should have stayed`);
+  }
+  const previous = join(projectRoot, '.unitbob', 'suite-build', 'previous');
+  assert.equal(existsSync(join(previous, 'structural', 'unitbob_helper.rb')), false);
+  assert.equal(existsSync(join(previous, 'behavioral', 'pytest.ini')), false);
+  assert.equal(existsSync(join(previous, 'behavioral', world.path.replace('.unitbob/behavioral/', ''))), false);
+
+  for (const byProduct of [
+    '.unitbob/structural/__pycache__',
+    '.unitbob/behavioral/step_definitions/__pycache__',
+    '.unitbob/behavioral/.pytest_cache',
+    '.unitbob/behavioral/behavioral.db-wal',
+  ]) {
+    assert.equal(existsSync(join(projectRoot, byProduct)), false, `${byProduct} should have been deleted`);
+    assert.equal(existsSync(join(previous, byProduct.replace('.unitbob/', ''))), false, `${byProduct} should not be in previous/`);
+  }
+
+  assert.equal(readFileSync(join(previous, 'structural', 'test_accounts.py'), 'utf8'), '# suite\n');
+  assert.equal(readFileSync(join(previous, 'behavioral', 'step_definitions', 'test_cards.py'), 'utf8'), '# steps\n');
+  const link = join(previous, 'behavioral', 'step_definitions', 'link.py');
+  assert.equal(lstatSync(link).isSymbolicLink(), true);
+  assert.equal(readlinkSync(link), join(projectRoot, 'lib', 'shared_steps.py'));
+  assert.equal(readFileSync(join(projectRoot, 'lib', 'shared_steps.py'), 'utf8'), '# target\n');
+  assert.deepEqual(moved.branches, { structural: 1, behavioral: 2 });
+});
+
+// The move and the review warning read one set of "whose file is this". For
+// each runner, what the warning stays quiet about is exactly what the move
+// leaves in place, and what it would name is exactly what moves.
+test('the move keeps what the review warning stays quiet about, for every runner', () => {
+  for (const [runner, environment] of [['cucumber', 'Gemfile'], ['cucumber-js', 'package.json'], ['pytest-bdd', '.venv']] as const) {
+    const projectRoot = tmpProject();
+    const world = behavioralWorldFor(runner)!;
+    writeUnder(projectRoot, world.path, world.content);
+    writeUnder(projectRoot, `.unitbob/behavioral/${environment}`, '');
+    writeUnder(projectRoot, '.unitbob/behavioral/step_definitions/billing_steps.rb', '# forgotten\n');
+    const artifact = { path: '.unitbob/behavioral/features/x.feature', content: 'Feature: x\n', support_files: [] };
+
+    assert.deepEqual(filesLostOnMaterialize(projectRoot, artifact, runner), ['.unitbob/behavioral/step_definitions/billing_steps.rb'], runner);
+    const moved = movePreviousRunAside(projectRoot, runner);
+    assert.equal(moved.branches.behavioral, 1, runner);
+    assert.equal(existsSync(join(projectRoot, world.path)), true, `${runner}: the World moved`);
+    assert.equal(existsSync(join(projectRoot, '.unitbob', 'behavioral', environment)), true, `${runner}: the environment moved`);
+    assert.equal(existsSync(join(projectRoot, '.unitbob', 'behavioral', 'step_definitions', 'billing_steps.rb')), false, runner);
+  }
+});
+
+// The three review artifacts are bound to the candidate the last build ran, and
+// a stale `behavioral_review.json` fails `validate-build` with a message about
+// the reviewer. They travel with the plan. And `previous/<branch>/` holds one
+// previous build, not an archive: it is replaced whole, the way each artifact is
+// replaced by name.
+test('review artifacts move beside the plan, and previous/<branch>/ is replaced whole', () => {
+  const projectRoot = tmpProject();
+  const buildDir = join(projectRoot, '.unitbob', 'suite-build');
+  writeFileSync(join(buildDir, 'worker-plan.json'), '{"request_digest":"last"}\n');
+  writeFileSync(join(buildDir, 'behavioral_review.json'), '{"candidate_digest":"stale"}\n');
+  writeFileSync(join(buildDir, 'candidate-run.json'), '{"candidate_digest":"stale"}\n');
+  writeFileSync(join(buildDir, 'review-request.json'), '{"candidate_digest":"stale"}\n');
+  writeUnder(projectRoot, '.unitbob/suite-build/previous/structural/from_two_builds_ago.py', '# older\n');
+  writeUnder(projectRoot, '.unitbob/structural/test_accounts.py', '# last\n');
+
+  const moved = movePreviousRunAside(projectRoot, 'pytest-bdd');
+
+  const previous = join(buildDir, 'previous');
+  assert.deepEqual(moved.artifacts, ['worker-plan.json', 'behavioral_review.json', 'candidate-run.json', 'review-request.json']);
+  for (const name of moved.artifacts) {
+    assert.equal(existsSync(join(buildDir, name)), false, `${name} is still where the build will look`);
+    assert.equal(existsSync(join(previous, name)), true, `${name} is not in previous/`);
+  }
+  assert.equal(existsSync(join(previous, 'structural', 'from_two_builds_ago.py')), false);
+  assert.equal(readFileSync(join(previous, 'structural', 'test_accounts.py'), 'utf8'), '# last\n');
 });
 
 test('rejects the legacy spec_rb shape per branch', () => {

@@ -62,12 +62,14 @@ after its bounded phase.
    its message to the user as it stands and stop.** Do not work around a
    `fixable` profile failure or start fan-out without a request.
 
-   It also clears the ground for this build: an earlier run's `worker-plan.json`,
-   `checkpoints/` and `suite_output.json` are moved to
-   `.unitbob/suite-build/previous/` and it says so. Nothing from a previous run
+   It also clears the ground for this build: an earlier build's plan, checkpoints,
+   answer, review artifacts and every generated file of both branches are moved
+   to `.unitbob/suite-build/previous/` and it says so. Nothing from a previous run
    is left where this one will look, and nothing was deleted — so never go
    hunting for leftovers to reconcile or remove, and never read `previous/` as if
-   it belonged to this build.
+   it belonged to this build. `.unitbob/structural/` and `.unitbob/behavioral/`
+   hold only what the connector and the runner own; every file you find there
+   later was written by this build.
 
    **The environment is never yours to repair.** Building an interpreter,
    installing the project's dependencies, pulling a base image, editing a
@@ -129,8 +131,9 @@ after its bounded phase.
    on disk the probe goes through your preparation, so this time its answer is
    about the run: green means carry on, red means the branch really cannot start.
    You may repeat this **only before step 4 writes `worker-plan.json`** — after
-   that, `suite-prepare` moves the plan and the filled-in checkpoints to
-   `previous/` and you would be starting the build over. Re-running costs two or
+   that, `suite-prepare` reads the plan as the mark of a finished build and moves
+   it, the filled-in checkpoints and every generated file to `previous/`, and you
+   would be starting the build over. Before the plan exists a repeat costs two or
    three GETs, seconds of probe, and no money at all, and it clears nothing out
    of `.unitbob/structural/`, so the file you just wrote survives it.
 

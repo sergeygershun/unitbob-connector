@@ -9,10 +9,13 @@ import {
   type SuitePacketsSummary,
 } from '../files/packets.ts';
 import {
+  isNewBuild,
   movePreviousRunAside,
   recipeNameFor,
   writeSuiteBuildRequest,
+  type BranchKind,
   type KnownDefectContext,
+  type PreviousRunMoved,
   type SuiteBuildBranch,
   type SuiteBuildRequest,
 } from '../files/suiteBuild.ts';
@@ -139,6 +142,35 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   // is ready.
   const replaced = alignRunnerEnvironmentWithPlace(config.projectRoot);
   if (replaced) actual.stdout.write(`${replaced}\n`);
+
+  // Spec 37-2, criterion 3, widened by spec 49. The papers a build leaves
+  // behind — plan, checkpoints, answer, review — outlive the `request.json`
+  // they were digested against, and every one of them is refused by its own
+  // gate from here on. The suite files of both branches outlive it too, and
+  // nothing refuses those: the behavioral runner loads its directory whole, so
+  // a dead `.feature` runs and a dead step file argues with a live one. Moved
+  // rather than removed — see `movePreviousRunAside`.
+  //
+  // Here, before the helper and the World are written and before the probe asks
+  // its question (criterion 4): a `conftest.py` from the last build would be
+  // loaded by pytest beside our probe, and a leftover `_setup.ts` would turn the
+  // probe's scouting into a sentence. Only on a new build (criterion 3): a
+  // repeat inside one is the coordinator's second question of the probe (spec
+  // 39), and the setup file written between the two runs has to survive it.
+  //
+  // Wrapped, because a read-only checkout or a permission the move does not
+  // have is a note, not a build that dies before it has asked the server
+  // anything. And nothing is lost if a later step refuses: `request.json` of
+  // the last build is still there, so the next run does not move again.
+  let displaced: PreviousRunMoved = { artifacts: [], branches: { structural: 0, behavioral: 0 } };
+  let displaceProblem = '';
+  if (isNewBuild(config.projectRoot)) {
+    try {
+      displaced = movePreviousRunAside(config.projectRoot, detectBddRunner(config.projectRoot));
+    } catch (err) {
+      displaceProblem = (err as Error).message;
+    }
+  }
 
   // Ruby only. This wrote `unitbob_helper.rb` and `rspec.opts` into every
   // project it touched, so a Flask app and a NestJS app each came away with a
@@ -363,33 +395,16 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   // stop a branch that has not run once yet.
   clearRunState(config.projectRoot);
 
-  // Spec 37-2, criterion 3. Same reasoning, applied to the papers that were left
-  // behind rather than cleared: a plan and its checkpoints outlive the
-  // `request.json` they were digested against, and every one of them is refused
-  // by its own gate from here on. Moved rather than removed — see
-  // `movePreviousRunAside`.
-  //
-  // Wrapped for the same reason `buildPackets` is: by this line the request is
-  // written and the build is real. A read-only checkout or a permission the move
-  // does not have is a note, not a build that dies after its own work landed
-  // and before it could say so.
-  let displaced: string[] = [];
-  let displaceProblem = '';
-  try {
-    displaced = movePreviousRunAside(config.projectRoot);
-  } catch (err) {
-    displaceProblem = (err as Error).message;
-  }
-
   const kinds = branches.map((branch) => branch.suite_kind).join(' and ');
   const nextCommand = branches.some((branch) => branch.suite_kind === 'behavioral')
     ? '`unitbob suite-review-prepare` before upload'
     : '`unitbob put-suite-build`';
 
   actual.stdout.write(`Suite build request written to ${request.project_root}/.unitbob/suite-build/request.json\n`);
-  if (displaced.length > 0) {
+  const moved = displacedList(displaced);
+  if (moved.length > 0) {
     actual.stdout.write(
-      `The previous run's ${displaced.join(', ')} moved to ` +
+      `The previous run's ${moved.join(', ')} moved to ` +
         `${request.project_root}/.unitbob/suite-build/previous/ — none of it is left where this build will ` +
         'look, and none of it was deleted.\n',
     );
@@ -398,7 +413,8 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     actual.stdout.write(
       `\nThe previous run's files could not be moved out of the way (${displaceProblem}). This build is fine, ` +
         'but a plan or checkpoint left over from it will be refused by its own gate — the digests belong to ' +
-        'the request that was just replaced.\n',
+        'the request that was just replaced — and running a branch will include files from the previous build ' +
+        'still under .unitbob/structural/ and .unitbob/behavioral/.\n',
     );
   }
   actual.stdout.write(packetNotice(request.project_root, sourcePackets));
@@ -490,6 +506,17 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
         '\n',
     );
   }
+}
+
+// Everything that moved, in the words the line has always used: the artifacts
+// by name, then each branch as a count (spec 49, criterion 5). By-products that
+// were deleted are not listed — nobody lost them.
+function displacedList(moved: PreviousRunMoved): string[] {
+  const branchFiles = (branch: BranchKind) => {
+    const count = moved.branches[branch];
+    return count > 0 ? [`${count} ${branch} ${count === 1 ? 'file' : 'files'}`] : [];
+  };
+  return [...moved.artifacts, ...branchFiles('structural'), ...branchFiles('behavioral')];
 }
 
 // A checkout we cannot write packets into is a run without packets, not a

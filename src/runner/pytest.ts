@@ -1,13 +1,13 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { GUARDRAILS_DIR } from '../files/guardrails.ts';
+import { GUARDRAILS_DIR, PYTEST_RESULT_NAME } from '../files/guardrails.ts';
 import { projectRootAsSeenByThePlace, runInProject } from './place.ts';
 import { locateRunner } from './toolchain.ts';
 import { clearReport, readFreshReport, type RunnerResult } from './types.ts';
 
 export const PYTEST_TIMEOUT_MS = 10 * 60 * 1000;
 
-export const PYTEST_RESULT_FILE = join(GUARDRAILS_DIR, 'pytest_result.xml');
+export const PYTEST_RESULT_FILE = join(GUARDRAILS_DIR, PYTEST_RESULT_NAME);
 
 // A minimal runtime config, created or overwritten before each run and passed
 // via `-c` so the project's own addopts (e.g. --cov, -n auto) cannot break the
