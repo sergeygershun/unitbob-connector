@@ -4,9 +4,11 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
+  GRAPHIFY_MIN_VERSION,
   GRAPH_NOISE_PATTERNS,
   ensureUnitbobIgnored,
   ignoreExclusions,
+  requireGraphify,
   runGraphifyExtractKeyless,
   runProcess,
 } from '../src/proc.ts';
@@ -171,8 +173,10 @@ test('ensureUnitbobIgnored adds graphify-out exactly once and preserves an exist
 // over a real tree and looks at what came out. Skipped where graphify is not
 // installed; it is a prerequisite for `map`, not for the test suite.
 test('the ignore rules keep business code in the graph and drop the rest', async (t) => {
-  if ((await runProcess('graphify', ['--help'])).code !== 0) {
-    t.skip('graphify is not installed');
+  try {
+    await requireGraphify();
+  } catch (err) {
+    t.skip((err as Error).message);
     return;
   }
 
@@ -184,6 +188,12 @@ test('the ignore rules keep business code in the graph and drop the rest', async
   // Kept, and the reason the vendor pattern is anchored: this is the project's
   // own code, in a folder that happens to be named after the people it serves.
   writeProjectFile(projectRoot, 'app/controllers/vendor/console_controller.rb', 'class ConsoleController\n  def payouts\n    7\n  end\nend\n');
+  // Kept, and the reason `GRAPHIFY_MIN_VERSION` exists: source files named after
+  // a secret keyword. Below the floor graphify drops them by name, before
+  // parsing, and says nothing — on the bench that was the sign-in code.
+  writeProjectFile(projectRoot, 'app/controllers/tokens_controller.rb', 'class TokensController\n  def create\n    1\n  end\nend\n');
+  writeProjectFile(projectRoot, 'src/auth/token.js', 'export function issue() { return 1; }\n');
+  writeProjectFile(projectRoot, 'app/api/tokens.py', 'def issue():\n    return 1\n');
   // Dropped: vendored, generated, and type-only files.
   writeProjectFile(projectRoot, 'vendor/assets/moment.js', 'function moment() { return 1; }\n');
   writeProjectFile(projectRoot, 'app/assets/javascripts/datatables.js', 'function dataTable() { return 1; }\n');
@@ -204,12 +214,57 @@ test('the ignore rules keep business code in the graph and drop the rest', async
     'app/javascript/controllers/bill_controller.js',
     'lib/pricing.py',
     'app/controllers/vendor/console_controller.rb',
+    'app/controllers/tokens_controller.rb',
+    'src/auth/token.js',
+    'app/api/tokens.py',
   ]) {
     assert.ok(covered(kept), `${kept} is business code and must be in the graph`);
   }
   for (const dropped of ['vendor/', 'app/assets/', 'db/migrate/', 'app/models/migrations/', 'types/']) {
     assert.ok(!covered(dropped), `${dropped} carries no business logic and must be filtered out`);
   }
+});
+
+// The floor, answered by a fake `graphify --version` so the four answers can be
+// pinned without four installs. What matters is that "too old" is one sentence
+// naming the version found and the version needed, and that "not installed"
+// stays a different sentence — they are fixed differently.
+function graphifyAnswering(stdout: string, code = 0, stderr = ''): typeof runProcess {
+  return async () => ({ stdout, stderr, code });
+}
+
+test('requireGraphify accepts a release at or above the floor', async () => {
+  await requireGraphify(graphifyAnswering(`graphify ${GRAPHIFY_MIN_VERSION}\n`));
+  await requireGraphify(graphifyAnswering('graphify 0.9.58\n'));
+  await requireGraphify(graphifyAnswering('graphify 1.0.0\n'));
+});
+
+test('requireGraphify refuses a release below the floor, naming both versions', async () => {
+  await assert.rejects(requireGraphify(graphifyAnswering('graphify 0.8.44\n')), (err: Error) => {
+    assert.match(err.message, /graphify 0\.8\.44 is installed, and Unitbob needs 0\.9\.18 or newer/);
+    assert.match(err.message, /silently leave out any source file whose name ends in "token"/);
+    assert.match(err.message, /pip install --upgrade graphifyy/);
+    return true;
+  });
+  // Numeric, not lexical: 0.10.0 is newer than 0.9.18.
+  await requireGraphify(graphifyAnswering('graphify 0.10.0\n'));
+});
+
+test('requireGraphify treats a graphify too old to know --version as below the floor', async () => {
+  const old = graphifyAnswering('', 1, "error: unknown command '--version'\nRun 'graphify --help' for usage.\n");
+  await assert.rejects(requireGraphify(old), /needs 0\.9\.18 or newer/);
+});
+
+test('requireGraphify says "not installed" only when graphify could not be started', async () => {
+  const missing: typeof runProcess = async () => {
+    throw new Error('spawn graphify ENOENT');
+  };
+  await assert.rejects(requireGraphify(missing), (err: Error) => {
+    assert.match(err.message, /graphify is required but was not found or did not run/);
+    assert.match(err.message, /pip install graphifyy && graphify install/);
+    assert.match(err.message, /ENOENT/);
+    return true;
+  });
 });
 
 test('runProcess reports a timeout as a local process failure', async () => {

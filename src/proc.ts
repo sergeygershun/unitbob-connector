@@ -80,18 +80,54 @@ export function runProcess(
   });
 }
 
-export async function requireGraphify(): Promise<void> {
+// The oldest graphify the map may be built with. Below it, `detect.py` drops
+// any file whose name ends in `token`, `secret`, `password` or `credential` as
+// a probable secret store — by the name alone, before the file is parsed, and
+// without a word on stdout: `graphify update` never prints the list it keeps.
+// On the bench, 2026-09-11, that took `app/api/tokens.py` out of microblog and
+// `src/controllers/auth/token.js` out of soul, so both maps were built without
+// the sign-in code and nothing said so. `.graphifyignore` cannot re-include a
+// file graphify has decided is sensitive, so the only cure is the release that
+// exempts real source files (`.py`, `.js`, `.ts`, `.rb`) from that rule, and
+// 0.9.18 is the first one that does — checked release by release.
+export const GRAPHIFY_MIN_VERSION = '0.9.18';
+
+const GRAPHIFY_INSTALL =
+  '`pip install graphifyy && graphify install` (PyPI package "graphifyy", command "graphify", needs Python 3.10+)';
+
+export async function requireGraphify(run: typeof runProcess = runProcess): Promise<void> {
+  let result: ProcResult;
   try {
-    const result = await runProcess('graphify', ['--help']);
-    if (result.code === 0) return;
-    throw new Error(result.stderr.trim() || result.stdout.trim() || `graphify --help exited ${result.code}`);
+    result = await run('graphify', ['--version']);
   } catch (err) {
     throw new Error(
-      `graphify is required but was not found or did not run. Install it with ` +
-        `\`pip install graphifyy && graphify install\` (PyPI package "graphifyy", command ` +
-        `"graphify", needs Python 3.10+), then retry (${(err as Error).message}).`,
+      `graphify is required but was not found or did not run. Install it with ${GRAPHIFY_INSTALL}, ` +
+        `then retry (${(err as Error).message}).`,
     );
   }
+
+  // `graphify 0.9.58` on stdout. A release too old to answer `--version` at all
+  // (0.7.x says "unknown command") is older than the floor by definition, so it
+  // is refused with the same sentence rather than a different one.
+  const version = /\bgraphify\s+(\d+\.\d+\.\d+)/.exec(result.stdout)?.[1];
+  if (version && !olderThan(version, GRAPHIFY_MIN_VERSION)) return;
+
+  const found = version ?? (result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`);
+  throw new Error(
+    `graphify ${found} is installed, and Unitbob needs ${GRAPHIFY_MIN_VERSION} or newer. Older releases ` +
+      `silently leave out any source file whose name ends in "token", "secret" or "password" — ` +
+      `the sign-in code, typically — so the map would be built without it and nobody would be told. ` +
+      `Upgrade with \`pip install --upgrade graphifyy\`, then retry.`,
+  );
+}
+
+function olderThan(version: string, floor: string): boolean {
+  const a = version.split('.').map(Number);
+  const b = floor.split('.').map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) return a[i] < b[i];
+  }
+  return false;
 }
 
 // Paths that hold no business logic in the stacks unitbob supports — Rails,
