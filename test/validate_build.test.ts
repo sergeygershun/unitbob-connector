@@ -338,8 +338,81 @@ test('a behavioral branch whose review is not written yet is checked, and the ga
   const asked = await run(projectWith([behavioral], issued), async () => [wouldPublish('behavioral')]);
 
   assert.match(asked.output, /Not checked — behavioral: the independent review has not been written yet/);
-  assert.match(asked.output, /run this command again afterwards/);
+  assert.match(asked.output, /Run this command again afterwards/);
   assert.equal(asked.items[0].length, 1, 'the branch is still sent, minus the review');
+});
+
+// What that branch actually gets back. The server stops at the first rule
+// broken and reads the review last, so a branch sent without one comes back
+// refused for exactly that — and only after the manifest, the markers and the
+// addresses all passed. On the bench, 2026-09-11, that refusal was printed
+// under "Fix them, then run validate-build again", and it sent a reader hunting
+// for a defect in an answer that step 9 forbids from carrying the key at all.
+test('the expected pre-review refusal reads as "checked up to the review", not as a defect', async () => {
+  const behavioral = {
+    suite_kind: 'behavioral',
+    suite_file: {
+      path: '.unitbob/behavioral/features/surface_contracts.feature',
+      content: '@ubc_aaaaaaaaaaaa\nScenario: charges\n',
+      support_files: [{ path: '.unitbob/behavioral/step_definitions/s_steps.rb', content: 'x\n' }],
+    },
+    runner_manifest: MANIFEST,
+    test_metadata: { capabilities: [] },
+  };
+  const issued = [twoBranchRequest()[1]];
+  const asked = await run(projectWith([behavioral], issued), async () => [{
+    suite_kind: 'behavioral',
+    status: 'error',
+    error: 'behavioral: test_metadata must include a bdd_quality_review artifact',
+  }]);
+
+  assert.doesNotMatch(asked.output, /would refuse this answer/);
+  assert.doesNotMatch(asked.output, /Fix them/);
+  assert.match(asked.output, /checked this answer as far as it can before the review/);
+  assert.match(asked.output, /behavioral: checked up to the review — the manifest, the markers and the addresses passed/);
+  assert.doesNotMatch(asked.output, /would publish it/, 'no publish is promised for a branch the review has not read');
+});
+
+// Only that one refusal, and only for a branch sent without its review. Any
+// other refusal of such a branch is a real defect the server found before it
+// ever reached the review rule, and it is shown as it always was.
+test('any other pre-review refusal is still a refusal', async () => {
+  const behavioral = {
+    suite_kind: 'behavioral',
+    suite_file: {
+      path: '.unitbob/behavioral/features/surface_contracts.feature',
+      content: '@ubc_aaaaaaaaaaaa\nScenario: charges\n',
+      support_files: [{ path: '.unitbob/behavioral/step_definitions/s_steps.rb', content: 'x\n' }],
+    },
+    runner_manifest: MANIFEST,
+    test_metadata: { capabilities: [] },
+  };
+  const issued = [twoBranchRequest()[1]];
+
+  await assert.rejects(
+    run(projectWith([behavioral], issued), async () => [{
+      suite_kind: 'behavioral',
+      status: 'error',
+      error: 'surface_coverage for capability refund references unknown surface: GET /invented',
+    }]),
+    /would refuse this answer[\s\S]*GET \/invented/,
+  );
+});
+
+// And the same words on a branch that was not sent without its review are a
+// real refusal — the second run, review bound, is the one that must never
+// soften anything, and neither may the structural peer.
+test('the same words on any other branch are a refusal', async () => {
+  const projectRoot = projectWith([answer()]);
+
+  await assert.rejects(
+    run(projectRoot, async () => [{
+      suite_kind: 'structural',
+      status: 'error',
+      error: 'test_metadata must include a bdd_quality_review artifact',
+    }]),
+    /would refuse this answer/,
+  );
 });
 
 // The opposite case, and the one that matters on the second run. A review that

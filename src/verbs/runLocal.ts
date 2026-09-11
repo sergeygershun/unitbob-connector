@@ -141,8 +141,14 @@ function compareFailures(
   rememberFailures(config.projectRoot, suiteKind, digest);
   if (digest !== before) return false;
 
+  // The number is the one the reader has just counted in the list above — every
+  // failed case — not the size of the compared set. That set is keyed on marker,
+  // file and first line, so seven Scenarios under one marker failing the same
+  // way are one entry in it; on soul, 2026-09-11, this line said "the same
+  // 1 case(s)" under a list of seven, and read as a counting error.
+  const reported = reportedFailures(ran.runner, ran.result.report)?.length ?? failures.length;
   d.stdout.write(
-    `\nStopping ${suiteKind}: it just failed the same ${failures.length} case(s) as the previous run, ` +
+    `\nStopping ${suiteKind}: it just failed the same ${reported} case(s) as the previous run, ` +
       'down to the first line of every message. The edits since then changed nothing this run can see.\n' +
       'Look at the failures yourself, replan the slice, or record the branch as a build_error. ' +
       'Running it again unchanged prints this same line.\n',

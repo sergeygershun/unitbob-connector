@@ -363,7 +363,7 @@ export function filesLostOnMaterialize(projectRoot: string, artifact: SuiteArtif
   return readdirSync(behavioralRoot)
     .filter((entry) => !runnerEntries.has(entry) && !CONNECTOR_RUN_ARTIFACTS.has(entry))
     .flatMap((entry) => filesUnder(projectRoot, `${BEHAVIORAL_DIR}/${entry}`))
-    .filter((path) => !listed.has(path))
+    .filter((path) => !listed.has(path) && !isRuntimeByProduct(path))
     .sort();
 }
 
@@ -376,6 +376,25 @@ function filesUnder(projectRoot: string, relative: string): string[] {
   if (!stats.isDirectory()) return [];
 
   return readdirSync(join(projectRoot, relative)).flatMap((entry) => filesUnder(projectRoot, `${relative}/${entry}`));
+}
+
+// What the branch's own run leaves behind while it runs: Python's byte-code
+// cache beside every step file, the SQLite database the World opens at start
+// and its journal. Nobody wrote them, the next run makes them again, and the
+// answer could not list them if it tried. On the bench, 2026-09-11, the review
+// warning named fourteen `.pyc` files on microblog and the World's own database
+// on soul as things "running it will delete" — the same way the connector's
+// report files used to be named, and for the same cost: a warning that fires on
+// every review is a warning nobody reads when a step file really is forgotten.
+//
+// Matched anywhere in the path, not only at the top: `__pycache__` sits inside
+// `step_definitions/`, where the top-level filter above never looks.
+const RUNTIME_BY_PRODUCT_DIRS: ReadonlySet<string> = new Set(['__pycache__', '.pytest_cache']);
+const RUNTIME_BY_PRODUCT_FILE = /\.(pyc|sqlite|sqlite3|db|db-shm|db-wal|db-journal)$/;
+
+function isRuntimeByProduct(relativePath: string): boolean {
+  const parts = relativePath.split('/');
+  return parts.some((part) => RUNTIME_BY_PRODUCT_DIRS.has(part)) || RUNTIME_BY_PRODUCT_FILE.test(parts[parts.length - 1]);
 }
 
 export function copyBehavioralRunnerEnvironment(

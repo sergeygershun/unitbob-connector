@@ -152,10 +152,11 @@ function dryRunBatch(
   config: Config,
   request: SuiteBuildRequest,
   outputs: HostBranchOutput[],
-): { items: SuiteBuildItem[]; unchecked: string[]; problems: BuildProblem[] } {
+): { items: SuiteBuildItem[]; unchecked: string[]; problems: BuildProblem[]; withoutReview: Set<string> } {
   const items: SuiteBuildItem[] = [];
   const unchecked: string[] = [];
   const problems: BuildProblem[] = [];
+  const withoutReview = new Set<string>();
 
   for (const output of outputs) {
     if (output.build_error) {
@@ -172,18 +173,38 @@ function dryRunBatch(
           problems.push({ branch: output.suite_kind, message: (error as Error).message });
           continue;
         }
+        withoutReview.add(output.suite_kind);
         unchecked.push(
-          `${output.suite_kind}: the independent review has not been written yet, so the server judged ` +
-            'this branch without it. Anything it says about bdd_quality_review, known_defect_probe or ' +
-            'candidate_run is answered later, by `suite-review-prepare` and the reviewer — run this ' +
-            'command again afterwards for a verdict on the whole branch.',
+          `${output.suite_kind}: the independent review has not been written yet, so the server judges ` +
+            'this branch up to the point where it would read the review. Everything before that — the ' +
+            'manifest, the markers, the addresses — is checked now; the review itself is answered later, ' +
+            'by `suite-review-prepare` and the reviewer. Run this command again afterwards for a verdict ' +
+            'on the whole branch.',
         );
       }
     }
     items.push(uploadItem(request, output, testMetadata));
   }
 
-  return { items, unchecked, problems };
+  return { items, unchecked, problems, withoutReview };
+}
+
+// The one refusal a branch sent without its review is expected to get. The
+// server checks the manifest, the markers and the surface arithmetic first and
+// stops at the first rule broken, so reaching *this* rule means everything
+// before it passed — which is the whole answer the pre-review run was after.
+//
+// Printed as a refusal, it was read as one: "must include a bdd_quality_review
+// artifact", right under "Fix them, then run validate-build again", sent a
+// reader looking for a defect in an answer that step 9 forbids from carrying
+// that key in the first place. The text is matched, not reworded — the words on
+// the line below are the server's, and if the server ever says it differently
+// the line stops matching and the refusal is shown as before, which is the safe
+// way for this to go stale.
+const REVIEW_MISSING = /must include a bdd_quality_review artifact/;
+
+function reachedTheReview(result: SuiteBuildResult, withoutReview: Set<string>): boolean {
+  return withoutReview.has(result.suite_kind) && REVIEW_MISSING.test(result.error ?? '');
 }
 
 function describe(result: SuiteBuildResult): string {
@@ -215,7 +236,7 @@ export async function validateBuild(
 
   const request = readSuiteBuildRequest(config.projectRoot);
   const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
-  const { items, unchecked, problems } = dryRunBatch(config, request, outputs);
+  const { items, unchecked, problems, withoutReview } = dryRunBatch(config, request, outputs);
 
   const local = [
     ...unreadable.map((entry) => ({ branch: entry.suite_kind, message: entry.message })),
@@ -260,7 +281,10 @@ export async function validateBuild(
     );
   }
 
-  const refused = results.filter((result) => result.status !== WOULD_PUBLISH && result.status !== 'build_error');
+  const refused = results.filter(
+    (result) =>
+      result.status !== WOULD_PUBLISH && result.status !== 'build_error' && !reachedTheReview(result, withoutReview),
+  );
   if (refused.length > 0) {
     throw new Error(
       `The Unitbob server would refuse this answer:\n${refused.map(rejection).join('\n')}\n` +
@@ -273,10 +297,23 @@ export async function validateBuild(
   // answer whose every branch is a declared `build_error` is accepted and stores
   // nothing, and reporting that as a suite about to go up would be the one
   // sentence in this output that is not true of what happened.
+  //
+  // A branch that reached the review rule without a review is neither: the
+  // server checked everything before it and stopped where the review would be.
+  // It gets its own line, and the headline does not promise a publish for it.
   const accepted = results.filter((result) => result.status === WOULD_PUBLISH);
+  const pending = results.filter((result) => reachedTheReview(result, withoutReview));
   const headline = accepted.length === 0
-    ? 'The Unitbob server accepted this answer, and it publishes no suite:'
+    ? pending.length === 0
+      ? 'The Unitbob server accepted this answer, and it publishes no suite:'
+      : 'The Unitbob server checked this answer as far as it can before the review:'
     : 'The Unitbob server checked this answer and would publish it:';
 
-  d.stdout.write(`${headline}\n${results.map(describe).join('\n')}\n${DRY_RUN_DOES_NOT}\n`);
+  const lines = results.map((result) =>
+    reachedTheReview(result, withoutReview)
+      ? `  ${result.suite_kind}: checked up to the review — the manifest, the markers and the addresses passed; ` +
+        'the review is what is left'
+      : describe(result),
+  );
+  d.stdout.write(`${headline}\n${lines.join('\n')}\n${DRY_RUN_DOES_NOT}\n`);
 }

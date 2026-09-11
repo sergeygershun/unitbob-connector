@@ -245,6 +245,33 @@ test('names the files the next materialization would delete', () => {
   ]);
 });
 
+// What the run itself leaves behind is not the user's loss. On the bench,
+// 2026-09-11, the warning named fourteen `.pyc` files on microblog and the
+// World's own SQLite database on soul; the next run makes all of them again.
+test('the run\'s own by-products are not named among the files it would delete', () => {
+  const projectRoot = tmpProject();
+  const root = join(projectRoot, '.unitbob', 'behavioral');
+  const steps = join(root, 'step_definitions');
+  mkdirSync(join(steps, '__pycache__'), { recursive: true });
+  mkdirSync(join(root, '.pytest_cache', 'v'), { recursive: true });
+  writeFileSync(join(root, 'features.feature'), 'Feature: x\n');
+  writeFileSync(join(steps, 'test_billing.py'), '# forgotten\n');
+  writeFileSync(join(steps, '__pycache__', 'test_billing.cpython-311.pyc'), 'x');
+  writeFileSync(join(root, '.pytest_cache', 'v', 'nodeids'), '[]');
+  writeFileSync(join(root, 'behavioral-app.sqlite'), '');
+  writeFileSync(join(root, 'behavioral.db'), '');
+  writeFileSync(join(root, 'behavioral.db-shm'), '');
+  writeFileSync(join(root, 'behavioral.db-wal'), '');
+
+  const lost = filesLostOnMaterialize(projectRoot, {
+    path: '.unitbob/behavioral/features.feature',
+    content: 'Feature: x\n',
+    support_files: [],
+  }, 'pytest-bdd');
+
+  assert.deepEqual(lost, ['.unitbob/behavioral/step_definitions/test_billing.py']);
+});
+
 test('rejects the legacy spec_rb shape per branch', () => {
   const projectRoot = tmpProject();
   writeTask(projectRoot);

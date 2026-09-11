@@ -333,6 +333,24 @@ test('the same set of failures twice in a row stops the branch with a non-zero c
   assert.match(second.out, /changed nothing this run can see/);
 });
 
+// The count is what the reader just saw listed. The compared set folds cases
+// sharing a marker, a file and a first line into one entry, and printing its
+// size under a list of seven Scenarios read as a counting error on soul,
+// 2026-09-11.
+test('the stop line counts the failed cases it just listed, not the folded set', async () => {
+  const same = (name: string) => ({
+    description: `ubc_0123456789ab ${name}`, file_path: './a_spec.rb', status: 'failed',
+    exception: { message: 'TypeError: request is not a function\n  at line 4' },
+  });
+  const seven = JSON.stringify({ examples: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(same) });
+  const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
+  await runWithReport(projectRoot, seven);
+
+  const second = await runWithReport(projectRoot, seven);
+
+  assert.match(second.out, /it just failed the same 7 case\(s\) as the previous run/);
+});
+
 test('a failure that changed its message is progress, and the branch keeps running', async () => {
   const projectRoot = project([structuralAnswer(), behavioralAnswer()]);
   await runWithReport(projectRoot, RED);

@@ -108,7 +108,15 @@ actually drives, and must equal that Scenario's `surface_coverage` in the
 candidate's metadata. If the two disagree, that is a finding — say it in a
 reservation or an objection rather than adjusting your list to match.
 
-A Scenario that also happens to drive an address belonging to another capability
+The `When`, and only the `When` — the same rule the worker wrote its list by.
+What a `Given` does to arrive (sign in, create the table the Scenario needs) and
+what an `After` does to leave are not the behaviour under test, so an address
+they touch is not missing from `surface_coverage` and not a finding. On soul,
+2026-09-11, every one of seven Scenarios got a reservation for its setup hitting
+`POST /api/tables`, and seven reservations for one worker following its
+instruction to the letter looked like a broken suite.
+
+A Scenario whose `When` also drives an address belonging to another capability
 goes in `reservation`, naming the address. There is no separate field for it and
 none is coming; the text is free-form. One run had that observation, was right
 about it, and withdrew it believing the format had nowhere to put it.
@@ -120,7 +128,7 @@ repair round opens — by the time you are reading, the repair rotation and the
 final run are spent.
 
 What it does do: a capability whose Scenarios were **all** objected to is stored
-`unguarded` at publish — the amber "not yet testable" lamp, never green — and
+`unguarded` at publish — the amber "not guarded yet" lamp, never green — and
 your objection becomes the sentence its owner reads in place of the headline.
 Write it so it reads well there. One objection among sound siblings changes
 nothing: the siblings guard the capability and its green lamp is earned. A

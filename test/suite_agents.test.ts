@@ -272,3 +272,17 @@ test('the reviewer agent points at the review request and does not re-tell the b
   assert.doesNotMatch(body, /without reading Scenarios/i);
   assert.doesNotMatch(body, /fifty-six|56 capabilit/i);
 });
+
+// One rule for the join, read the same way on both sides of it. The worker lists
+// what the `When` drives; on soul, 2026-09-11, the reviewer judged every step
+// and gave seven reservations for setup traffic to another capability's address —
+// a suite that looked broken over two instructions reading one field differently.
+test('the reviewer judges surface_coverage by the When, as the worker writes it', () => {
+  const { body: worker } = agent('suite-worker');
+  const { body: reviewer } = agent('suite-reviewer');
+
+  assert.match(worker, /the Scenario's `When` really reaches/);
+  assert.match(reviewer, /The `When`, and only the `When` — the same rule the worker wrote its list by/);
+  assert.match(reviewer, /not missing from `surface_coverage` and not a finding/);
+  assert.match(reviewer, /A Scenario whose `When` also drives an address belonging to another capability/);
+});
