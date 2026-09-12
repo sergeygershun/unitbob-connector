@@ -24,6 +24,7 @@ import { parseFeatureId, readTestsRequest } from '../files/features.ts';
 import { testPathsOf } from '../runner/vitest.ts';
 import { runStructuralByRunner } from './run.ts';
 import type { RunnerResult } from '../runner/types.ts';
+import { outputTail } from '../runner/outputTail.ts';
 
 const OUTPUT_TAIL_CHARS = 4000;
 
@@ -361,18 +362,11 @@ function report(result: RunnerResult): string {
     );
   }
 
-  const tail = outputTail(result);
+  const tail = outputTail(result, OUTPUT_TAIL_CHARS);
   if (tail) lines.push('', tail);
   return `${lines.join('\n')}\n`;
 }
 
-function outputTail(result: RunnerResult): string {
-  const bits: string[] = [];
-  if (result.stderr.trim()) bits.push(result.stderr.trim());
-  if (result.stdout.trim()) bits.push(result.stdout.trim());
-  const joined = bits.join('\n');
-  return joined.length > OUTPUT_TAIL_CHARS ? joined.slice(-OUTPUT_TAIL_CHARS) : joined;
-}
 
 // The suite blob's own project-relative paths, exactly as the runners expect
 // them: the main file first, then every other file of the branch. The main file

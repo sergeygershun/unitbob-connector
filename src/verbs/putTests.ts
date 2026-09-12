@@ -1,5 +1,6 @@
 import type { Config } from '../config.ts';
-import { parseFeatureId, readTestsOutput, readTestsRequest } from '../files/features.ts';
+import { createHash } from 'node:crypto';
+import { knowledgePath, parseFeatureId, readKnowledge, readTestsOutput, readTestsRequest } from '../files/features.ts';
 import { suiteCandidateDigest } from '../files/suiteBuild.ts';
 import { enterUrl } from '../links.ts';
 import { runBddSuite, type TagFilter } from '../runner/bdd.ts';
@@ -9,6 +10,7 @@ import { placeAdvice } from '../runner/placeAdvice.ts';
 import { placeProblem } from '../runner/place.ts';
 import { runnerEnvironmentPlaceProblem } from '../runner/placeEnvironment.ts';
 import type { RunnerResult } from '../runner/types.ts';
+import { outputTail } from '../runner/outputTail.ts';
 import { Wire, type FeatureSuiteRecorded, type FeatureSuiteUpload } from '../wire.ts';
 
 interface PutTestsDeps {
@@ -19,6 +21,17 @@ interface PutTestsDeps {
 }
 
 const OUTPUT_TAIL_CHARS = 2000;
+
+// The digest of `knowledge.md` on disk against the one the request was written
+// from — both named when they differ, so the reader sees which side moved.
+export function assertKnowledgeUnchanged(projectRoot: string, featureId: number | string, expected: string): void {
+  const got = createHash('sha256').update(readKnowledge(projectRoot, featureId)).digest('hex');
+  if (got === expected) return;
+  throw new Error(
+    `${knowledgePath(projectRoot, featureId)}: knowledge.md on disk differs from what the server has — ` +
+      `run put-knowledge first, or restore the file, then run this again.\nexpected: ${expected}\n     got: ${got}`,
+  );
+}
 
 // `put-tests <feature_id>` (spec 52-3, AC 3.5). The answer is read with its
 // files from disk; the candidate digest is the one the review uses; then the
@@ -41,6 +54,10 @@ export async function putTests(config: Config, args: string[] = [], deps?: Parti
   const featureId = parseFeatureId(args[0], 'put-tests');
   const request = readTestsRequest(config.projectRoot, featureId);
   const output = readTestsOutput(config.projectRoot, featureId);
+  // The same check `tests-prepare` made, made again here: the file may have
+  // been edited in between, and the checks are sealed to the text the server
+  // has, not to the text on disk (spec 52-3, edge cases).
+  assertKnowledgeUnchanged(config.projectRoot, featureId, request.knowledge_digest);
   const unusable = placeProblem(config.projectRoot) ?? runnerEnvironmentPlaceProblem(config.projectRoot);
   if (unusable) throw new Error(unusable);
 
@@ -59,7 +76,7 @@ export async function putTests(config: Config, args: string[] = [], deps?: Parti
       `The run produced no machine-readable report at ${result.resultPath} (exit code ${result.code}) — ` +
         'it died before the first scenario rather than failing them.\n',
     );
-    const tail = outputTail(result);
+    const tail = outputTail(result, OUTPUT_TAIL_CHARS);
     if (tail) d.stdout.write(`${tail}\n`);
     d.stdout.write('Nothing was sent.\n');
     return 1;
@@ -82,10 +99,3 @@ export async function putTests(config: Config, args: string[] = [], deps?: Parti
   return 0;
 }
 
-function outputTail(result: RunnerResult): string {
-  const bits: string[] = [];
-  if (result.stderr.trim()) bits.push(result.stderr.trim());
-  if (result.stdout.trim()) bits.push(result.stdout.trim());
-  const joined = bits.join('\n');
-  return joined.length > OUTPUT_TAIL_CHARS ? joined.slice(-OUTPUT_TAIL_CHARS) : joined;
-}

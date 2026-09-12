@@ -435,11 +435,11 @@ test('putSuiteBuilds PUTs the batch and returns one result per kind', async () =
   );
 });
 
-test('getSuites returns the two peer suite items', async () => {
+test('getSuiteIndex returns the two peer suite items', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { suites: [{ suite_kind: 'structural', status: 'ready' }, { suite_kind: 'behavioral', status: 'not_built' }] }),
     async (config, hits) => {
-      const suites = await new Wire(config).getSuites();
+      const suites = (await new Wire(config).getSuiteIndex()).suites;
       assert.deepEqual(suites.map((s) => s.status), ['ready', 'not_built']);
       assert.equal(hits[0].url, '/repos/3/suites');
     },
@@ -565,7 +565,7 @@ test('a batch endpoint answering without its array is a WireError', async () => 
   await withServer(
     (_hit, res) => json(res, 200, { nope: true }),
     async (config) => {
-      await assert.rejects(() => new Wire(config).getSuites(), (err) => err instanceof WireError);
+      await assert.rejects(() => new Wire(config).getSuiteIndex(), (err) => err instanceof WireError);
     },
   );
 });
@@ -591,7 +591,7 @@ test('every wire call carries the project token', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { suites: [] }),
     async (config, hits) => {
-      await new Wire(config).getSuites();
+      await new Wire(config).getSuiteIndex();
       assert.equal(hits[0].authorization, 'Bearer secret-token');
     },
   );
@@ -602,7 +602,7 @@ test('a 404 on the wire is explained, not shown as a bare status', async () => {
     (_hit, res) => json(res, 404, {}),
     async (config) => {
       await assert.rejects(
-        new Wire(config).getSuites(),
+        new Wire(config).getSuiteIndex(),
         (err: Error) =>
           err instanceof WireError &&
           /does not have/.test(err.message) &&
@@ -641,7 +641,7 @@ test('a 403 on the wire is named as an intermediary, not as the brain', async ()
     },
     async (config) => {
       await assert.rejects(
-        new Wire(config).getSuites(),
+        new Wire(config).getSuiteIndex(),
         (err: Error) =>
           err instanceof WireError &&
           /never answers 403/.test(err.message) &&
@@ -704,7 +704,7 @@ test('an ordinary rejection carries no proxy advice', async () => {
       (_hit, res) => json(res, 422, { error: 'surface: bad' }),
       async (config) => {
         await assert.rejects(
-          new Wire(config).getSuites(),
+          new Wire(config).getSuiteIndex(),
           (err: Error) => err instanceof WireError && !/NODE_USE_ENV_PROXY/.test(err.message),
         );
       },

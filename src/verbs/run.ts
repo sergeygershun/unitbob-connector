@@ -9,6 +9,7 @@ import { runVitestSuite, testPathsOf } from '../runner/vitest.ts';
 import { runPytestSuite } from '../runner/pytest.ts';
 import { runBddSuite, type TagFilter } from '../runner/bdd.ts';
 import type { RunnerResult } from '../runner/types.ts';
+import { outputTail } from '../runner/outputTail.ts';
 import { enterUrl } from '../links.ts';
 import { boundReport } from '../runner/boundReport.ts';
 import { Wire, type RunResultItem, type SuiteArtifact, type SuiteIndex, type SuiteListItem } from '../wire.ts';
@@ -169,7 +170,7 @@ async function buildRunPayload(config: Config, d: Deps, item: SuiteListItem, ind
         command: [result.command, ...result.args].join(' '),
         exit_code: result.code,
         result_path: result.resultPath,
-        output_tail: outputTail(result),
+        output_tail: outputTail(result, OUTPUT_TAIL_CHARS),
       },
     };
   }
@@ -213,10 +214,3 @@ function suiteError(suiteDigest: string, message: string): unknown {
   };
 }
 
-function outputTail(result: RunnerResult): string {
-  const bits: string[] = [];
-  if (result.stderr.trim()) bits.push(result.stderr.trim());
-  if (result.stdout.trim()) bits.push(result.stdout.trim());
-  const joined = bits.join('\n');
-  return joined.length > OUTPUT_TAIL_CHARS ? joined.slice(-OUTPUT_TAIL_CHARS) : joined;
-}

@@ -401,10 +401,6 @@ export class Wire {
     };
   }
 
-  async getSuites(): Promise<SuiteListItem[]> {
-    return (await this.getSuiteIndex()).suites;
-  }
-
   // POST /repos/:id/runs/batch — ship each branch's raw report (or suite error)
   // in one batch; the server parses each against the exact stored version and
   // returns one summary per branch plus one shared map URL.
@@ -496,7 +492,7 @@ export class Wire {
   async putKnowledge(featureId: number | string, knowledge: string): Promise<KnowledgeRecorded> {
     const path = this.repoPath(`features/${encodeURIComponent(String(featureId))}/knowledge`);
     const res = await this.send('PUT', path, { knowledge });
-    if (res.status === 422) throw new WireError(await knowledgeRefusal(res));
+    if (res.status === 422) throw new WireError(await problemsRefusal(res, 'PUT knowledge failed: 422'));
     await this.ensureOk(res, `PUT ${path}`);
     return (await res.json()) as KnowledgeRecorded;
   }
@@ -662,30 +658,16 @@ async function unknownCapabilitiesRefusal(res: Response): Promise<string> {
   );
 }
 
-// The 422 of PUT …/knowledge carries one problem per violation (spec 52-2, AC
-// 5.3), and the host fixes the file from all of them — so, like the lists
-// above, they are relaid whole, one per line with both sides.
-async function knowledgeRefusal(res: Response): Promise<string> {
-  const { text, body } = await readBody<{ error?: unknown; problems?: unknown }>(res);
-  if (!Array.isArray(body.problems)) {
-    return `PUT knowledge failed: 422 — ${text.slice(0, 500)}`;
-  }
-  const lines = (body.problems as KnowledgeProblem[]).map(
-    (problem) => `expected: ${String(problem.expected)}\n     got: ${String(problem.got)}`,
-  );
-  return [`PUT knowledge failed: 422 — ${String(body.error ?? 'knowledge.md does not have the expected shape.')}`, ...lines].join(
-    '\n',
-  );
-}
-
 // A refusal the server worded in one sentence: that sentence, whole.
 async function wordedRefusal(res: Response, prefix: string): Promise<string> {
   const { text, body } = await readBody<{ error?: unknown }>(res);
   return `${prefix} — ${typeof body.error === 'string' ? body.error : text.slice(0, 500)}`;
 }
 
-// A refusal that may carry `problems` (spec 52-3, the seal): the sentence,
-// then one problem per line with both sides; without problems, the sentence.
+// A refusal that may carry `problems` — the knowledge file's shape (spec 52-2,
+// AC 5.3) or a broken seal (spec 52-3): the sentence, then one problem per line
+// with both sides, relaid whole because the host fixes the file from all of
+// them; without problems, the sentence.
 async function problemsRefusal(res: Response, prefix: string): Promise<string> {
   const { text, body } = await readBody<{ error?: unknown; problems?: unknown }>(res);
   const head = `${prefix} — ${typeof body.error === 'string' ? body.error : text.slice(0, 500)}`;

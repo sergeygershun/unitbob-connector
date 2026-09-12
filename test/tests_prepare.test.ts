@@ -119,7 +119,7 @@ test('tests-prepare stops when knowledge.md on disk differs from what the server
 
   await assert.rejects(
     () => testsPrepare(config(projectRoot), ['12'], deps()),
-    /knowledge\.md on disk differs from what the server has — run put-knowledge first/,
+    /knowledge\.md on disk differs from what the server has — run put-knowledge first[\s\S]*expected: [0-9a-f]{64}\n     got: [0-9a-f]{64}/,
   );
   assert.ok(!existsSync(testsRequestPath(projectRoot, 12)));
 });

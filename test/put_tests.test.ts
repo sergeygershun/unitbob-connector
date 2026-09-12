@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { putTests } from '../src/verbs/putTests.ts';
@@ -21,6 +22,9 @@ function config(projectRoot: string): Config {
   return { server: 'https://host', repoId: 3, token: 'secret', projectRoot };
 }
 
+const KNOWLEDGE = '# Refunds\n';
+const KNOWLEDGE_DIGEST = createHash('sha256').update(KNOWLEDGE).digest('hex');
+
 const MANIFEST = { language: 'ruby', framework: 'cucumber', result_format: 'cucumber_messages', runner: 'cucumber', package_manager: 'bundler', runner_version: '9.2.0' };
 
 function prepared(projectRoot: string): { suite_file: { path: string; content: string; support_files: { path: string; content: string }[] } } {
@@ -32,7 +36,7 @@ function prepared(projectRoot: string): { suite_file: { path: string; content: s
     assignment: { capabilities: [] },
     scenarios: [],
     knowledge_path: join(projectRoot, '.unitbob/features/12/knowledge.md'),
-    knowledge_digest: 'kdigest',
+    knowledge_digest: KNOWLEDGE_DIGEST,
     runner: 'cucumber',
     runner_manifest: MANIFEST,
     main_suite: 'not_built',
@@ -41,6 +45,7 @@ function prepared(projectRoot: string): { suite_file: { path: string; content: s
     output_path: testsOutputPath(projectRoot, 12),
   };
   write(testsRequestPath(projectRoot, 12), JSON.stringify(request));
+  write(join(projectRoot, '.unitbob/features/12/knowledge.md'), KNOWLEDGE);
   write(join(projectRoot, featureFeaturePath(12)), 'Feature: Refunds\n');
   write(join(projectRoot, featureStepsPath(12, 'cucumber')), "Given('a paid order') { }\n");
   write(testsOutputPath(projectRoot, 12), JSON.stringify({
@@ -92,7 +97,7 @@ test('put-tests runs the feature’s tag itself, attaches the red run, uploads, 
   assert.equal(id, 12);
   assert.deepEqual(upload.suite_file, suite_file);
   assert.deepEqual(upload.runner_manifest, MANIFEST);
-  assert.equal(upload.knowledge_digest, 'kdigest');
+  assert.equal(upload.knowledge_digest, KNOWLEDGE_DIGEST);
   const metadata = upload.test_metadata as Record<string, unknown>;
   assert.deepEqual(metadata.capabilities, [{ capability_id: 'feature_12', status: 'covered' }]);
   assert.deepEqual(metadata.red_run, {
@@ -154,6 +159,24 @@ test('put-tests lets a 409 and a 422 through in the server’s words', async () 
     }),
     (err: unknown) => err === refusal,
   );
+});
+
+test('put-tests stops when knowledge.md changed since tests-prepare, naming both digests, and sends nothing', async () => {
+  const projectRoot = tmpProject();
+  prepared(projectRoot);
+  write(join(projectRoot, '.unitbob/features/12/knowledge.md'), '# Refunds, edited\n');
+  let sent = false;
+
+  await assert.rejects(
+    () => putTests(config(projectRoot), ['12'], {
+      runBehavioral: async () => runnerResult(),
+      gitRevision: () => 'abc',
+      putFeatureSuite: async () => { sent = true; return { suite_digest: '', url: '', message: '' }; },
+      stdout: { write: () => true },
+    }),
+    (err: unknown) => /knowledge\.md on disk differs[\s\S]*expected: [0-9a-f]{64}\n     got: [0-9a-f]{64}/.test((err as Error).message),
+  );
+  assert.equal(sent, false);
 });
 
 test('put-tests needs the feature id, the request and the answer', async () => {

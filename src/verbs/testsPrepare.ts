@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { Config } from '../config.ts';
 import { materializeBehavioralUnion, materializeBehavioralWorld } from '../files/behavioral.ts';
 import {
@@ -6,7 +5,6 @@ import {
   featureStepsPath,
   knowledgePath,
   parseFeatureId,
-  readKnowledge,
   testsOutputPath,
   testsRequestPath,
   writeTestsRequest,
@@ -17,6 +15,7 @@ import { detectBddRunner } from '../runner/precheck.ts';
 import { ensureRunner, type ProvisionResult } from '../runner/provision.ts';
 import { ToolchainUnavailableError } from '../runner/toolchain.ts';
 import { Wire, type Recipe, type RunnerManifestWire, type SuiteIndex, type TestsPacket } from '../wire.ts';
+import { assertKnowledgeUnchanged } from './putTests.ts';
 
 interface TestsPrepareDeps {
   getTestsPacket: (featureId: number) => Promise<TestsPacket>;
@@ -58,13 +57,7 @@ export async function testsPrepare(config: Config, args: string[] = [], deps?: P
   if (unusable) throw new Error(unusable);
 
   const packet = await d.getTestsPacket(featureId);
-  const knowledge = readKnowledge(config.projectRoot, featureId);
-  if (createHash('sha256').update(knowledge).digest('hex') !== packet.knowledge_digest) {
-    throw new Error(
-      `${knowledgePath(config.projectRoot, featureId)}: knowledge.md on disk differs from what the server has — ` +
-        'run put-knowledge first, or restore the file, then run this again.',
-    );
-  }
+  assertKnowledgeUnchanged(config.projectRoot, featureId, packet.knowledge_digest);
 
   const [recipe, index] = await Promise.all([d.getRecipe('feature_tests'), d.getSuiteIndex()]);
 
