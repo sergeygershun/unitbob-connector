@@ -264,25 +264,48 @@ test('suite-repair-worker validates its owned slice within a 150-turn fuse', () 
 // scope — is stated in the brain prompt that owns this review. A copy here would
 // be a second home for a rule with one owner, which is how the local marker
 // check drifted from the server's and had to be removed.
-test('the reviewer agent points at the review request and does not re-tell the brain rule about scope', () => {
+//
+// Spec 51-1, criterion 1, narrows what the role may say about it to the one
+// fact the check enforces: which list the entries are counted against. "One
+// entry per assigned capability" read two ways — the request carries both the
+// map's `behavioral_assignment` and the `worker_plan` items, and each has
+// capabilities *assigned* to it. On soul, 2026-09-11, the reviewer wrote one
+// entry per plan item and lost the publish to `validate-build`.
+test('the reviewer agent names the list its selection verdicts are counted against', () => {
   const { body } = agent('suite-reviewer');
 
-  assert.match(body, /one entry per assigned capability/i);
+  assert.match(body, /every capability in the request's `behavioral_assignment`/);
+  assert.doesNotMatch(body, /one entry per assigned capability/i);
+  // And the example shows the shape the rule produces: one capability the plan
+  // took, one it deferred, each with a verdict.
+  assert.match(body, /"capability_id": "billing", "verdict": "pass" \},\s*\{ "capability_id": "reporting", "verdict": "pass" \}/);
   assert.doesNotMatch(body, /outside the chosen scope/i);
   assert.doesNotMatch(body, /without reading Scenarios/i);
   assert.doesNotMatch(body, /fifty-six|56 capabilit/i);
 });
 
-// One rule for the join, read the same way on both sides of it. The worker lists
-// what the `When` drives; on soul, 2026-09-11, the reviewer judged every step
-// and gave seven reservations for setup traffic to another capability's address —
-// a suite that looked broken over two instructions reading one field differently.
-test('the reviewer judges surface_coverage by the When, as the worker writes it', () => {
+// Spec 51-1, criterion 2 (B1a). `public_surfaces` is the reviewer's check of the
+// worker's claim, not a list of its own. The old text defined the field by the
+// step that drove the address ("the `When`, and only the `When`") and told the
+// reviewer to keep an honest list when it disagreed — but the server refuses any
+// list that is not the manifest, so on microblog a true finding (a `Then` doing
+// the `When`'s reading) cost the publish. Now: every claimed address real → copy
+// the manifest; a claimed address no step drives → `does_not_pass`; addresses
+// the manifest does not name never enter the field.
+test('the reviewer checks surface_coverage one way: every claimed address is real, or the Scenario fails', () => {
   const { body: worker } = agent('suite-worker');
   const { body: reviewer } = agent('suite-reviewer');
 
+  // The worker's rule is untouched: its list is what the `When` reaches.
   assert.match(worker, /the Scenario's `When` really reaches/);
-  assert.match(reviewer, /The `When`, and only the `When` — the same rule the worker wrote its list by/);
+
+  assert.match(reviewer, /your check of the worker's claim, not a list of your own/);
+  assert.match(reviewer, /no step drives at all/);
+  assert.match(reviewer, /never goes into the field/);
+  assert.doesNotMatch(reviewer, /rather than adjusting your list to match/);
+  assert.doesNotMatch(reviewer, /The `When`, and only the `When`/);
+  // Setup traffic and a `When` reaching another capability's address keep their
+  // homes (soul, 2026-09-11: seven reservations for `Given` traffic).
   assert.match(reviewer, /not missing from `surface_coverage` and not a finding/);
   assert.match(reviewer, /A Scenario whose `When` also drives an address belonging to another capability/);
 });

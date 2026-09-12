@@ -29,6 +29,18 @@ function writeExecutable(path: string, body: string): void {
   chmodSync(path, 0o755);
 }
 
+// The sidecar venv as the runner sees it: `bin/pytest` is the sign that
+// pytest-bdd was installed, `bin/python` is what actually runs (spec 51-1).
+// Both are fakes; `body` is what the run does.
+const SIDECAR_PYTHON = '.unitbob/behavioral/.venv/bin/python';
+const SIDECAR_PYTEST = '.unitbob/behavioral/.venv/bin/pytest';
+const WRITES_EMPTY_REPORT = `printf '%s' '{"version":1,"scenarios":[]}' > "$UNITBOB_PYTEST_BDD_REPORT"`;
+
+function fakeSidecarVenv(projectRoot: string, body: string = WRITES_EMPTY_REPORT): void {
+  writeExecutable(join(projectRoot, SIDECAR_PYTEST), 'exit 99');
+  writeExecutable(join(projectRoot, SIDECAR_PYTHON), body);
+}
+
 async function withPath(dir: string, fn: () => Promise<void>): Promise<void> {
   const oldPath = process.env.PATH;
   process.env.PATH = `${dir}${delimiter}${oldPath ?? ''}`;
@@ -87,19 +99,62 @@ test('cucumber-js strategy reports a missing sidecar instead of invoking npx', a
 test('pytest-bdd strategy writes its ini + plugin and reads the connector report', async () => {
   const projectRoot = tmpProject();
   const report = '{"version":1,"scenarios":[]}';
-  const sidecarPytest = '.unitbob/behavioral/.venv/bin/pytest';
-  writeExecutable(join(projectRoot, sidecarPytest), `printf '%s' '${report}' > "$UNITBOB_PYTEST_BDD_REPORT"`);
+  fakeSidecarVenv(projectRoot, `printf '%s' '${report}' > "$UNITBOB_PYTEST_BDD_REPORT"`);
 
   const result = await runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/surface_contracts.feature');
-  assert.equal(result.command, sidecarPytest);
+  assert.equal(result.command, SIDECAR_PYTHON);
   assert.equal(result.report, report);
   assert.equal(result.resultPath, '.unitbob/behavioral/pytest_bdd_report.json');
+});
+
+// Spec 51-1, criterion 3. The structural branch runs `python -m pytest`, which
+// puts the working directory — the project root — on `sys.path`; the behavioral
+// branch ran the `pytest` script, which does not. On microblog, twice, the
+// shared `conftest.py` died on `from app import create_app` before the first
+// Scenario, with no report (exit 4). Same stack, same command now.
+test('the behavioral pytest runs as `python -m pytest`, like the structural branch', async () => {
+  const projectRoot = tmpProject();
+  fakeSidecarVenv(projectRoot, `printf '%s' "$PYTHONPATH" > "$UNITBOB_PYTEST_BDD_REPORT"`);
+
+  const result = await runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/x.feature');
+
+  assert.equal(result.command, SIDECAR_PYTHON);
+  assert.deepEqual(result.args.slice(0, 4), ['-m', 'pytest', '-c', join('.unitbob', 'behavioral', 'pytest.ini')]);
+  assert.deepEqual(result.args.slice(-2), ['--rootdir', '.']);
+  // The plugin directory, and nothing else: the project root reaches `sys.path`
+  // through `-m`, not through a host path in the environment (spec 51-1, non-goal).
+  assert.equal(result.report, '.unitbob/behavioral');
 });
 
 test('pytest-bdd strategy reports a missing sidecar instead of using system pytest', async () => {
   await assert.rejects(
     () => runBddSuite(tmpProject(), 'pytest-bdd', '.unitbob/behavioral/features/surface_contracts.feature'),
     /Behavioral runner missing.*suite-prepare/,
+  );
+});
+
+// `bin/pytest` stays the sign that suite-prepare installed pytest-bdd into the
+// sidecar. A venv with a `python` but no `pytest` is one that was never
+// provisioned, and `python -m pytest` there would fail with "No module named
+// pytest" instead of the message that names the fix.
+test('the sidecar is judged present by its pytest, even though python is what runs', async () => {
+  const projectRoot = tmpProject();
+  writeExecutable(join(projectRoot, SIDECAR_PYTHON), WRITES_EMPTY_REPORT);
+
+  await assert.rejects(
+    () => runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/x.feature'),
+    /Behavioral runner missing.*suite-prepare/,
+  );
+});
+
+// Spec 51-1, criterion 3, the writer's half: the descriptor now says the project
+// root is importable, so a worker writes `from app import …` in the shared
+// conftest without a `sys.path` insert of its own.
+test('the pytest-bdd descriptor tells the writer the project root is on sys.path', () => {
+  const requirements = bddStepLoading('pytest-bdd')?.requirements ?? [];
+  assert.ok(
+    requirements.some((line) => line.includes('The project root is on `sys.path`')),
+    `descriptor lines: ${JSON.stringify(requirements)}`,
   );
 });
 
@@ -134,8 +189,7 @@ function named(runner: string, capability: string): string {
 
 test('pytest-bdd collects exactly the filenames its descriptor promises', async () => {
   const projectRoot = tmpProject();
-  const sidecarPytest = join(projectRoot, '.unitbob', 'behavioral', '.venv', 'bin', 'pytest');
-  writeExecutable(sidecarPytest, `printf '%s' '{"version":1,"scenarios":[]}' > "$UNITBOB_PYTEST_BDD_REPORT"`);
+  fakeSidecarVenv(projectRoot);
 
   const result = await runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/x.feature');
 
@@ -251,8 +305,7 @@ test('the pytest-bdd plugin hangs off the public pytest-bdd hooks and writes JSO
 // error, and a suite that quietly reaches the network again.
 test('the pytest run keeps the two arguments that make the connector-owned conftest load', async () => {
   const projectRoot = tmpProject();
-  const sidecarPytest = join(projectRoot, '.unitbob', 'behavioral', '.venv', 'bin', 'pytest');
-  writeExecutable(sidecarPytest, `printf '%s' '{"version":1,"scenarios":[]}' > "$UNITBOB_PYTEST_BDD_REPORT"`);
+  fakeSidecarVenv(projectRoot);
 
   const result = await runBddSuite(projectRoot, 'pytest-bdd', '.unitbob/behavioral/features/x.feature');
 

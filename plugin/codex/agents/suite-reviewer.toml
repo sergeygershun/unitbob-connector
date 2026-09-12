@@ -47,7 +47,10 @@ Write strict JSON, and nothing else, to
   "known_defect_probe": { "status": "not_supplied" },
   "selection_review": {
     "plan_digest": "<exact plan_digest from the request>",
-    "capability_reviews": [{ "capability_id": "billing", "verdict": "pass" }]
+    "capability_reviews": [
+      { "capability_id": "billing", "verdict": "pass" },
+      { "capability_id": "reporting", "verdict": "pass" }
+    ]
   }
 }
 ```
@@ -58,11 +61,19 @@ Nesting it one level deeper cost a run its publish; so did inventing values for
 top-level keys", which dropped it entirely. Copy the digest, do not compute it.
 
 Write `selection_review` only when the request carries a `plan_digest`, and give
-it one entry per assigned capability. Its verdicts are `pass` or
-`does_not_pass` — there is no `pass_with_reservation` at capability level — and
-`does_not_pass` owes a non-empty `reviewer_objection_text` naming the lost
-promise, the unjustified merge, or the dishonest deferral. Selection objections
-are recorded; they never block the publish and never downgrade a lamp.
+it one entry for **every capability in the request's `behavioral_assignment`** —
+the map's whole list, not the `worker_plan`'s. The plan takes a few capabilities
+and leaves the rest for a later build; a capability it left out still gets a
+verdict, about the deferral: `pass` when the candidate's `capabilities` mark it
+`unguarded` with an honest reason, `does_not_pass` when a promise was dropped or
+merged away. In the example above, `billing` was planned and `reporting` was
+deferred, and both are there. On soul, 2026-09-11, the reviewer wrote one entry
+per plan item and the publish was refused for every capability it left out.
+Its verdicts are `pass` or `does_not_pass` — there is no `pass_with_reservation`
+at capability level — and `does_not_pass` owes a non-empty
+`reviewer_objection_text` naming the lost promise, the unjustified merge, or the
+dishonest deferral. Selection objections are recorded; they never block the
+publish and never downgrade a lamp.
 
 Omit `candidate_run`, `known_defect_context` and any runner report: the connector
 owns those and adds them itself.
@@ -100,12 +111,21 @@ and no answer that consists of writing nothing.
 it never excuses a "loads successfully" assertion for a promised record, state
 change, message, or side effect.
 
-`public_surfaces` lists the addresses you verified the `When` implementation
-actually drives, and must equal that Scenario's `surface_coverage` in the
-candidate's metadata. If the two disagree, that is a finding — say it in a
-reservation or an objection rather than adjusting your list to match.
+`public_surfaces` is your check of the worker's claim, not a list of your
+own. Read the steps behind the Scenario and confirm every address in its
+`surface_coverage` is really driven by some step; if every one is, copy that
+list into `public_surfaces` verbatim — the two must be equal, and the server
+refuses a Scenario where they are not. If the manifest names an address **no
+step drives at all**, the verdict is `does_not_pass`, naming the address
+(a2time, 2026-08-17: six Scenarios claimed addresses their steps never
+touched). An address a step drives that the manifest does **not** name never
+goes into the field: a `When` reaching another capability's address goes in
+`reservation` (below); a `Then` re-reading state, a `Given` arriving, an `After`
+leaving go nowhere. A claimed address that a `Then` drives rather than the
+`When` is real — it stays in the list; say which step drove it in `reservation`
+if it matters. On microblog, 2026-09-11, that finding was right and the list
+was shortened to show it, and the publish was refused for the shortened list.
 
-The `When`, and only the `When` — the same rule the worker wrote its list by.
 What a `Given` does to arrive (sign in, create the table the Scenario needs) and
 what an `After` does to leave are not the behaviour under test, so an address
 they touch is not missing from `surface_coverage` and not a finding. On soul,
@@ -152,7 +172,10 @@ shared test database and proves nothing about the candidate that was bound.
 
 **Do not rewrite anybody's verdict, including on a second pass.** If you find
 yourself weighing whether an objection is worth the trouble, the answer is that
-it costs this run nothing at all.
+it costs this run nothing at all. A second pass that arrives with a
+`validate-build` refusal corrects the field it names — `public_surfaces` brought
+back to the manifest, a missing `selection_review` entry added — and leaves
+every verdict as it was.
 
 **Do not widen the review.** Whether a capability deserved more Scenarios is the
 `selection_review` question and is answered per capability; everything else about

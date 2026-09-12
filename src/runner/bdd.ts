@@ -143,6 +143,8 @@ const BDD_STRATEGIES: Readonly<Record<string, BddStrategy>> = {
           'over nothing.',
         '`conftest.py` is picked up by pytest itself whatever else sits beside it, so shared fixtures ' +
           'belong there and there is no load-order trap to work around.',
+        'The project root is on `sys.path`, as it is for the structural branch: `from app import …` ' +
+          'works in `conftest.py` and in step files, with no `sys.path` insert of your own.',
       ],
     },
   },
@@ -240,13 +242,16 @@ async function runPytestBdd(projectRoot: string, mainPath: string): Promise<Runn
 
   const command = await pickPython(projectRoot);
   const stepsDir = join(BEHAVIORAL_ROOT, STEP_DEFINITIONS);
-  const isVenvPytest = command.endsWith('/pytest');
+  // `python -m pytest`, as the structural branch runs it: `-m` puts the working
+  // directory — the project root — on `sys.path`, so the shared conftest's
+  // `from app import …` resolves. The `pytest` script does not do that, and on
+  // microblog the conftest died on that import before the first Scenario, with
+  // no report to read (spec 51-1).
+  //
   // `--rootdir .`, not the absolute root: the working directory is the project
   // root in every place, and an absolute host path would name a directory that
   // does not exist wherever the run actually happens.
-  const args = isVenvPytest
-    ? ['-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', '.']
-    : ['-m', 'pytest', '-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', '.'];
+  const args = ['-m', 'pytest', '-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', '.'];
   const survivor = clearReport(join(projectRoot, PYTEST_BDD_REPORT));
 
   const run = await runInProject(projectRoot, command, args, {
@@ -287,10 +292,14 @@ function finalize(
   };
 }
 
+// The sidecar's `pytest` is the sign that suite-prepare installed pytest-bdd
+// there; a venv always has a `python` beside it, and that is what runs. Judging
+// by `python` alone would send an unprovisioned venv into "No module named
+// pytest" instead of the message that names the fix.
 async function pickPython(projectRoot: string): Promise<string> {
-  const sidecarVenvPytest = `${BEHAVIORAL_ROOT}/.venv/bin/pytest`;
-  if (executable(commandFileOnHost(projectRoot, sidecarVenvPytest))) {
-    return sidecarVenvPytest;
+  const sidecarVenvBin = `${BEHAVIORAL_ROOT}/.venv/bin`;
+  if (executable(commandFileOnHost(projectRoot, `${sidecarVenvBin}/pytest`))) {
+    return `${sidecarVenvBin}/python`;
   }
   throw missingRunner('pytest-bdd');
 }
