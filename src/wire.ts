@@ -171,6 +171,38 @@ export interface FeatureRecorded {
   message: string;
 }
 
+// One row of GET /repos/:id/features (spec 52-2): enough for the host to find
+// the feature by the person's words without asking for an id.
+export interface FeatureListItem {
+  feature_id: number;
+  title: string;
+  status: string;
+  created_at: string;
+}
+
+// What the talk starts from (spec 52-2, AC 1.3): the feature, each affected
+// promise with today's state in the server's words — `headline` and `status`
+// from the lamp envelope, "not guarded yet" without one, or `gone` with "No
+// longer on the map" — and the earlier knowledge text if the talk was held
+// before.
+export interface KnowledgePacket {
+  feature: { feature_id: number; title: string; intent: string; status: string; created_at: string };
+  affected: { id: string; title: string; why: string; headline: string; status: string | null; gone: boolean }[];
+  knowledge: string | null;
+}
+
+// A 422 of PUT …/knowledge: one problem per violation of the file's shape,
+// each with both sides, so the host fixes the file in one pass.
+export interface KnowledgeProblem {
+  expected: string;
+  got: string;
+}
+
+export interface KnowledgeRecorded {
+  url: string;
+  message: string;
+}
+
 // Raised when the server cannot be reached or answers with an error status.
 // Verbs surface its message and exit non-zero; they never fabricate a result.
 //
@@ -379,6 +411,35 @@ export class Wire {
     return (await res.json()) as FeatureRecorded;
   }
 
+  // GET /repos/:id/features — every feature of the project, newest first, and
+  // the server's words for an empty list (spec 52-2, AC 1.2).
+  async listFeatures(): Promise<{ features: FeatureListItem[]; empty_text: string }> {
+    const res = await this.send('GET', this.repoPath('features'));
+    await this.ensureOk(res, `GET ${this.repoPath('features')}`);
+    return (await res.json()) as { features: FeatureListItem[]; empty_text: string };
+  }
+
+  // GET /repos/:id/features/:feature_id/knowledge_packet (spec 52-2, AC 1.3).
+  async getKnowledgePacket(featureId: number | string): Promise<KnowledgePacket> {
+    const path = this.repoPath(`features/${encodeURIComponent(String(featureId))}/knowledge_packet`);
+    const res = await this.send('GET', path);
+    await this.ensureOk(res, `GET ${path}`);
+    return (await res.json()) as KnowledgePacket;
+  }
+
+  // PUT /repos/:id/features/:feature_id/knowledge (spec 52-2, AC 1.4). The
+  // server checks the file's shape; a 422 carries `problems`, and they are
+  // relaid whole, one line per problem with both sides — the host fixes the
+  // file from those lines, and cutting them at 500 characters would hide the
+  // ones at the end.
+  async putKnowledge(featureId: number | string, knowledge: string): Promise<KnowledgeRecorded> {
+    const path = this.repoPath(`features/${encodeURIComponent(String(featureId))}/knowledge`);
+    const res = await this.send('PUT', path, { knowledge });
+    if (res.status === 422) throw new WireError(await knowledgeRefusal(res));
+    await this.ensureOk(res, `PUT ${path}`);
+    return (await res.json()) as KnowledgeRecorded;
+  }
+
   // GET /recipes/:name — fetch a recipe at call time. Recipes live on Rails so
   // the connector and Skill carry no recipe text (spec 15, acceptance criteria).
   async getRecipe(name: string): Promise<Recipe> {
@@ -520,6 +581,26 @@ async function unknownCapabilitiesRefusal(res: Response): Promise<string> {
     `POST features failed: 422 — ${String(body.error ?? 'These capabilities are not on the current map.')}\n` +
     `unknown_ids: ${JSON.stringify(body.unknown_ids)}\n` +
     `known_ids: ${JSON.stringify(body.known_ids)}`
+  );
+}
+
+async function knowledgeRefusal(res: Response): Promise<string> {
+  let body: { error?: unknown; problems?: unknown } = {};
+  let text = '';
+  try {
+    text = await res.text();
+    body = JSON.parse(text);
+  } catch {
+    // not JSON — the text itself is the detail
+  }
+  if (!Array.isArray(body.problems)) {
+    return `PUT knowledge failed: 422 — ${text.slice(0, 500)}`;
+  }
+  const lines = (body.problems as KnowledgeProblem[]).map(
+    (problem) => `expected: ${String(problem.expected)}\n     got: ${String(problem.got)}`,
+  );
+  return [`PUT knowledge failed: 422 — ${String(body.error ?? 'knowledge.md does not have the expected shape.')}`, ...lines].join(
+    '\n',
   );
 }
 

@@ -24,6 +24,14 @@ test('--help exposes the one-time Codex agent installer', () => {
   assert.match(help(), /codex-install\s+Install the bounded Unitbob worker definitions for Codex/);
 });
 
+// Spec 52-2: the pair that talks a recorded feature through.
+test('--help exposes knowledge-prepare and put-knowledge (spec 52-2)', () => {
+  const text = help();
+
+  assert.match(text, /knowledge-prepare\s+Internal: without an id, list the features that can be talked through/);
+  assert.match(text, /put-knowledge\s+Internal: send the feature's knowledge\.md/);
+});
+
 // Spec 52-1: the pair that records an intent before the change is made.
 test('--help exposes feature-prepare and put-feature', () => {
   const text = help();

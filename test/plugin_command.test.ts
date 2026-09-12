@@ -26,7 +26,7 @@ const connectorVersion = JSON.parse(readFileSync(packageJsonPath, 'utf8')).versi
 const unitbob = `npx -y --loglevel=error unitbob@${connectorVersion}`;
 const unitbobPattern = unitbob.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const WORKFLOWS = ['map', 'suite', 'check', 'show', 'fix', 'feature'];
+const WORKFLOWS = ['map', 'suite', 'check', 'show', 'fix', 'feature', 'knowledge'];
 
 test('the skill can run every workflow without a slash command', () => {
   for (const name of WORKFLOWS) {
@@ -47,7 +47,7 @@ test('no workflow sends anyone to a slash command', () => {
   for (const name of WORKFLOWS) {
     assert.doesNotMatch(
       workflow(name),
-      /\/unitbob[: ](map|suite|check|show|fix|feature)\b/,
+      /\/unitbob[: ](map|suite|check|show|fix|feature|knowledge)\b/,
       `${name}.md must point at a sibling workflow or ask in plain words`,
     );
   }
@@ -213,4 +213,23 @@ test('the feature workflow records the intent without asking or implementing', (
   assert.match(text, /not.*start implementing/i);
   assert.match(text, /unknown_ids/);
   assert.match(skill, /Start a feature safely/);
+  // Spec 52-2: it does not end on the link — it offers the talk, once.
+  assert.match(text, /talk\s+it\s+through\s+now/i);
+  assert.match(text, /workflows\/knowledge\.md/);
+});
+
+// Spec 52-2. The knowledge workflow is a conversation with one upload at the
+// end, and the upload waits for the user's word.
+test('the knowledge workflow finds the feature, asks by the recipe, and uploads only on yes', () => {
+  const text = workflow('knowledge');
+
+  assert.match(text, new RegExp(`${unitbobPattern} knowledge-prepare\\b`));
+  assert.match(text, new RegExp(`${unitbobPattern} knowledge-prepare <id>`));
+  assert.match(text, new RegExp(`${unitbobPattern} put-knowledge <id>`));
+  assert.match(text, /five questions a round and three\s+rounds/i);
+  assert.match(text, /Is this what done means\?/);
+  assert.match(text, /Only on an explicit "yes"/);
+  assert.match(text, /not.*start implementing/i);
+  assert.match(text, /expected:.*got:/);
+  assert.match(skill, /Talk a feature through/);
 });

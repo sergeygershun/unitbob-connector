@@ -28,6 +28,8 @@ import { classifyPublication, putSuiteBuild } from './verbs/putSuiteBuild.ts';
 import { validateBuild } from './verbs/validateBuild.ts';
 import { fixPrepare } from './verbs/fixPrepare.ts';
 import { featurePrepare } from './verbs/featurePrepare.ts';
+import { knowledgePrepare } from './verbs/knowledgePrepare.ts';
+import { putKnowledge } from './verbs/putKnowledge.ts';
 import { putFeature } from './verbs/putFeature.ts';
 import { contractPrompt } from './verbs/contractPrompt.ts';
 import { suiteReviewPrepare } from './verbs/suiteReviewPrepare.ts';
@@ -75,6 +77,9 @@ Verbs:
   feature-prepare      Internal: fetch the recipe and the product capabilities, write the host
                        feature-start request — for naming what a change may touch, before it is made.
   put-feature          Internal: record the host's feature answer and print the link to its page.
+  knowledge-prepare    Internal: without an id, list the features that can be talked through; with
+                       one, fetch the recipe and the feature's packet and write the host request.
+  put-knowledge        Internal: send the feature's knowledge.md and print the link to its page.
   check                Run every Unitbob contract suite locally and report.
   run                  Alias for check.
 
@@ -159,6 +164,12 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
         return 0;
       case 'put-feature':
         await putFeature(await linked(), args);
+        return 0;
+      case 'knowledge-prepare':
+        await knowledgePrepare(await linked(), args);
+        return 0;
+      case 'put-knowledge':
+        await putKnowledge(await linked(), args);
         return 0;
       case 'run-local':
         // The one verb whose non-zero exit is not an error: a branch that failed

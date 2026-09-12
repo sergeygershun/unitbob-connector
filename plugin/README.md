@@ -113,8 +113,9 @@ Just talk to Claude Code.
 | Open the map | "open the map" |
 | Fix a red guard | "fix guard \<id\>" |
 | See what a change may touch, before making it | "unitbob, I want to add …" |
+| Talk a feature through before it is built | "let's talk through …" |
 
-(There are `/unitbob:...` commands for the same six things, but only inside a
+(There are `/unitbob:...` commands for the same seven things, but only inside a
 Claude Code terminal — see Step 2. The words above work in every window.)
 
 When the map shows a **red lamp**, copy the guard id shown on it and ask Claude to

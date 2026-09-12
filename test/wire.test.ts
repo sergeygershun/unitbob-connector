@@ -250,6 +250,80 @@ test('postFeature keeps the ordinary refusal for a 422 without the two lists', a
   );
 });
 
+// Spec 52-2: the three calls of the talk.
+test('listFeatures GETs /repos/:id/features and returns the rows and the empty-list words', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        features: [{ feature_id: 12, title: 'Refunds', status: 'intent', created_at: '2026-09-12T10:00:00Z' }],
+        empty_text: 'No feature to talk through yet — say what you want to build first.',
+      }),
+    async (config, hits) => {
+      const list = await new Wire(config).listFeatures();
+      assert.equal(list.features[0].title, 'Refunds');
+      assert.match(list.empty_text, /No feature to talk through yet/);
+      assert.equal(hits[0].method, 'GET');
+      assert.equal(hits[0].url, '/repos/3/features');
+    },
+  );
+});
+
+test('getKnowledgePacket GETs /repos/:id/features/:id/knowledge_packet', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        feature: { feature_id: 12, title: 'Refunds', intent: 'refunds', status: 'intent', created_at: 'x' },
+        affected: [],
+        knowledge: null,
+      }),
+    async (config, hits) => {
+      const packet = await new Wire(config).getKnowledgePacket(12);
+      assert.equal(packet.feature.feature_id, 12);
+      assert.equal(packet.knowledge, null);
+      assert.equal(hits[0].url, '/repos/3/features/12/knowledge_packet');
+    },
+  );
+});
+
+test('putKnowledge PUTs the text and returns the page and the sentence', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { url: '/repos/3/features/12', message: 'Feature talked through: "Refunds". 2 scenarios; every promise stays.' }),
+    async (config, hits) => {
+      const recorded = await new Wire(config).putKnowledge(12, '# Refunds\n');
+      assert.equal(recorded.url, '/repos/3/features/12');
+      assert.equal(hits[0].method, 'PUT');
+      assert.equal(hits[0].url, '/repos/3/features/12/knowledge');
+      assert.deepEqual(JSON.parse(hits[0].body), { knowledge: '# Refunds\n' });
+    },
+  );
+});
+
+// Every problem travels whole, both sides on their own lines: the host fixes
+// the file from them, and a long list must not be cut at the end.
+test('putKnowledge relays a 422 with one line per problem, both sides', async () => {
+  const problems = Array.from({ length: 12 }, (_, i) => ({
+    expected: `a decision on \`capability_${i}\` (stays, changes: <what>, or unrelated)`,
+    got: 'no line for it',
+  }));
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'knowledge.md does not have the expected shape.', problems }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putKnowledge(12, '# x'),
+        (err: unknown) => {
+          const message = (err as Error).message;
+          return (
+            err instanceof WireError &&
+            /422 — knowledge\.md does not have the expected shape\./.test(message) &&
+            /expected: a decision on `capability_11`/.test(message) &&
+            /got: no line for it/.test(message)
+          );
+        },
+      );
+    },
+  );
+});
+
 test('getRecipe hits GET /recipes/:name', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { name: 'decompose', version: 'v1', text: '# recipe' }),
