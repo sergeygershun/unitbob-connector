@@ -210,21 +210,41 @@ test('postFeature POSTs the feature and returns its id, page and sentence (spec 
   );
 });
 
-// Both sides of the join travel in the error text: the host reads what it
-// sent and what the map knows, and corrects its file.
-test('postFeature surfaces a 422 with both id lists as a WireError', async () => {
+// Both sides of the join travel in the error text, whole: the host reads what
+// it sent and what the map knows, and corrects its file. A map of forty
+// capabilities is longer than the 500 characters every other refusal keeps.
+test('postFeature surfaces a 422 with both id lists complete, however long the map', async () => {
+  const known = Array.from({ length: 40 }, (_, i) => `capability_number_${i}_with_a_long_name`);
   await withServer(
     (_hit, res) =>
       json(res, 422, {
         error: 'These capabilities are not on the current map.',
         unknown_ids: ['comments'],
-        known_ids: ['posts', 'billing'],
+        known_ids: known,
       }),
     async (config) => {
       await assert.rejects(
         () => new Wire(config).postFeature({ title: 'x', intent: 'y', affected: [{ id: 'comments', why: '' }] }),
-        (err: unknown) =>
-          err instanceof WireError && /unknown_ids/.test((err as Error).message) && /known_ids/.test((err as Error).message),
+        (err: unknown) => {
+          assert.ok(err instanceof WireError);
+          const message = (err as Error).message;
+          assert.match(message, /not on the current map/);
+          assert.match(message, /unknown_ids: \["comments"\]/);
+          assert.ok(message.includes(`known_ids: ${JSON.stringify(known)}`));
+          return true;
+        },
+      );
+    },
+  );
+});
+
+test('postFeature keeps the ordinary refusal for a 422 without the two lists', async () => {
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'The feature could not be recorded.', details: ["Title can't be blank"] }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).postFeature({ title: '', intent: 'y', affected: [] }),
+        (err: unknown) => err instanceof WireError && /422/.test((err as Error).message) && /Title can't be blank/.test((err as Error).message),
       );
     },
   );

@@ -374,6 +374,7 @@ export class Wire {
   // the map knows and corrects its file.
   async postFeature(payload: FeatureUpload): Promise<FeatureRecorded> {
     const res = await this.send('POST', this.repoPath('features'), payload);
+    if (res.status === 422) throw new WireError(await unknownCapabilitiesRefusal(res));
     await this.ensureOk(res, `POST ${this.repoPath('features')}`);
     return (await res.json()) as FeatureRecorded;
   }
@@ -494,6 +495,32 @@ export class Wire {
     }
     throw new WireError(statusRefusal(what, res, detail, this.config.server));
   }
+}
+
+// The 422 of POST /features carries two lists, and the host corrects its file by
+// reading both (spec 52-1, AC 1.3). `ensureOk` keeps 500 characters of a body,
+// which is a line of context for every other refusal and, on a map of twenty
+// capabilities or more, cuts `known_ids` in half — the list the correction is
+// made from, on exactly the projects that have the most ids to get wrong. So
+// the two lists are relaid whole, one per line; any other 422 body keeps the
+// ordinary shape.
+async function unknownCapabilitiesRefusal(res: Response): Promise<string> {
+  let body: { error?: unknown; unknown_ids?: unknown; known_ids?: unknown; details?: unknown } = {};
+  let text = '';
+  try {
+    text = await res.text();
+    body = JSON.parse(text);
+  } catch {
+    // not JSON — the text itself is the detail
+  }
+  if (!Array.isArray(body.unknown_ids) || !Array.isArray(body.known_ids)) {
+    return `POST features failed: 422 — ${text.slice(0, 500)}`;
+  }
+  return (
+    `POST features failed: 422 — ${String(body.error ?? 'These capabilities are not on the current map.')}\n` +
+    `unknown_ids: ${JSON.stringify(body.unknown_ids)}\n` +
+    `known_ids: ${JSON.stringify(body.known_ids)}`
+  );
 }
 
 // The two statuses that prove somebody else answered.
