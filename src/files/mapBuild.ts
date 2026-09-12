@@ -20,6 +20,17 @@ export interface MapBuildRequest {
     extract_surfaces: Recipe;
     decompose_surfaces: Recipe;
   };
+  // Spec 52-4, AC 5.1: the capabilities finished features added to the map —
+  // they have guards and a history, and the decompose_surfaces recipe is asked
+  // to keep their ids where it finds the code that does exactly that. Empty
+  // when there are none, or when the server is older than the field.
+  existing_capabilities?: ExistingCapability[];
+}
+
+export interface ExistingCapability {
+  id: string;
+  title: string;
+  description: string;
 }
 
 export type MapBuildRecipes = MapBuildRequest['recipes'];
@@ -63,6 +74,7 @@ export function writeMapBuildRequest(
   projectRoot: string,
   recipes: MapBuildRecipes,
   routeInventoryPath?: string,
+  existingCapabilities: ExistingCapability[] = [],
 ): MapBuildRequest {
   const packet: MapBuildRequest = {
     project_root: projectRoot,
@@ -72,6 +84,7 @@ export function writeMapBuildRequest(
     surface_output_path: surfaceOutputPath(projectRoot),
     ...(routeInventoryPath ? { route_inventory_path: routeInventoryPath } : {}),
     recipes,
+    existing_capabilities: existingCapabilities,
   };
 
   const path = requestPath(projectRoot);

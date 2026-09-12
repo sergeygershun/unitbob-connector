@@ -158,6 +158,24 @@ test('tests-prepare materializes the union of the main suite and every feature�
   assert.ok(existsSync(join(projectRoot, '.unitbob/behavioral/step_definitions/00_unitbob_world.rb')));
 });
 
+// Spec 52-4, AC 1.8: the same stop as `check`, because the same union is
+// written here — a second feature's rewired checks would be wiped by
+// preparing this one.
+test('tests-prepare stops on a feature file changed on disk, before the union touches anything', async () => {
+  const projectRoot = tmpProject();
+  writeKnowledge(projectRoot);
+  const other = { path: '.unitbob/behavioral/features/feature_15.feature', content: 'Feature: 15\n', support_files: [] };
+  const withOther = index({ feature_suites: [{ feature_id: 15, title: 'Comments', feature_tag: 'unitbob_feature_15', suite_digest: 'f', suite_file: other, runner_manifest: { runner: 'cucumber' } }] });
+  await testsPrepare(config(projectRoot), ['12'], deps({ getSuiteIndex: async () => withOther }));
+  writeFileSync(join(projectRoot, other.path), 'Feature: 15, rewired\n');
+
+  await assert.rejects(
+    () => testsPrepare(config(projectRoot), ['12'], deps({ getSuiteIndex: async () => withOther })),
+    /The checks for “Comments” changed on disk since they were saved\. Run `npx unitbob put-tests 15` to save them, then try again\./,
+  );
+  assert.equal(readFileSync(join(projectRoot, other.path), 'utf8'), 'Feature: 15, rewired\n');
+});
+
 test('tests-prepare provisions the runner and stops on a fixable blocker with the checklist', async () => {
   const projectRoot = tmpProject();
   writeKnowledge(projectRoot);

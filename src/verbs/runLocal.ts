@@ -54,8 +54,10 @@ const OUTPUT_TAIL_CHARS = 4000;
 // `--feature <id>` (spec 52-3, AC 3.3) runs one feature's checks the same way:
 // only the scenarios carrying its tag, with the runner its request names, on
 // the files as they lie. Without the flag the behavioral branch leaves every
-// red feature's tag out, as the build request recorded them (3.2) — this verb
-// asks no server either way.
+// red feature's tag out, as the build request recorded them (3.2), and then
+// runs each of those tags on its own after the main run (spec 52-4, AC 1.1) —
+// the order `check` runs them in, read out here the same way. This verb asks
+// no server either way.
 export interface RunLocalDeps {
   runStructural: (projectRoot: string, runner: string, suitePaths: string[]) => Promise<RunnerResult>;
   runBehavioral: (projectRoot: string, runner: string, mainPath: string, filter?: TagFilter) => Promise<RunnerResult>;
@@ -115,9 +117,29 @@ export async function runLocal(
     // build, not a repair loop going nowhere.
     if (!ran) continue;
     if (compareFailures(config, d, suiteKind, ran, previous[suiteKind])) stuck = true;
+
+    // The features' checks, each by its tag, on the same files. No stall
+    // comparison for them: their loop is the feature's own, in `--feature`.
+    if (suiteKind === 'behavioral') {
+      for (const tag of request.exclude_feature_tags) await runTag(config, d, ran.runner, ran.mainPath, tag);
+    }
   }
 
   return stuck ? 1 : 0;
+}
+
+async function runTag(config: Config, d: RunLocalDeps, runner: string, mainPath: string, tag: string): Promise<void> {
+  d.stdout.write(`\n── ${tag} ──\n`);
+  let result: RunnerResult;
+  try {
+    result = await d.runBehavioral(config.projectRoot, runner, mainPath, { only: tag });
+  } catch (err) {
+    const advice = placeAdvice(config.projectRoot);
+    d.stdout.write(`The runner could not start: ${(err as Error).message}\n${advice ? `\n${advice}\n` : ''}`);
+    return;
+  }
+  d.stdout.write(report(result));
+  d.stdout.write(failureLines(runner, result));
 }
 
 // One feature's checks, by their tag (spec 52-3, AC 3.3). No stall comparison:
@@ -206,9 +228,11 @@ function selectBranches(request: SuiteBuildRequest, args: string[]): string[] {
 }
 
 // What a run that actually happened hands back: the strategy that ran it, which
-// is what says how to read its report, and the report itself.
+// is what says how to read its report, the report itself, and the main file it
+// ran — what the feature tags run on after it.
 interface BranchRun {
   runner: string;
+  mainPath: string;
   result: RunnerResult;
 }
 
@@ -271,7 +295,7 @@ async function runOneBranch(
 
   d.stdout.write(report(result));
   d.stdout.write(failureLines(runner, result));
-  return { runner, result };
+  return { runner, mainPath: suitePaths[0], result };
 }
 
 // How many lines of one failure's message are worth printing here. Enough for an

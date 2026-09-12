@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { outputPath, reviewRequestPath, suiteCandidateDigest, writeSuiteBuildRequest } from '../src/files/suiteBuild.ts';
 import { requestDigest, workerPlanDigest, workerPlanPath } from '../src/files/workerPlan.ts';
-import { suiteReviewPrepare } from '../src/verbs/suiteReviewPrepare.ts';
+import { candidateUnion, suiteReviewPrepare } from '../src/verbs/suiteReviewPrepare.ts';
+import { FeatureFilesChangedError } from '../src/files/behavioral.ts';
+import type { FeatureSuiteItem } from '../src/wire.ts';
 import type { Config } from '../src/config.ts';
 
 test('suite-review-prepare binds a separate review request to the behavioral candidate', async () => {
@@ -29,6 +31,7 @@ test('suite-review-prepare binds a separate review request to the behavioral can
   const config: Config = { server: 'https://host', repoId: 3, projectRoot };
 
   await suiteReviewPrepare(config, [], {
+    getSuiteIndex: async () => ({ suites: [], feature_suites: [] }),
     runCandidate: async () => ({ revision: 'defect-sha', run_result: 'raw machine report' }),
     stdout: { write: () => true },
   });
@@ -71,6 +74,7 @@ test('a planned candidate gives the reviewer its original assignment and exact b
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [behavioral] }));
 
   await suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
+    getSuiteIndex: async () => ({ suites: [], feature_suites: [] }),
     runCandidate: async () => ({ revision: 'sha', run_result: 'raw' }),
     stdout: { write: () => true },
   });
@@ -99,7 +103,8 @@ test('a local bounded plan cannot silently fall back to the legacy review contra
 
   await assert.rejects(
     suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
-      runCandidate: async () => ({ revision: 'sha', run_result: 'raw' }),
+      getSuiteIndex: async () => ({ suites: [], feature_suites: [] }),
+    runCandidate: async () => ({ revision: 'sha', run_result: 'raw' }),
       stdout: { write: () => true },
     }),
     /worker_plan_digest is required/,
@@ -129,7 +134,8 @@ test('suite-review-prepare records a separate machine run for a supplied fixed r
   const revisions: Array<string | undefined> = [];
 
   await suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
-    runCandidate: async (_root, _output, revision) => {
+    getSuiteIndex: async () => ({ suites: [], feature_suites: [] }),
+    runCandidate: async (_root, _output, _features, revision) => {
       revisions.push(revision);
       return { revision: revision ?? 'defect-sha', run_result: revision ? 'fixed raw report' : 'defect raw report' };
     },
@@ -174,6 +180,7 @@ test('suite-review-prepare warns about the forgotten files before it runs the ca
   const said: string[] = [];
 
   await suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
+    getSuiteIndex: async () => ({ suites: [], feature_suites: [] }),
     runCandidate: async () => {
       said.push('<the candidate ran>');
       return { revision: 'sha', run_result: 'raw' };
@@ -219,6 +226,7 @@ function reviewProject(): string {
 async function prepareReview(projectRoot: string): Promise<string> {
   let output = '';
   await suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
+    getSuiteIndex: async () => ({ suites: [], feature_suites: [] }),
     runCandidate: async () => ({ revision: 'sha', run_result: 'raw report' }),
     stdout: { write: (chunk) => { output += chunk; return true; } },
   });
@@ -237,4 +245,66 @@ test('preparing a review says nothing about rounds or ceilings, however often it
   assert.equal(existsSync(reviewRequestPath(projectRoot)), true);
   const request = JSON.parse(readFileSync(reviewRequestPath(projectRoot), 'utf8'));
   assert.match(request.output_path, /behavioral_review\.json$/);
+});
+
+// Spec 52-4, AC 1.8. Reviewing the candidate materialises it, and until now
+// that wiped a feature's checks from the disk with it — including steps the
+// host had rewired and not saved. The candidate now goes on disk as the same
+// union `check` writes, so the same stop applies before anything is touched,
+// and the candidate's run leaves the feature tags out as everywhere else.
+function featureSuite(id: number): FeatureSuiteItem {
+  return {
+    feature_id: id, title: `Feature ${id}`, feature_tag: `unitbob_feature_${id}`, suite_digest: `feat-${id}`,
+    suite_file: {
+      path: `.unitbob/behavioral/features/feature_${id}.feature`, content: `Feature: ${id}\n`,
+      support_files: [{ path: `.unitbob/behavioral/step_definitions/feature_${id}_steps.rb`, content: `# ${id}\n` }],
+    },
+    runner_manifest: { runner: 'cucumber' },
+  };
+}
+
+test('suite-review-prepare stops on a feature file changed on disk before running or touching anything', async () => {
+  const projectRoot = reviewProject();
+  const rewired = join(projectRoot, '.unitbob', 'behavioral', 'step_definitions', 'feature_12_steps.rb');
+  mkdirSync(join(projectRoot, '.unitbob', 'behavioral', 'step_definitions'), { recursive: true });
+  writeFileSync(rewired, '# 12, rewired\n');
+  let ran = false;
+
+  await assert.rejects(
+    () => suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
+      getSuiteIndex: async () => ({ suites: [], feature_suites: [featureSuite(12)] }),
+      runCandidate: async () => { ran = true; return { revision: 'sha', run_result: 'raw' }; },
+      stdout: { write: () => true },
+    }),
+    (err: unknown) => err instanceof FeatureFilesChangedError && /Feature 12/.test(err.message),
+  );
+  assert.equal(ran, false);
+  assert.equal(readFileSync(rewired, 'utf8'), '# 12, rewired\n');
+  assert.equal(existsSync(reviewRequestPath(projectRoot)), false);
+});
+
+test('the candidate goes on disk as the union with every feature’s checks, and runs with their tags excluded', () => {
+  const projectRoot = reviewProject();
+  const behavioral = JSON.parse(readFileSync(outputPath(projectRoot), 'utf8')).branches[0];
+
+  const union = candidateUnion(projectRoot, behavioral, [featureSuite(12), featureSuite(15)]);
+
+  assert.ok(union.mainPath.endsWith('surface_contracts.feature'));
+  assert.deepEqual(union.excludeTags, ['unitbob_feature_12', 'unitbob_feature_15']);
+  assert.ok(existsSync(join(projectRoot, '.unitbob', 'behavioral', 'features', 'feature_15.feature')));
+  assert.ok(existsSync(join(projectRoot, '.unitbob', 'behavioral', 'step_definitions', 'steps.rb')));
+});
+
+test('the candidate’s forgotten-file warning does not name the feature files the union keeps', async () => {
+  const projectRoot = reviewProject();
+  candidateUnion(projectRoot, JSON.parse(readFileSync(outputPath(projectRoot), 'utf8')).branches[0], [featureSuite(12)]);
+  const said: string[] = [];
+
+  await suiteReviewPrepare({ server: 'https://host', repoId: 3, projectRoot }, [], {
+    getSuiteIndex: async () => ({ suites: [], feature_suites: [featureSuite(12)] }),
+    runCandidate: async () => ({ revision: 'sha', run_result: 'raw' }),
+    stdout: { write: (chunk: string) => said.push(chunk) },
+  });
+
+  assert.equal(said.some((line) => line.includes('will delete them')), false, JSON.stringify(said));
 });

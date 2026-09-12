@@ -184,3 +184,70 @@ export function readTestsOutput(projectRoot: string, featureId: number | string)
     test_metadata: answer.test_metadata as Record<string, unknown>,
   };
 }
+
+// --- the review of the checks (spec 52-4, AC 1.11) ---------------------------
+
+export function testsReviewRequestPath(projectRoot: string, featureId: number | string): string {
+  return join(featureDir(projectRoot, featureId), 'tests-review-request.json');
+}
+
+export function testsReviewOutputPath(projectRoot: string, featureId: number | string): string {
+  return join(featureDir(projectRoot, featureId), 'tests-review-output.json');
+}
+
+// What the independent reviewer reads: the same keys as the main suite's
+// `review-request.json` (`suiteBuild.ts`), so the same role reads it the same
+// way — the candidate's digest, the files as they will be uploaded, the one
+// capability the feature is — plus two the main suite has no equivalent of:
+// where `knowledge.md` is, because the promise each scenario protects is
+// written there rather than in a capability description, and the scenarios
+// themselves as the server sealed them.
+export interface TestsReviewRequest {
+  candidate_digest: string;
+  suite_file: SuiteArtifact;
+  capabilities: unknown;
+  knowledge_path: string;
+  scenarios: TestsPacket['scenarios'];
+  output_path: string;
+}
+
+export function writeTestsReviewRequest(
+  projectRoot: string,
+  featureId: number | string,
+  request: TestsReviewRequest,
+): TestsReviewRequest {
+  const path = testsReviewRequestPath(projectRoot, featureId);
+  if (!existsSync(dirname(path))) mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(request, null, 2)}\n`);
+  return request;
+}
+
+// The reviewer's answer, in the shape the main suite's review takes
+// (`readBehavioralReview` in `suiteBuild.ts`): the candidate digest at the
+// top level and the `bdd_quality_review` beside it. Whether the digest is the
+// current candidate's is `put-tests`' question, not this reader's — a stale
+// review is ignored out loud there, not refused here.
+export interface TestsReviewOutput {
+  candidate_digest: string;
+  bdd_quality_review: Record<string, unknown>;
+}
+
+export function readTestsReviewOutput(projectRoot: string, featureId: number | string): TestsReviewOutput | null {
+  const path = testsReviewOutputPath(projectRoot, featureId);
+  if (!existsSync(path)) return null;
+
+  let review: unknown;
+  try {
+    review = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    throw new Error(`${path} is not valid JSON (${(err as Error).message})`);
+  }
+  const record = review as Record<string, unknown> | null;
+  if (!record || typeof record !== 'object' || typeof record.candidate_digest !== 'string') {
+    throw new Error(`${path} must carry candidate_digest at the top level, copied from tests-review-request.json.`);
+  }
+  if (!record.bdd_quality_review || typeof record.bdd_quality_review !== 'object') {
+    throw new Error(`${path} must contain a bdd_quality_review object.`);
+  }
+  return { candidate_digest: record.candidate_digest, bdd_quality_review: record.bdd_quality_review as Record<string, unknown> };
+}

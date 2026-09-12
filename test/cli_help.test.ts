@@ -38,8 +38,17 @@ test('--help exposes tests-prepare, put-tests and run-local --feature (spec 52-3
   const text = help();
 
   assert.match(text, /tests-prepare <id>\s+Internal: fetch the feature's assignment and the recipe/);
-  assert.match(text, /put-tests <id>\s+Internal: run the feature's checks, send them with that run as the proof/);
+  assert.match(text, /put-tests <id>\s+Internal: run the feature's checks and save the harness with that run/);
   assert.match(text, /run-local \[branch\] \| --feature <id>/);
+});
+
+// Spec 52-4: the reviewer's request for a feature's checks, and put-tests as
+// the way the review is published.
+test('--help exposes tests-review-prepare and put-tests as the publisher of the review (spec 52-4)', () => {
+  const text = help();
+
+  assert.match(text, /tests-review-prepare <id>\s+Internal: write the independent reviewer's request for the feature's checks/);
+  assert.match(text, /with a review file beside the answer — publishes the review/);
 });
 
 // Spec 52-1: the pair that records an intent before the change is made.

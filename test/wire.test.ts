@@ -268,6 +268,29 @@ test('listFeatures GETs /repos/:id/features and returns the rows and the empty-l
   );
 });
 
+// Spec 52-4, AC 5.1: a row carries the feature's capability id and intent, so
+// `map-prepare` can tell the map recipe which capabilities already exist. A
+// server older than the fields sends the row without them, and the row still
+// reads.
+test('listFeatures relays capability_id and intent, and reads a row without them', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        features: [
+          { feature_id: 12, title: 'Refunds', status: 'done', created_at: 'x', capability_id: 'feature_12', intent: 'refunds for paid orders' },
+          { feature_id: 11, title: 'Comments', status: 'intent', created_at: 'x' },
+        ],
+        empty_text: '',
+      }),
+    async (config) => {
+      const { features } = await new Wire(config).listFeatures();
+      assert.equal(features[0].capability_id, 'feature_12');
+      assert.equal(features[0].intent, 'refunds for paid orders');
+      assert.equal(features[1].capability_id, undefined);
+    },
+  );
+});
+
 test('getKnowledgePacket GETs /repos/:id/features/:id/knowledge_packet', async () => {
   await withServer(
     (_hit, res) =>
@@ -449,7 +472,9 @@ test('getSuiteIndex returns the two peer suite items', async () => {
 // Spec 52-3: the same answer carries the checks of every red feature; a server
 // older than the list sends none, which reads as an empty one.
 test('getSuiteIndex returns the peers and the feature suites, empty from an older server', async () => {
-  const item = { feature_id: 12, feature_tag: 'unitbob_feature_12', suite_digest: 'd', suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' } };
+  // `title` arrived with spec 52-4, for the connector's own sentence when the
+  // checks on disk moved; a server from 52-3 sends the item without it.
+  const item = { feature_id: 12, title: 'Refunds', feature_tag: 'unitbob_feature_12', suite_digest: 'd', suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' } };
   await withServer(
     (_hit, res) => json(res, 200, { suites: [{ suite_kind: 'structural', status: 'ready' }, { suite_kind: 'behavioral', status: 'not_built' }], feature_suites: [item] }),
     async (config) => {
@@ -536,10 +561,20 @@ test('putFeatureSuite relays a sealed 422 with one line per problem, both sides,
 
 test('postRunsBatch POSTs the runs and returns results + one map_url', async () => {
   await withServer(
-    (_hit, res) => json(res, 200, { results: [{ suite_kind: 'behavioral', status: 'ok', summary: 'ok' }], map_url: 'http://host/repos/3/map' }),
+    (_hit, res) => json(res, 200, {
+      results: [
+        { suite_kind: 'behavioral', status: 'ok', summary: 'ok' },
+        // A feature's checks answer under their own item (spec 52-4, AC 1.1):
+        // the feature named, no lamps, the server's line to print as it is.
+        { suite_kind: 'behavioral', feature_id: 12, suite_digest: 'f', status: 'failed', summary: 'Refunds: 2 of 5 checks pass.', lamps: null },
+      ],
+      map_url: 'http://host/repos/3/map',
+    }),
     async (config, hits) => {
-      const { results, map_url } = await new Wire(config).postRunsBatch([{ suite_digest: 'd', run_result: '{}' }]);
+      const { results, map_url } = await new Wire(config).postRunsBatch([{ suite_digest: 'd', run_result: '{}' }, { suite_digest: 'f', run_result: '{}' }]);
       assert.equal(results[0].suite_kind, 'behavioral');
+      assert.equal(results[1].feature_id, 12);
+      assert.equal(results[1].summary, 'Refunds: 2 of 5 checks pass.');
       assert.equal(map_url, 'http://host/repos/3/map');
       assert.equal(hits[0].method, 'POST');
       assert.equal(hits[0].url, '/repos/3/runs/batch');

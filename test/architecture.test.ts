@@ -51,6 +51,12 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   [join('files', 'features.ts')]: [/manifest/i],
   [join('verbs', 'testsPrepare.ts')]: [/manifest/i],
   [join('verbs', 'putTests.ts')]: [/manifest/i],
+  // Spec 52-4: the review request for a feature's checks is bound by the same
+  // candidate digest the upload carries, computed over the same envelope; and
+  // `suite-review-prepare` puts the candidate on disk as the union `check`
+  // writes, which is typed by the envelope it relays.
+  [join('verbs', 'testsReviewPrepare.ts')]: [/manifest/i],
+  [join('verbs', 'suiteReviewPrepare.ts')]: [/manifest/i],
 
   // a2time, 2026-08-17. `validate-worker-checkpoints` gates the shape of a local
   // scratch file that passes from a worker to the coordinator, and that file now
@@ -110,6 +116,23 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
 // may look at a report to answer a question about *this machine's loop*, never
 // to answer one about the product. If a later change wants the digest's opinion
 // to leave the process, that is the moment this paragraph stops covering it.
+//
+// Spec 52-4, AC 1.10, is that later change, and this is its written line. The
+// same parse now has a third reading, `scenarioTally`, and `put-tests` reads
+// it to choose which field its upload carries: the run as `red_run` when every
+// scenario failed, the reviewer's file as `bdd_quality_review` when every one
+// passed, neither otherwise — and to refuse a review outright over a run that
+// is not all green. That is a count leaving the process as a choice of field,
+// not as a verdict, and it stays honest for one reason: the server re-parses
+// the very same report and refuses a field the report does not support — a
+// `red_run` over a scenario that passes, a review whose `candidate_digest` is
+// not this candidate's, both fields at once ("one proof at a time"). The
+// connector can at worst pick the wrong envelope and be told so; it cannot
+// make a red scenario count as green anywhere the map can see. The numbers
+// themselves reach one sentence on this machine and nothing else. No forbidden
+// word is involved, so no exemption is added below; the day `put-tests` starts
+// deciding *which* capability a scenario guards, or whether a run passes in
+// the map's eyes, the guard fires and this paragraph stops covering it.
 
 // `lamp` is the single domain noun the connector may name — but only in wire.ts,
 // where "lamps" is the URL of an opaque endpoint it fetches and prints verbatim.

@@ -160,6 +160,24 @@ genuinely holds a promise and holds less of it than its name suggests. Nothing
 mechanical can tell those two apart; what makes the difference is that your
 sentence is specific enough to act on.
 
+## A feature's checks
+
+The same review, for a smaller candidate: the checks of one feature being
+built (spec 52-4). Then the request is
+`.unitbob/features/<id>/tests-review-request.json`, with the same keys as the
+main suite's plus two — `knowledge_path` and `scenarios` — and the review goes
+to the `output_path` it names, in the same form: `candidate_digest` at the top
+level, `bdd_quality_review` with one entry per Scenario by `case_marker` and
+name. There is no `known_defect_probe` and no `selection_review` here; write
+neither.
+
+When the request carries `knowledge_path`, the promise each Scenario protects
+is written in that `knowledge.md`, in its `Scenarios` section — read it there,
+not from the capability description, which for a feature is one line. The
+Scenario text is the user's and sealed; the steps behind it are what you
+judge, exactly as above. Do not read the feature's implementation: whether the
+code is right is the run's question, and the run was made by the connector.
+
 ## What is not yours
 
 **Do not edit the suite.** Not the `.feature` files, not the step definitions,

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { mapPrepare } from '../src/verbs/mapPrepare.ts';
 import { readMapBuildRequest } from '../src/files/mapBuild.ts';
 import type { Config } from '../src/config.ts';
+import { WireError } from '../src/wire.ts';
 
 function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'unitbob-map-prepare-'));
@@ -235,4 +236,80 @@ test('map-prepare names what the ignore file kept out of the graph, and only the
   // A pattern that matched nothing is not news.
   assert.doesNotMatch(output, /nothing-here/);
   assert.doesNotMatch(output, /db\/migrate/);
+});
+
+// Spec 52-4, AC 5.1 and 7.3. A finished feature added a capability to the
+// map, with guards and a history; the next rebuild is told so, by id, title
+// and intent, so the recipe can keep the id where it finds that code. Only
+// finished features: an open one is not on the map yet. A server without the
+// fields, or a list that cannot be fetched, is an empty list — the recipe
+// skips the paragraph.
+function graphDeps(projectRoot: string) {
+  return {
+    ensureUnitbobIgnored: () => {},
+    requireGraphify: async () => {},
+    runGraphifyExtractKeyless: async () => {
+      mkdirSync(join(projectRoot, 'graphify-out'), { recursive: true });
+      writeFileSync(join(projectRoot, 'graphify-out', 'graph.json'), '{ "nodes": [] }\n');
+      return { stdout: '', stderr: '', code: 0 };
+    },
+    getRecipe: async (name: string) => ({ name, version: `${name}-v1`, text: `${name} recipe` }),
+    stdout: { write: () => true },
+  };
+}
+
+test('map-prepare tells the request which capabilities finished features already added', async () => {
+  const projectRoot = tmpProject();
+
+  await mapPrepare(config(projectRoot), [], {
+    ...graphDeps(projectRoot),
+    listFeatures: async () => ({
+      features: [
+        { feature_id: 14, title: 'Comments', status: 'red', created_at: 'x', capability_id: 'feature_14', intent: 'comments on posts' },
+        { feature_id: 12, title: 'Refunds', status: 'done', created_at: 'x', capability_id: 'feature_12', intent: 'refunds for paid orders' },
+        { feature_id: 9, title: 'Likes', status: 'done', created_at: 'x', capability_id: 'feature_9', intent: 'likes on posts' },
+      ],
+      empty_text: '',
+    }),
+  });
+
+  assert.deepEqual(readMapBuildRequest(projectRoot).existing_capabilities, [
+    { id: 'feature_12', title: 'Refunds', description: 'refunds for paid orders' },
+    { id: 'feature_9', title: 'Likes', description: 'likes on posts' },
+  ]);
+});
+
+test('map-prepare writes an empty list from an older server, quietly', async () => {
+  const errors: string[] = [];
+  const older = tmpProject();
+  await mapPrepare(config(older), [], {
+    ...graphDeps(older),
+    listFeatures: async () => ({ features: [{ feature_id: 12, title: 'Refunds', status: 'done', created_at: 'x' }], empty_text: '' }),
+    stderr: { write: (chunk: string) => { errors.push(chunk); return true; } },
+  });
+  assert.deepEqual(readMapBuildRequest(older).existing_capabilities, []);
+
+  // A server without the route at all answers 404 — the same silence.
+  const without = tmpProject();
+  await mapPrepare(config(without), [], {
+    ...graphDeps(without),
+    listFeatures: async () => { throw new WireError('This project is linked to a repository the server does not have…', { status: 404 }); },
+    stderr: { write: (chunk: string) => { errors.push(chunk); return true; } },
+  });
+  assert.deepEqual(readMapBuildRequest(without).existing_capabilities, []);
+  assert.deepEqual(errors, []);
+});
+
+test('map-prepare says on stderr when the list could not be fetched, and builds the map without it', async () => {
+  const errors: string[] = [];
+  const failing = tmpProject();
+
+  await mapPrepare(config(failing), [], {
+    ...graphDeps(failing),
+    listFeatures: async () => { throw new WireError('GET features failed: 500 Internal Server Error'); },
+    stderr: { write: (chunk: string) => { errors.push(chunk); return true; } },
+  });
+
+  assert.deepEqual(readMapBuildRequest(failing).existing_capabilities, []);
+  assert.deepEqual(errors, ['Could not list finished features — the map is built without them: GET features failed: 500 Internal Server Error\n']);
 });

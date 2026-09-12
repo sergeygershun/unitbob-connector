@@ -12,11 +12,16 @@ import {
   readKnowledge,
   readTestsOutput,
   readTestsRequest,
+  readTestsReviewOutput,
   testsOutputPath,
   testsRequestPath,
+  testsReviewOutputPath,
+  testsReviewRequestPath,
   writeKnowledgeRequest,
   writeTestsRequest,
+  writeTestsReviewRequest,
   type TestsRequest,
+  type TestsReviewRequest,
 } from '../src/files/features.ts';
 import type { KnowledgePacket, Recipe } from '../src/wire.ts';
 
@@ -174,4 +179,61 @@ test('refuses an answer outside the behavioral root or without its parts', () =>
 
   writeFileSync(testsOutputPath(projectRoot, 12), JSON.stringify({ suite_file: { path: featureFeaturePath(12) }, test_metadata: {} }));
   assert.throws(() => readTestsOutput(projectRoot, 12), /missing runner_manifest/);
+});
+
+// --- the review of the checks (spec 52-4, AC 1.11) ---------------------------
+//
+// The independent reviewer reads a request in the shape of the main suite's
+// `review-request.json` and writes a review in the shape of its
+// `bdd_quality_review`; the two files live in the feature's folder.
+test('the review request and output live beside the feature’s other files', () => {
+  assert.equal(testsReviewRequestPath('/p', 12), join('/p', '.unitbob', 'features', '12', 'tests-review-request.json'));
+  assert.equal(testsReviewOutputPath('/p', 12), join('/p', '.unitbob', 'features', '12', 'tests-review-output.json'));
+});
+
+test('writes the review request as given and reads it back', () => {
+  const projectRoot = tmpProject();
+  const request: TestsReviewRequest = {
+    candidate_digest: 'c'.repeat(64),
+    suite_file: { path: featureFeaturePath(12), content: 'Feature: Refunds\n', support_files: [] },
+    capabilities: [{ capability_id: 'feature_12', status: 'covered' }],
+    knowledge_path: knowledgePath(projectRoot, 12),
+    scenarios: [{ name: 'A buyer asks for a refund', steps: [{ keyword: 'Given', text: 'a paid order' }], source: 'confirmed' }],
+    output_path: testsReviewOutputPath(projectRoot, 12),
+  };
+
+  const written = writeTestsReviewRequest(projectRoot, 12, request);
+
+  assert.deepEqual(written, request);
+  assert.deepEqual(JSON.parse(readFileSync(testsReviewRequestPath(projectRoot, 12), 'utf8')), request);
+});
+
+test('reads the review output as a bdd_quality_review bound to its candidate, and null when there is none', () => {
+  const projectRoot = tmpProject();
+  assert.equal(readTestsReviewOutput(projectRoot, 12), null);
+
+  mkdirSync(featureDir(projectRoot, 12), { recursive: true });
+  const review = {
+    candidate_digest: 'c'.repeat(64),
+    bdd_quality_review: {
+      scenario_reviews: [{ scenario: 'A buyer asks for a refund', case_marker: 'ubc_0123456789ab', verdict: 'pass', public_surfaces: ['POST /refunds'], given_then_evidence: 'e', outcome: 'o', outcome_kind: 'specific' }],
+    },
+  };
+  writeFileSync(testsReviewOutputPath(projectRoot, 12), JSON.stringify(review));
+
+  assert.deepEqual(readTestsReviewOutput(projectRoot, 12), review);
+});
+
+test('refuses a review output without its two parts, naming the file', () => {
+  const projectRoot = tmpProject();
+  mkdirSync(featureDir(projectRoot, 12), { recursive: true });
+
+  writeFileSync(testsReviewOutputPath(projectRoot, 12), '{');
+  assert.throws(() => readTestsReviewOutput(projectRoot, 12), /tests-review-output\.json is not valid JSON/);
+
+  writeFileSync(testsReviewOutputPath(projectRoot, 12), JSON.stringify({ bdd_quality_review: { candidate_digest: 'c', scenario_reviews: [] } }));
+  assert.throws(() => readTestsReviewOutput(projectRoot, 12), /candidate_digest at the top level/);
+
+  writeFileSync(testsReviewOutputPath(projectRoot, 12), JSON.stringify({ candidate_digest: 'c' }));
+  assert.throws(() => readTestsReviewOutput(projectRoot, 12), /bdd_quality_review/);
 });

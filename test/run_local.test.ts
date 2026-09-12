@@ -595,17 +595,50 @@ test('a branch where everything failed is bounded, and says how much it left out
 // tags the build request names out of the behavioral run — it asks no server.
 // With `--feature <id>` it runs only that feature's tag, on the files as they
 // lie, with the runner of the feature's own request, and materialises nothing.
-test('run-local without a flag excludes the feature tags the build request carries', async () => {
+test('run-local without a flag excludes the feature tags the build request carries, then runs each tag on its own', async () => {
   const projectRoot = project([behavioralAnswer()]);
-  writeSuiteBuildRequest(projectRoot, branches(), { status: 'not_supplied' }, ['unitbob_feature_12']);
-  let filter: unknown = 'unset';
+  writeSuiteBuildRequest(projectRoot, branches(), { status: 'not_supplied' }, ['unitbob_feature_12', 'unitbob_feature_15']);
+  const filters: unknown[] = [];
+  const { out, stdout } = collect();
 
   await runLocal(config(projectRoot), ['behavioral'], {
-    runBehavioral: async (_root, _runner, _main, f) => { filter = f; return runnerResult(); },
-    validateStack: () => okStack, stdout: collect().stdout,
+    runBehavioral: async (_root, _runner, _main, f) => {
+      filters.push(f);
+      return f && 'only' in f && f.only === 'unitbob_feature_12' ? runnerResult({ code: 1, report: RED_FEATURE }) : runnerResult();
+    },
+    validateStack: () => okStack, stdout,
   });
 
-  assert.deepEqual(filter, { exclude: ['unitbob_feature_12'] });
+  // Spec 52-4, AC 1.1: the same order `check` runs them in — the main suite
+  // with every tag excluded, then each feature by its tag — and each feature's
+  // run read out locally like the rest.
+  assert.deepEqual(filters, [
+    { exclude: ['unitbob_feature_12', 'unitbob_feature_15'] },
+    { only: 'unitbob_feature_12' },
+    { only: 'unitbob_feature_15' },
+  ]);
+  const printed = out.join('');
+  assert.match(printed, /── behavioral ──[\s\S]*── unitbob_feature_12 ──[\s\S]*1 case failed[\s\S]*── unitbob_feature_15 ──/);
+});
+
+test('a feature tag whose runner fails is printed and stops neither the tags after it nor the exit code', async () => {
+  const projectRoot = project([behavioralAnswer()]);
+  writeSuiteBuildRequest(projectRoot, branches(), { status: 'not_supplied' }, ['unitbob_feature_12', 'unitbob_feature_15']);
+  const filters: unknown[] = [];
+  const { out, stdout } = collect();
+
+  const code = await runLocal(config(projectRoot), ['behavioral'], {
+    runBehavioral: async (_root, _runner, _main, f) => {
+      filters.push(f);
+      if (f && 'only' in f && f.only === 'unitbob_feature_12') throw new Error('cucumber: command not found');
+      return runnerResult();
+    },
+    validateStack: () => okStack, stdout,
+  });
+
+  assert.equal(code, 0);
+  assert.equal(filters.length, 3);
+  assert.match(out.join(''), /The runner could not start: cucumber: command not found/);
 });
 
 test('run-local without a flag reads a request written before the tags existed as no exclusion', async () => {

@@ -6,12 +6,12 @@ metadata — and nothing of the feature itself.
 
 Do this:
 1. If you do not already know the feature's id from this session, run
-   `npx -y --loglevel=error unitbob@0.7.11 knowledge-prepare` with no argument
+   `npx -y --loglevel=error unitbob@0.7.12 knowledge-prepare` with no argument
    and pick the feature the user's words point at from the list (ask only if
    two titles could both be meant). The feature has to be talked through first
    (`workflows/knowledge.md`); if `tests-prepare` below answers 409 with the
    server's sentence, relay it and stop.
-2. Run `npx -y --loglevel=error unitbob@0.7.11 tests-prepare <id>`. It fetches
+2. Run `npx -y --loglevel=error unitbob@0.7.12 tests-prepare <id>`. It fetches
    the feature's assignment and the recipe, checks `knowledge.md` on disk
    against the server, puts the main suite and every feature's checks on disk
    under `.unitbob/behavioral/`, provisions the runner, and writes
@@ -26,7 +26,7 @@ Do this:
    (`main_suite.paths`) rather than defining them again, and editing none of
    the main suite's files; write `test_metadata` with the one capability from
    the assignment as it is and `surfaces: []` per scenario.
-4. Run `npx -y --loglevel=error unitbob@0.7.11 run-local --feature <id>` and
+4. Run `npx -y --loglevel=error unitbob@0.7.12 run-local --feature <id>` and
    fix **the wiring only** — undefined, ambiguous (delete your duplicate),
    pending steps, data setup — until **every scenario fails**, best on its
    Then or When; a Given may fail when the data the feature needs does not
@@ -35,7 +35,7 @@ Do this:
    call, through a new talk — never an edit to the scenario.
 5. Write `tests-output.json` at the request's `output_path` — `suite_file`
    with the two paths, `runner_manifest` from the request, `test_metadata` —
-   then run `npx -y --loglevel=error unitbob@0.7.11 put-tests <id>`. It runs
+   then run `npx -y --loglevel=error unitbob@0.7.12 put-tests <id>`. It runs
    the checks itself, sends them with that run as the proof of red, and prints
    the server's sentence and a link.
    If it answers 422, the output names what is wrong — for a broken seal one
@@ -45,6 +45,15 @@ Do this:
 6. Tell the user in **one short message**: the server's sentence (how many
    checks, all red) and the link `put-tests` printed. No file contents, no
    plan for the code.
+
+While the feature is being built afterwards, the wiring under
+`.unitbob/behavioral/` may need to change against the real code — a step
+definition rewritten, a fixture added. Those edits are saved the same way the
+checks were first uploaded: `npx -y --loglevel=error unitbob@0.7.12 put-tests <id>`,
+which sends the harness as it is, with the run it just made, and files that
+run. Until they are saved, `check` stops rather than overwrite them, with
+"The checks for “…” changed on disk since they were saved" — that sentence is
+the cue to run `put-tests <id>`, not a fault.
 
 Do **not** write a line of the feature's implementation, not even a stub — the
 checks have to fail because the behaviour is missing. Do **not** touch any

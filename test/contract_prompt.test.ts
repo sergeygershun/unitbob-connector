@@ -60,3 +60,41 @@ test('contract-prompt rejects an unknown intent before any request', async () =>
   }), /intent must be "fix" or "accept"/);
   assert.equal(fetched, false);
 });
+
+// Spec 52-4, AC 1.3 / 7.1. A feature's checks have no lamp on the map to copy
+// a digest from, so the feature's id stands in for it: `feature:<id>` is
+// resolved to the digest of the feature's current checks through the same
+// index `check` runs from.
+test('contract-prompt takes feature:<id> in place of the digest and resolves it through the suite index', async () => {
+  const seen: string[] = [];
+  let output = '';
+
+  await contractPrompt(config, ['feature:12', 'feature_12', 'fix'], {
+    getSuiteIndex: async () => ({
+      suites: [],
+      feature_suites: [
+        { feature_id: 15, feature_tag: 'unitbob_feature_15', suite_digest: 'feat-15', suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' } },
+        { feature_id: 12, feature_tag: 'unitbob_feature_12', suite_digest: 'feat-12', suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' } },
+      ],
+    }),
+    getContractPrompt: async (digest, testId, intent) => { seen.push(`${digest}:${testId}:${intent}`); return packet(intent); },
+    stdout: { write: (chunk: string) => { output += chunk; return true; } },
+  });
+
+  assert.deepEqual(seen, ['feat-12:feature_12:fix']);
+  assert.match(output, /Ready to work on/);
+});
+
+test('contract-prompt says so in one line when no red feature has that id, asking the server nothing else', async () => {
+  let fetched = false;
+
+  await assert.rejects(
+    () => contractPrompt(config, ['feature:12', 'feature_12'], {
+      getSuiteIndex: async () => ({ suites: [], feature_suites: [] }),
+      getContractPrompt: async () => { fetched = true; return packet('fix'); },
+      stdout: { write: () => true },
+    }),
+    /No feature 12 has checks to act on — it is not being built, or it is finished\./,
+  );
+  assert.equal(fetched, false);
+});

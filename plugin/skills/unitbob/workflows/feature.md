@@ -6,7 +6,7 @@ after the next check whether those places held. Your code never leaves the
 machine.
 
 Do this:
-1. Run `npx -y --loglevel=error unitbob@0.7.11 feature-prepare`.
+1. Run `npx -y --loglevel=error unitbob@0.7.12 feature-prepare`.
    It fetches the recipe and the product capabilities of the current map and
    writes `.unitbob/feature-start/request.json`. If it reports there is no
    current map, relay that message and stop — the map has to be built first
@@ -19,7 +19,7 @@ Do this:
    (`.unitbob/feature-start/feature.json`): `title`, `intent`, `affected`
    — the exact shape the recipe shows. An empty `affected` is a legitimate
    answer.
-4. Run `npx -y --loglevel=error unitbob@0.7.11 put-feature`. It records the
+4. Run `npx -y --loglevel=error unitbob@0.7.12 put-feature`. It records the
    feature and prints the server's sentence and a link.
    If it answers 422 with `unknown_ids` and `known_ids`, correct `feature.json`
    using both lists — never invent an id — and run `put-feature` again.

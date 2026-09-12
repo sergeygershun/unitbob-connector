@@ -114,9 +114,12 @@ export interface SuiteArtifact {
 
 // One feature's checks from the same GET /suites (spec 52-3): the blob to
 // materialise beside the main suite, and the tag by which its scenarios are
-// run on their own and left out of the ordinary run.
+// run on their own and left out of the ordinary run. `title` (spec 52-4) is
+// for the connector's one sentence about them — when the files on disk moved
+// since they were saved; a server from 52-3 sends the item without it.
 export interface FeatureSuiteItem {
   feature_id: number;
+  title?: string;
   feature_tag: string;
   suite_digest: string;
   suite_file: SuiteArtifact;
@@ -138,8 +141,12 @@ export interface RunnerManifestWire {
 
 // One per-kind run summary the server returns from POST /runs/batch. Printed
 // verbatim; the connector reads only `suite_kind`, `summary`, and `status`.
+// A run over a feature's checks (spec 52-4, AC 1.1) answers with the feature
+// named and `lamps: null` — the map is not painted by checks of a feature not
+// built; its `summary` is the one line the terminal shows for that feature.
 export interface RunResultItem {
   suite_kind: string | null;
+  feature_id?: number;
   suite_digest: string;
   status: string;
   summary: string;
@@ -191,12 +198,17 @@ export interface FeatureRecorded {
 }
 
 // One row of GET /repos/:id/features (spec 52-2): enough for the host to find
-// the feature by the person's words without asking for an id.
+// the feature by the person's words without asking for an id. Since spec 52-4
+// also the feature's capability id and the intent as said, for `map-prepare`
+// to name the capabilities a finished feature added (AC 5.1); a server older
+// than the two fields sends the row without them.
 export interface FeatureListItem {
   feature_id: number;
   title: string;
   status: string;
   created_at: string;
+  capability_id?: string;
+  intent?: string;
 }
 
 // What the talk starts from (spec 52-2, AC 1.3): the feature, each affected
@@ -241,8 +253,9 @@ export interface TestsPacket {
 }
 
 // The upload of PUT …/suite (spec 52-3, AC 2.2): the suite envelope, the
-// manifest, the metadata with the connector's own red run in it, and the
-// digest of the knowledge file the checks were written from.
+// manifest, the metadata with its proof in it — the connector's own red run,
+// or since spec 52-4 the reviewer's `bdd_quality_review` instead, or neither
+// — and the digest of the knowledge file the checks were written from.
 export interface FeatureSuiteUpload {
   suite_file: SuiteArtifact;
   runner_manifest: RunnerManifestWire;
@@ -264,12 +277,18 @@ export interface FeatureSuiteRecorded {
 // that reads an absence as a verdict either invents a rejection or invents an
 // approval. `validate-build` is the caller that needs the difference: with no
 // server it succeeds, and says out loud which questions went unasked.
+//
+// `status` is the HTTP status the server answered with, when there was one:
+// for the one caller that treats a 404 — a server older than the route — as
+// an absence rather than a verdict (`map-prepare`, spec 52-4).
 export class WireError extends Error {
   readonly unreachable: boolean;
+  readonly status: number | null;
 
-  constructor(message: string, options: { unreachable?: boolean } = {}) {
+  constructor(message: string, options: { unreachable?: boolean; status?: number } = {}) {
     super(message);
     this.unreachable = options.unreachable ?? false;
+    this.status = options.status ?? null;
   }
 }
 
@@ -626,6 +645,7 @@ export class Wire {
         `This project is linked to a repository the server at ${this.config.server} does not have, ` +
           'or the token in .unitbob.json does not open it. Delete .unitbob.json to link again ' +
           '(the old project, along with its map and checks, stays where it is).',
+        { status: 404 },
       );
     }
 
@@ -635,7 +655,7 @@ export class Wire {
     } catch {
       // ignore — the status alone is actionable enough
     }
-    throw new WireError(statusRefusal(what, res, detail, this.config.server));
+    throw new WireError(statusRefusal(what, res, detail, this.config.server), { status: res.status });
   }
 }
 

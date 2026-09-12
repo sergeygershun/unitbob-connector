@@ -11,7 +11,7 @@ as green or red lamps. A red lamp is the only signal the user needs: something t
 structure depended on just broke.
 
 There is a `unitbob` command-line tool, run via
-`npx -y --loglevel=error unitbob@0.7.11 <verb>`. It is
+`npx -y --loglevel=error unitbob@0.7.12 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
 (the coding agent) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.
@@ -42,6 +42,10 @@ the file is the same thing the command runs, and it is here right now.
   проверки для…") → `workflows/tests.md` — turns the scenarios of a feature
   that has been talked through into checks that run red until the feature is
   built; writes wiring only, never the feature.
+- **Wrap up a feature** (the user says the feature is done: "I'm done with…",
+  "фича готова", "заверши фичу") → `workflows/finish.md` — runs the checks,
+  gets them reviewed once they all pass, and hands the user the link to press
+  Finish on the feature page. Never finishes anything itself.
 
 The `<guard_id>` for fix is the guard handle shown on the red lamp on the map —
 the user copies it from there. To stop guarding code that is gone for good, the

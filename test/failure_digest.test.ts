@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { digestOf, failureSet, reportedFailures } from '../src/runner/failureDigest.ts';
+import { digestOf, failureSet, reportedFailures, scenarioTally } from '../src/runner/failureDigest.ts';
 
 // Spec 34-6, criterion 3. The comparison is only worth anything if it is stable
 // against everything that differs between two runs of the same broken suite —
@@ -306,4 +306,55 @@ test('a pytest-bdd report from before that field still reads', () => {
   });
 
   assert.equal(reportedFailures('pytest-bdd', report)?.[0].file, '');
+});
+
+// Spec 52-4, AC 1.10. The same parse, read for how many of a feature's
+// scenarios passed and how many did not — what decides which proof `put-tests`
+// attaches. A report that cannot be read is no tally, never a green one.
+test('a cucumber report tallies its scenarios into passed and failed', () => {
+  const report = [
+    { pickle: { id: 'p1', name: 'One', uri: 'f.feature', tags: [] } },
+    { pickle: { id: 'p2', name: 'Two', uri: 'f.feature', tags: [] } },
+    { testCase: { id: 'tc1', pickleId: 'p1', testSteps: [{ id: 's1' }] } },
+    { testCase: { id: 'tc2', pickleId: 'p2', testSteps: [{ id: 's2' }] } },
+    { testCaseStarted: { id: 'run1', testCaseId: 'tc1' } },
+    { testStepFinished: { testCaseStartedId: 'run1', testStepId: 's1', testStepResult: { status: 'FAILED', message: 'no' } } },
+    { testCaseStarted: { id: 'run2', testCaseId: 'tc2' } },
+    { testStepFinished: { testCaseStartedId: 'run2', testStepId: 's2', testStepResult: { status: 'PASSED' } } },
+  ].map((line) => JSON.stringify(line)).join('\n');
+
+  assert.deepEqual(scenarioTally('cucumber-js', report), { passed: 1, failed: 1 });
+});
+
+// A retried scenario is one row: cucumber emits one `testCaseStarted` per
+// attempt, and the last attempt is the one the run ends on.
+test('a retried cucumber scenario counts once, by its last attempt', () => {
+  const report = [
+    { pickle: { id: 'p1', name: 'Flaky', uri: 'f.feature', tags: [] } },
+    { testCase: { id: 'tc1', pickleId: 'p1', testSteps: [{ id: 's1' }] } },
+    { testCaseStarted: { id: 'run1', testCaseId: 'tc1', attempt: 0 } },
+    { testStepFinished: { testCaseStartedId: 'run1', testStepId: 's1', testStepResult: { status: 'FAILED', message: 'timeout' } } },
+    { testCaseStarted: { id: 'run2', testCaseId: 'tc1', attempt: 1 } },
+    { testStepFinished: { testCaseStartedId: 'run2', testStepId: 's1', testStepResult: { status: 'PASSED' } } },
+  ].map((line) => JSON.stringify(line)).join('\n');
+
+  assert.deepEqual(scenarioTally('cucumber', report), { passed: 1, failed: 0 });
+});
+
+test('a pytest-bdd report tallies its scenarios the same way', () => {
+  const report = JSON.stringify({
+    version: 1,
+    scenarios: [
+      { name: 'One', tags: [], status: 'failed', failure: 'AssertionError' },
+      { name: 'Two', tags: [], status: 'failed', failure: 'AssertionError' },
+    ],
+  });
+
+  assert.deepEqual(scenarioTally('pytest-bdd', report), { passed: 0, failed: 2 });
+});
+
+test('a report that cannot be read, or a runner without scenarios, is no tally', () => {
+  assert.equal(scenarioTally('cucumber', ''), null);
+  assert.equal(scenarioTally('cucumber', 'not json'), null);
+  assert.equal(scenarioTally('rspec', '{"examples":[]}'), null);
 });
