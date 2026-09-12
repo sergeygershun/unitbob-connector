@@ -26,7 +26,7 @@ const connectorVersion = JSON.parse(readFileSync(packageJsonPath, 'utf8')).versi
 const unitbob = `npx -y --loglevel=error unitbob@${connectorVersion}`;
 const unitbobPattern = unitbob.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const WORKFLOWS = ['map', 'suite', 'check', 'show', 'fix'];
+const WORKFLOWS = ['map', 'suite', 'check', 'show', 'fix', 'feature'];
 
 test('the skill can run every workflow without a slash command', () => {
   for (const name of WORKFLOWS) {
@@ -47,7 +47,7 @@ test('no workflow sends anyone to a slash command', () => {
   for (const name of WORKFLOWS) {
     assert.doesNotMatch(
       workflow(name),
-      /\/unitbob[: ](map|suite|check|show|fix)\b/,
+      /\/unitbob[: ](map|suite|check|show|fix|feature)\b/,
       `${name}.md must point at a sibling workflow or ask in plain words`,
     );
   }
@@ -199,4 +199,18 @@ test('fix workflow drives contract-prompt and covers both fix and accept on eith
   assert.match(text, /application failures remain red/i);
   // `$ARGUMENTS` is a command-only substitution — inside a workflow it stays literal.
   assert.doesNotMatch(text, /\$ARGUMENTS/);
+});
+
+// Spec 52-1. The feature workflow is the one step that must not turn into a
+// conversation or into code: it records what was said and names what it may
+// touch, and everything else is another workflow's.
+test('the feature workflow records the intent without asking or implementing', () => {
+  const text = workflow('feature');
+
+  assert.match(text, new RegExp(`${unitbobPattern} feature-prepare`));
+  assert.match(text, new RegExp(`${unitbobPattern} put-feature`));
+  assert.match(text, /not.*ask questions/i);
+  assert.match(text, /not.*start implementing/i);
+  assert.match(text, /unknown_ids/);
+  assert.match(skill, /Start a feature safely/);
 });

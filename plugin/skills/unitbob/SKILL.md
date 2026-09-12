@@ -11,7 +11,7 @@ as green or red lamps. A red lamp is the only signal the user needs: something t
 structure depended on just broke.
 
 There is a `unitbob` command-line tool, run via
-`npx -y --loglevel=error unitbob@0.7.8 <verb>`. It is
+`npx -y --loglevel=error unitbob@0.7.9 <verb>`. It is
 thin local hands — it runs tools and relays bytes to the Unitbob server. You
 (the coding agent) do the map-building, suite-writing, and fixing locally, guided by
 recipes the tool fetches from the server.
@@ -29,6 +29,10 @@ the file is the same thing the command runs, and it is here right now.
   generate run was interrupted)
 - **Open the map** → `workflows/show.md`
 - **Fix a red guard** (the code drifted) → `workflows/fix.md`
+- **Start a feature safely** ("I want to add…", "help me change… safely",
+  "unitbob, I'm going to…") → `workflows/feature.md` — records the intent and
+  names the capabilities it may touch, *before* any code changes. Only on an
+  explicit request like these: an ordinary message about code is not one.
 
 The `<guard_id>` for fix is the guard handle shown on the red lamp on the map —
 the user copies it from there. To stop guarding code that is gone for good, the

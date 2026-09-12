@@ -183,6 +183,53 @@ test('getFixPacket surfaces a 422 (non-failed) as a WireError', async () => {
   );
 });
 
+test('postFeature POSTs the feature and returns its id, page and sentence (spec 52-1)', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 201, {
+        feature_id: 7,
+        url: '/repos/3/features/7',
+        message: 'Feature recorded: "Comments on posts". 1 capability to watch.',
+      }),
+    async (config, hits) => {
+      const recorded = await new Wire(config).postFeature({
+        title: 'Comments on posts',
+        intent: 'I want to add comments to posts',
+        affected: [{ id: 'posts', why: 'A comment lives on the post page.' }],
+      });
+      assert.equal(recorded.feature_id, 7);
+      assert.equal(recorded.url, '/repos/3/features/7');
+      assert.equal(hits[0].method, 'POST');
+      assert.equal(hits[0].url, '/repos/3/features');
+      assert.deepEqual(JSON.parse(hits[0].body), {
+        title: 'Comments on posts',
+        intent: 'I want to add comments to posts',
+        affected: [{ id: 'posts', why: 'A comment lives on the post page.' }],
+      });
+    },
+  );
+});
+
+// Both sides of the join travel in the error text: the host reads what it
+// sent and what the map knows, and corrects its file.
+test('postFeature surfaces a 422 with both id lists as a WireError', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 422, {
+        error: 'These capabilities are not on the current map.',
+        unknown_ids: ['comments'],
+        known_ids: ['posts', 'billing'],
+      }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).postFeature({ title: 'x', intent: 'y', affected: [{ id: 'comments', why: '' }] }),
+        (err: unknown) =>
+          err instanceof WireError && /unknown_ids/.test((err as Error).message) && /known_ids/.test((err as Error).message),
+      );
+    },
+  );
+});
+
 test('getRecipe hits GET /recipes/:name', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { name: 'decompose', version: 'v1', text: '# recipe' }),

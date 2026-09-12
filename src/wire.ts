@@ -154,6 +154,23 @@ export interface FixPacket {
   message: string;
 }
 
+// A feature to record (spec 52-1): the host's title, the person's intent as
+// said, and the product capabilities the host judged the work may touch. `id`
+// is a `capability_id` from the behavioral suite packet, copied verbatim.
+export interface FeatureUpload {
+  title: string;
+  intent: string;
+  affected: { id: string; why: string }[];
+}
+
+// What the server answers: the feature's id, the path of its page (wrapped in
+// the exchanger before it is printed), and the sentence for the terminal.
+export interface FeatureRecorded {
+  feature_id: number;
+  url: string;
+  message: string;
+}
+
 // Raised when the server cannot be reached or answers with an error status.
 // Verbs surface its message and exit non-zero; they never fabricate a result.
 //
@@ -349,6 +366,16 @@ export class Wire {
     const res = await this.send('GET', url);
     await this.ensureOk(res, `GET ${url}`);
     return (await res.json()) as FixPacket;
+  }
+
+  // POST /repos/:id/features — record a feature (spec 52-1). A 409 (no current
+  // map) and a 422 (an id not on the map, with both sides named in the body)
+  // surface as a WireError carrying the server's text, so the host reads what
+  // the map knows and corrects its file.
+  async postFeature(payload: FeatureUpload): Promise<FeatureRecorded> {
+    const res = await this.send('POST', this.repoPath('features'), payload);
+    await this.ensureOk(res, `POST ${this.repoPath('features')}`);
+    return (await res.json()) as FeatureRecorded;
   }
 
   // GET /recipes/:name — fetch a recipe at call time. Recipes live on Rails so

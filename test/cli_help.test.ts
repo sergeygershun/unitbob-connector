@@ -23,3 +23,11 @@ test('--help carries a pipeline note explaining prepare → host-build → put',
 test('--help exposes the one-time Codex agent installer', () => {
   assert.match(help(), /codex-install\s+Install the bounded Unitbob worker definitions for Codex/);
 });
+
+// Spec 52-1: the pair that records an intent before the change is made.
+test('--help exposes feature-prepare and put-feature', () => {
+  const text = help();
+
+  assert.match(text, /feature-prepare\s+Internal: fetch the recipe and the product capabilities/);
+  assert.match(text, /put-feature\s+Internal: record the host's feature answer/);
+});
