@@ -566,14 +566,7 @@ export class Wire {
 // the two lists are relaid whole, one per line; any other 422 body keeps the
 // ordinary shape.
 async function unknownCapabilitiesRefusal(res: Response): Promise<string> {
-  let body: { error?: unknown; unknown_ids?: unknown; known_ids?: unknown; details?: unknown } = {};
-  let text = '';
-  try {
-    text = await res.text();
-    body = JSON.parse(text);
-  } catch {
-    // not JSON — the text itself is the detail
-  }
+  const { text, body } = await readBody<{ error?: unknown; unknown_ids?: unknown; known_ids?: unknown }>(res);
   if (!Array.isArray(body.unknown_ids) || !Array.isArray(body.known_ids)) {
     return `POST features failed: 422 — ${text.slice(0, 500)}`;
   }
@@ -584,15 +577,11 @@ async function unknownCapabilitiesRefusal(res: Response): Promise<string> {
   );
 }
 
+// The 422 of PUT …/knowledge carries one problem per violation (spec 52-2, AC
+// 5.3), and the host fixes the file from all of them — so, like the lists
+// above, they are relaid whole, one per line with both sides.
 async function knowledgeRefusal(res: Response): Promise<string> {
-  let body: { error?: unknown; problems?: unknown } = {};
-  let text = '';
-  try {
-    text = await res.text();
-    body = JSON.parse(text);
-  } catch {
-    // not JSON — the text itself is the detail
-  }
+  const { text, body } = await readBody<{ error?: unknown; problems?: unknown }>(res);
   if (!Array.isArray(body.problems)) {
     return `PUT knowledge failed: 422 — ${text.slice(0, 500)}`;
   }
@@ -602,6 +591,20 @@ async function knowledgeRefusal(res: Response): Promise<string> {
   return [`PUT knowledge failed: 422 — ${String(body.error ?? 'knowledge.md does not have the expected shape.')}`, ...lines].join(
     '\n',
   );
+}
+
+// A refusal body as text and, when it is JSON, as an object; when it is not,
+// the text itself is the detail.
+async function readBody<T extends object>(res: Response): Promise<{ text: string; body: Partial<T> }> {
+  let text = '';
+  let body: Partial<T> = {};
+  try {
+    text = await res.text();
+    body = JSON.parse(text) as Partial<T>;
+  } catch {
+    // not JSON — the text itself is the detail
+  }
+  return { text, body };
 }
 
 // The two statuses that prove somebody else answered.

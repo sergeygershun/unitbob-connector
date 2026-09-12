@@ -9,6 +9,14 @@ export function featureDir(projectRoot: string, featureId: number | string): str
   return join(projectRoot, '.unitbob', 'features', String(featureId));
 }
 
+// The id as the list printed it and the folder is named: a number. A word
+// ("refunds") is the person's, not the server's, and the verb says so.
+export function parseFeatureId(raw: string | undefined, verb: string): number {
+  if (raw === undefined) throw new Error(`Usage: unitbob ${verb} <feature_id>`);
+  if (!/^\d+$/.test(raw)) throw new Error(`unitbob ${verb}: the feature id must be a number, got "${raw}".`);
+  return Number(raw);
+}
+
 export function knowledgeRequestPath(projectRoot: string, featureId: number | string): string {
   return join(featureDir(projectRoot, featureId), 'request.json');
 }

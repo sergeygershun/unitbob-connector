@@ -1,8 +1,7 @@
 import type { Config } from '../config.ts';
-import { readKnowledge } from '../files/features.ts';
+import { parseFeatureId, readKnowledge } from '../files/features.ts';
 import { enterUrl } from '../links.ts';
 import { Wire, type KnowledgeRecorded } from '../wire.ts';
-import { parseFeatureId } from './knowledgePrepare.ts';
 
 interface PutKnowledgeDeps {
   putKnowledge: (featureId: number, knowledge: string) => Promise<KnowledgeRecorded>;

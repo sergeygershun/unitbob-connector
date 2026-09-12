@@ -1,5 +1,5 @@
 import type { Config } from '../config.ts';
-import { knowledgeRequestPath, writeKnowledgeRequest } from '../files/features.ts';
+import { knowledgeRequestPath, parseFeatureId, writeKnowledgeRequest } from '../files/features.ts';
 import { Wire, type FeatureListItem, type KnowledgePacket, type Recipe } from '../wire.ts';
 
 interface KnowledgePrepareDeps {
@@ -51,10 +51,4 @@ export async function knowledgePrepare(
   const [recipe, packet] = await Promise.all([d.getRecipe('feature_grill'), d.getKnowledgePacket(featureId)]);
   writeKnowledgeRequest(config.projectRoot, featureId, recipe, packet);
   d.stdout.write(`Knowledge request written to ${knowledgeRequestPath(config.projectRoot, featureId)}\n`);
-}
-
-export function parseFeatureId(raw: string | undefined, verb: string): number {
-  if (raw === undefined) throw new Error(`Usage: unitbob ${verb} <feature_id>`);
-  if (!/^\d+$/.test(raw)) throw new Error(`unitbob ${verb}: the feature id must be a number, got "${raw}".`);
-  return Number(raw);
 }
