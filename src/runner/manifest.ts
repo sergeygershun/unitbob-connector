@@ -59,7 +59,9 @@ const BEHAVIORAL_DIR = '.unitbob/behavioral';
 // Matches the server's own PINNED_VERSION: a digit, then version characters.
 const PINNED_VERSION = /^[0-9][0-9A-Za-z.\-+]*$/;
 
-function installedRunnerVersion(runner: string, projectRoot: string): string | null {
+// Exported for a feature's checks (spec 52-3), which take the runner from the
+// main suite rather than from a selection and still owe the server its version.
+export function installedRunnerVersion(runner: string, projectRoot: string): string | null {
   const root = join(projectRoot, BEHAVIORAL_DIR);
   const found = readInstalledVersion(runner, root);
   return found && PINNED_VERSION.test(found) ? found : null;

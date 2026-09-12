@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { KnowledgePacket, Recipe } from '../wire.ts';
+import { resolveSuiteFile } from './suiteBuild.ts';
+import type { KnowledgePacket, Recipe, RunnerManifestWire, SuiteArtifact, TestsPacket } from '../wire.ts';
 
 // A feature's folder on disk (spec 52-2): `.unitbob/features/<id>/`. This is
 // the first spec that gives a feature a folder; the talk's request and the
@@ -79,4 +80,107 @@ export function readKnowledge(projectRoot: string, featureId: number | string): 
 
 function presentDir(path: string): string | null {
   return existsSync(path) ? path : null;
+}
+
+// --- the checks (spec 52-3) -------------------------------------------------
+
+export function testsRequestPath(projectRoot: string, featureId: number | string): string {
+  return join(featureDir(projectRoot, featureId), 'tests-request.json');
+}
+
+export function testsOutputPath(projectRoot: string, featureId: number | string): string {
+  return join(featureDir(projectRoot, featureId), 'tests-output.json');
+}
+
+// Where the checks go, beside the main suite (spec 52-3, AC 3.4): one
+// `.feature` and one step file, both named after the feature so that they can
+// never take a path of the main suite's.
+export function featureFeaturePath(featureId: number | string): string {
+  return `.unitbob/behavioral/features/feature_${featureId}.feature`;
+}
+
+export function featureStepsPath(featureId: number | string, runner: string): string {
+  return `.unitbob/behavioral/step_definitions/${stepsFileName(featureId, runner)}`;
+}
+
+// Named as the runner collects it: pytest only picks up `test_*.py`, and a
+// file named otherwise loads nothing (`bdd.ts` says so at length).
+function stepsFileName(featureId: number | string, runner: string): string {
+  switch (runner) {
+    case 'pytest-bdd': return `test_feature_${featureId}_steps.py`;
+    case 'cucumber-js': return `feature_${featureId}_steps.js`;
+    default: return `feature_${featureId}_steps.rb`;
+  }
+}
+
+// The task the host reads to write the checks: the recipe, the assignment
+// with the identity already minted, the feature's tag, the scenarios to copy
+// word for word, where the knowledge file is, the runner and its manifest to
+// copy, the main suite's files to reuse steps from, the two paths to write,
+// and where the answer goes.
+export interface TestsRequest {
+  project_root: string;
+  recipe: Recipe;
+  feature: TestsPacket['feature'];
+  feature_tag: string;
+  assignment: TestsPacket['assignment'];
+  scenarios: TestsPacket['scenarios'];
+  knowledge_path: string;
+  knowledge_digest: string;
+  runner: string;
+  runner_manifest: RunnerManifestWire;
+  main_suite: TestsPacket['main_suite'];
+  feature_path: string;
+  steps_path: string;
+  output_path: string;
+}
+
+export function writeTestsRequest(projectRoot: string, featureId: number | string, request: TestsRequest): TestsRequest {
+  const path = testsRequestPath(projectRoot, featureId);
+  if (!existsSync(dirname(path))) mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(request, null, 2)}\n`);
+  return request;
+}
+
+export function readTestsRequest(projectRoot: string, featureId: number | string): TestsRequest {
+  const path = testsRequestPath(projectRoot, featureId);
+  if (!existsSync(path)) {
+    throw new Error(`${path} not found — run \`npx unitbob tests-prepare ${featureId}\` first.`);
+  }
+  const request = JSON.parse(readFileSync(path, 'utf8')) as Partial<TestsRequest> | null;
+  if (!request || typeof request.feature_tag !== 'string' || typeof request.runner !== 'string' ||
+      typeof request.feature_path !== 'string' || typeof request.output_path !== 'string') {
+    throw new Error(`${path} is malformed — run \`npx unitbob tests-prepare ${featureId}\` again.`);
+  }
+  return request as TestsRequest;
+}
+
+// The host's answer, the shape of one built branch: `suite_file` with paths
+// (content read from disk under the behavioral root, as for a suite build),
+// `runner_manifest`, `test_metadata`.
+export interface TestsOutput {
+  suite_file: SuiteArtifact;
+  runner_manifest: RunnerManifestWire;
+  test_metadata: Record<string, unknown>;
+}
+
+export function readTestsOutput(projectRoot: string, featureId: number | string): TestsOutput {
+  const path = testsOutputPath(projectRoot, featureId);
+  if (!existsSync(path)) {
+    throw new Error(`${path} not found — write the answer as the recipe describes, then run \`unitbob put-tests\`.`);
+  }
+  const answer = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown> | null;
+  if (!answer || typeof answer !== 'object') throw new Error(`${path} is malformed: expected an object.`);
+  const manifest = answer.runner_manifest;
+  if (!manifest || typeof manifest !== 'object' || typeof (manifest as Record<string, unknown>).runner !== 'string') {
+    throw new Error(`${path} is missing runner_manifest.`);
+  }
+  if (!answer.test_metadata || typeof answer.test_metadata !== 'object') {
+    throw new Error(`${path} is missing test_metadata.`);
+  }
+  return {
+    suite_file: resolveSuiteFile(answer.suite_file, '.unitbob/behavioral/', path, 'feature', projectRoot),
+    runner_manifest: manifest as RunnerManifestWire,
+    test_metadata: answer.test_metadata as Record<string, unknown>,
+  };
 }

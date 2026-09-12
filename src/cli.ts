@@ -30,6 +30,8 @@ import { fixPrepare } from './verbs/fixPrepare.ts';
 import { featurePrepare } from './verbs/featurePrepare.ts';
 import { knowledgePrepare } from './verbs/knowledgePrepare.ts';
 import { putKnowledge } from './verbs/putKnowledge.ts';
+import { testsPrepare } from './verbs/testsPrepare.ts';
+import { putTests } from './verbs/putTests.ts';
 import { putFeature } from './verbs/putFeature.ts';
 import { contractPrompt } from './verbs/contractPrompt.ts';
 import { suiteReviewPrepare } from './verbs/suiteReviewPrepare.ts';
@@ -69,8 +71,10 @@ Verbs:
                        then run every branch it published and report the server's results. Name a branch
                        to publish that one alone, as soon as it is finished; with no argument both are
                        expected, and one the answer never mentions is reported.
-  run-local [branch]   Internal: run the suite you just wrote, before publishing it, with the same runner
-                       that will run it afterwards. No argument runs every branch the build asked for.
+  run-local [branch] | --feature <id>
+                       Internal: run the suite you just wrote, before publishing it, with the same runner
+                       that will run it afterwards. No argument runs every branch the build asked for;
+                       --feature runs one feature's checks alone, by their tag.
   fix-prepare <id>     Internal: fetch the per-capability repair packet for one red guard (by interface_id).
   contract-prompt <digest> <test_id> [fix|accept]
                        Internal: fetch the fix/accept brief for one red check on either map.
@@ -80,6 +84,10 @@ Verbs:
   knowledge-prepare    Internal: without an id, list the features that can be talked through; with
                        one, fetch the recipe and the feature's packet and write the host request.
   put-knowledge        Internal: send the feature's knowledge.md and print the link to its page.
+  tests-prepare <id>   Internal: fetch the feature's assignment and the recipe, put the suites on disk,
+                       and write the host request for its checks.
+  put-tests <id>       Internal: run the feature's checks, send them with that run as the proof of red,
+                       and print the link to its page.
   check                Run every Unitbob contract suite locally and report.
   run                  Alias for check.
 
@@ -171,6 +179,13 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
       case 'put-knowledge':
         await putKnowledge(await linked(), args);
         return 0;
+      case 'tests-prepare':
+        await testsPrepare(await linked(), args);
+        return 0;
+      case 'put-tests':
+        // Non-zero when the runner could not start or produced no report:
+        // nothing was sent, and the host has to read why (spec 52-3, AC 3.5).
+        return await putTests(await linked(), args);
       case 'run-local':
         // The one verb whose non-zero exit is not an error: a branch that failed
         // the same set of cases twice in a row (spec 34-6, criterion 3). Red

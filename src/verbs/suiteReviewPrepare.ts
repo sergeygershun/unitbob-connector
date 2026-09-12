@@ -1,6 +1,5 @@
 import type { Config } from '../config.ts';
 import { execFileSync } from 'node:child_process';
-import type { ExecFileSyncOptionsWithStringEncoding } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +11,7 @@ import {
 import { runBddSuite } from '../runner/bdd.ts';
 import { boundReport } from '../runner/boundReport.ts';
 import { placeOf } from '../runner/place.ts';
+import { gitRevision } from '../runner/gitRevision.ts';
 import type { SuiteArtifact } from '../wire.ts';
 import {
   branchRunner,
@@ -161,20 +161,5 @@ async function runCandidateAtRevision(
         // Housekeeping only — never fail a finished review run over it.
       }
     }
-  }
-}
-
-function gitRevision(projectRoot: string): string {
-  try {
-    const options: ExecFileSyncOptionsWithStringEncoding = {
-      cwd: projectRoot,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    };
-    const head = execFileSync('git', ['rev-parse', 'HEAD'], options).trim();
-    const dirty = execFileSync('git', ['status', '--porcelain'], options).trim();
-    return dirty ? `${head}-dirty` : head;
-  } catch {
-    return 'working-tree';
   }
 }

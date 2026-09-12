@@ -112,6 +112,25 @@ export interface SuiteArtifact {
   support_files?: { path: string; content: string }[];
 }
 
+// One feature's checks from the same GET /suites (spec 52-3): the blob to
+// materialise beside the main suite, and the tag by which its scenarios are
+// run on their own and left out of the ordinary run.
+export interface FeatureSuiteItem {
+  feature_id: number;
+  feature_tag: string;
+  suite_digest: string;
+  suite_file: SuiteArtifact;
+  runner_manifest: RunnerManifestWire;
+}
+
+// The whole answer of GET /suites: the two peers, and the checks of every
+// feature that is red. A server older than the list sends none, which reads as
+// an empty one.
+export interface SuiteIndex {
+  suites: SuiteListItem[];
+  feature_suites: FeatureSuiteItem[];
+}
+
 export interface RunnerManifestWire {
   runner: string;
   [key: string]: unknown;
@@ -199,6 +218,40 @@ export interface KnowledgeProblem {
 }
 
 export interface KnowledgeRecorded {
+  url: string;
+  message: string;
+}
+
+// What a feature's checks are written from (spec 52-3, AC 2.1): a behavioral
+// packet over the one capability the feature is, plus the feature, its tag,
+// the knowledge file and its parsed scenarios, and the main suite the checks
+// share a directory with.
+export interface TestsPacket {
+  suite_kind: string;
+  source_digest: string;
+  path_root: string;
+  runner_manifests: RunnerManifestWire[];
+  assignment: { capabilities: Record<string, unknown>[] };
+  feature: { feature_id: number; title: string; status: string };
+  feature_tag: string;
+  knowledge: string;
+  knowledge_digest: string;
+  scenarios: { name: string; steps: { keyword: string; text: string }[]; source: string }[];
+  main_suite: 'not_built' | { suite_digest: string; runner: string; paths: string[] };
+}
+
+// The upload of PUT …/suite (spec 52-3, AC 2.2): the suite envelope, the
+// manifest, the metadata with the connector's own red run in it, and the
+// digest of the knowledge file the checks were written from.
+export interface FeatureSuiteUpload {
+  suite_file: SuiteArtifact;
+  runner_manifest: RunnerManifestWire;
+  test_metadata: Record<string, unknown>;
+  knowledge_digest: string;
+}
+
+export interface FeatureSuiteRecorded {
+  suite_digest: string;
   url: string;
   message: string;
 }
@@ -333,15 +386,23 @@ export class Wire {
   }
 
   // GET /repos/:id/suites — both current suites (spec 32), exactly two peer
-  // items. A `ready` item carries its blob; a `not_built` item is skipped.
-  async getSuites(): Promise<SuiteListItem[]> {
+  // items, and since spec 52-3 the checks of every red feature beside them. A
+  // `ready` item carries its blob; a `not_built` item is skipped.
+  async getSuiteIndex(): Promise<SuiteIndex> {
     const res = await this.send('GET', this.repoPath('suites'));
     await this.ensureOk(res, `GET ${this.repoPath('suites')}`);
-    const body = (await res.json()) as { suites?: unknown };
+    const body = (await res.json()) as { suites?: unknown; feature_suites?: unknown };
     if (!Array.isArray(body.suites)) {
       throw new WireError(`GET ${this.repoPath('suites')} returned no suites array.`);
     }
-    return body.suites as SuiteListItem[];
+    return {
+      suites: body.suites as SuiteListItem[],
+      feature_suites: Array.isArray(body.feature_suites) ? (body.feature_suites as FeatureSuiteItem[]) : [],
+    };
+  }
+
+  async getSuites(): Promise<SuiteListItem[]> {
+    return (await this.getSuiteIndex()).suites;
   }
 
   // POST /repos/:id/runs/batch — ship each branch's raw report (or suite error)
@@ -438,6 +499,30 @@ export class Wire {
     if (res.status === 422) throw new WireError(await knowledgeRefusal(res));
     await this.ensureOk(res, `PUT ${path}`);
     return (await res.json()) as KnowledgeRecorded;
+  }
+
+  // GET /repos/:id/features/:feature_id/tests_packet (spec 52-3, AC 2.1). A
+  // 409 is the server's own sentence (talk the feature through first) and is
+  // relaid as it is.
+  async getTestsPacket(featureId: number | string): Promise<TestsPacket> {
+    const path = this.repoPath(`features/${encodeURIComponent(String(featureId))}/tests_packet`);
+    const res = await this.send('GET', path);
+    if (res.status === 409) throw new WireError(await wordedRefusal(res, `GET tests_packet failed: 409`));
+    await this.ensureOk(res, `GET ${path}`);
+    return (await res.json()) as TestsPacket;
+  }
+
+  // PUT /repos/:id/features/:feature_id/suite (spec 52-3, AC 2.2). Every
+  // refusal is worded by the server: a 409 in one sentence, a 422 in one
+  // sentence or, for a broken seal, with one problem per difference — relaid
+  // whole, both sides per line, like the knowledge file's.
+  async putFeatureSuite(featureId: number | string, upload: FeatureSuiteUpload): Promise<FeatureSuiteRecorded> {
+    const path = this.repoPath(`features/${encodeURIComponent(String(featureId))}/suite`);
+    const res = await this.send('PUT', path, upload);
+    if (res.status === 409) throw new WireError(await wordedRefusal(res, 'PUT suite failed: 409'));
+    if (res.status === 422) throw new WireError(await problemsRefusal(res, 'PUT suite failed: 422'));
+    await this.ensureOk(res, `PUT ${path}`);
+    return (await res.json()) as FeatureSuiteRecorded;
   }
 
   // GET /recipes/:name — fetch a recipe at call time. Recipes live on Rails so
@@ -591,6 +676,24 @@ async function knowledgeRefusal(res: Response): Promise<string> {
   return [`PUT knowledge failed: 422 — ${String(body.error ?? 'knowledge.md does not have the expected shape.')}`, ...lines].join(
     '\n',
   );
+}
+
+// A refusal the server worded in one sentence: that sentence, whole.
+async function wordedRefusal(res: Response, prefix: string): Promise<string> {
+  const { text, body } = await readBody<{ error?: unknown }>(res);
+  return `${prefix} — ${typeof body.error === 'string' ? body.error : text.slice(0, 500)}`;
+}
+
+// A refusal that may carry `problems` (spec 52-3, the seal): the sentence,
+// then one problem per line with both sides; without problems, the sentence.
+async function problemsRefusal(res: Response, prefix: string): Promise<string> {
+  const { text, body } = await readBody<{ error?: unknown; problems?: unknown }>(res);
+  const head = `${prefix} — ${typeof body.error === 'string' ? body.error : text.slice(0, 500)}`;
+  if (!Array.isArray(body.problems)) return head;
+  const lines = (body.problems as KnowledgeProblem[]).map(
+    (problem) => `expected: ${String(problem.expected)}\n     got: ${String(problem.got)}`,
+  );
+  return [head, ...lines].join('\n');
 }
 
 // A refusal body as text and, when it is JSON, as an object; when it is not,

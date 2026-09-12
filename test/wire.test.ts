@@ -446,6 +446,94 @@ test('getSuites returns the two peer suite items', async () => {
   );
 });
 
+// Spec 52-3: the same answer carries the checks of every red feature; a server
+// older than the list sends none, which reads as an empty one.
+test('getSuiteIndex returns the peers and the feature suites, empty from an older server', async () => {
+  const item = { feature_id: 12, feature_tag: 'unitbob_feature_12', suite_digest: 'd', suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' } };
+  await withServer(
+    (_hit, res) => json(res, 200, { suites: [{ suite_kind: 'structural', status: 'ready' }, { suite_kind: 'behavioral', status: 'not_built' }], feature_suites: [item] }),
+    async (config) => {
+      const index = await new Wire(config).getSuiteIndex();
+      assert.deepEqual(index.feature_suites, [item]);
+      assert.equal(index.suites.length, 2);
+    },
+  );
+  await withServer(
+    (_hit, res) => json(res, 200, { suites: [{ suite_kind: 'structural', status: 'ready' }, { suite_kind: 'behavioral', status: 'not_built' }] }),
+    async (config) => {
+      assert.deepEqual((await new Wire(config).getSuiteIndex()).feature_suites, []);
+    },
+  );
+});
+
+test('getTestsPacket GETs /repos/:id/features/:id/tests_packet and relays a 409 in the server’s words', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { suite_kind: 'behavioral', feature: { feature_id: 12, title: 'Refunds', status: 'knowledge' }, feature_tag: 'unitbob_feature_12', main_suite: 'not_built' }),
+    async (config, hits) => {
+      const packet = await new Wire(config).getTestsPacket(12);
+      assert.equal(packet.feature_tag, 'unitbob_feature_12');
+      assert.equal(hits[0].url, '/repos/3/features/12/tests_packet');
+    },
+  );
+  await withServer(
+    (_hit, res) => json(res, 409, { error: 'Talk the feature through first — the checks are written from knowledge.md.' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).getTestsPacket(12),
+        (err: unknown) => err instanceof WireError && /Talk the feature through first/.test((err as Error).message),
+      );
+    },
+  );
+});
+
+test('putFeatureSuite PUTs the upload and returns the digest, the page and the sentence', async () => {
+  const upload = { suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' }, test_metadata: { capabilities: [] }, knowledge_digest: 'k' };
+  await withServer(
+    (_hit, res) => json(res, 200, { suite_digest: 'd', url: '/repos/3/features/12', message: 'Checks written for “Refunds”: 2 scenarios, all red, waiting for the code.' }),
+    async (config, hits) => {
+      const recorded = await new Wire(config).putFeatureSuite(12, upload);
+      assert.equal(recorded.suite_digest, 'd');
+      assert.equal(hits[0].method, 'PUT');
+      assert.equal(hits[0].url, '/repos/3/features/12/suite');
+      assert.deepEqual(JSON.parse(hits[0].body), upload);
+    },
+  );
+});
+
+test('putFeatureSuite relays a sealed 422 with one line per problem, both sides, and a 409 in words', async () => {
+  const upload = { suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' }, test_metadata: {}, knowledge_digest: 'k' };
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'The scenarios are sealed; to change them, talk the feature through again.', problems: [{ expected: 'Scenario "Two" from knowledge.md', got: 'no such scenario in the .feature' }] }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putFeatureSuite(12, upload),
+        (err: unknown) => {
+          const message = (err as Error).message;
+          return err instanceof WireError && /422 — The scenarios are sealed/.test(message) && /expected: Scenario "Two"/.test(message) && /got: no such scenario/.test(message);
+        },
+      );
+    },
+  );
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'Scenario "Two" already passes — either the behaviour exists or the check proves nothing; talk it through before publishing' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putFeatureSuite(12, upload),
+        (err: unknown) => err instanceof WireError && /already passes/.test((err as Error).message),
+      );
+    },
+  );
+  await withServer(
+    (_hit, res) => json(res, 409, { error: 'knowledge.md changed after the talk — upload it again with put-knowledge, then write the checks.' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putFeatureSuite(12, upload),
+        (err: unknown) => err instanceof WireError && /knowledge\.md changed after the talk/.test((err as Error).message),
+      );
+    },
+  );
+});
+
 test('postRunsBatch POSTs the runs and returns results + one map_url', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { results: [{ suite_kind: 'behavioral', status: 'ok', summary: 'ok' }], map_url: 'http://host/repos/3/map' }),

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { outputPath, writeSuiteBuildRequest, type SuiteBuildBranch } from '../src/files/suiteBuild.ts';
 import { runLocal } from '../src/verbs/runLocal.ts';
+import { writeTestsRequest, type TestsRequest } from '../src/files/features.ts';
 import type { RunnerResult } from '../src/runner/types.ts';
 import type { Config } from '../src/config.ts';
 
@@ -81,6 +82,25 @@ function project(answered: Record<string, unknown>[]): string {
   writeSuiteBuildRequest(projectRoot, branches());
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: answered }));
   return projectRoot;
+}
+
+function testsRequest(projectRoot: string, id: number): TestsRequest {
+  return {
+    project_root: projectRoot,
+    recipe: { name: 'feature_tests', version: 'v', text: 't' },
+    feature: { feature_id: id, title: 'Comments', status: 'knowledge' },
+    feature_tag: `unitbob_feature_${id}`,
+    assignment: { capabilities: [] },
+    scenarios: [],
+    knowledge_path: `.unitbob/features/${id}/knowledge.md`,
+    knowledge_digest: 'k',
+    runner: 'cucumber',
+    runner_manifest: { runner: 'cucumber' },
+    main_suite: 'not_built',
+    feature_path: `.unitbob/behavioral/features/feature_${id}.feature`,
+    steps_path: `.unitbob/behavioral/step_definitions/feature_${id}_steps.rb`,
+    output_path: `.unitbob/features/${id}/tests-output.json`,
+  };
 }
 
 function runnerResult(overrides: Partial<RunnerResult> = {}): RunnerResult {
@@ -570,3 +590,68 @@ test('a branch where everything failed is bounded, and says how much it left out
   // The ones that were printed are whole, not cut mid-failure.
   assert.match(printed, /1\. Checkout guards case number 0 of the whole branch/);
 });
+
+// Spec 52-3, AC 3.2 and 3.3. Without a flag, `run-local` leaves the feature
+// tags the build request names out of the behavioral run — it asks no server.
+// With `--feature <id>` it runs only that feature's tag, on the files as they
+// lie, with the runner of the feature's own request, and materialises nothing.
+test('run-local without a flag excludes the feature tags the build request carries', async () => {
+  const projectRoot = project([behavioralAnswer()]);
+  writeSuiteBuildRequest(projectRoot, branches(), { status: 'not_supplied' }, ['unitbob_feature_12']);
+  let filter: unknown = 'unset';
+
+  await runLocal(config(projectRoot), ['behavioral'], {
+    runBehavioral: async (_root, _runner, _main, f) => { filter = f; return runnerResult(); },
+    validateStack: () => okStack, stdout: collect().stdout,
+  });
+
+  assert.deepEqual(filter, { exclude: ['unitbob_feature_12'] });
+});
+
+test('run-local without a flag reads a request written before the tags existed as no exclusion', async () => {
+  const projectRoot = project([behavioralAnswer()]);
+  let filter: unknown = 'unset';
+
+  await runLocal(config(projectRoot), ['behavioral'], {
+    runBehavioral: async (_root, _runner, _main, f) => { filter = f; return runnerResult(); },
+    validateStack: () => okStack, stdout: collect().stdout,
+  });
+
+  assert.deepEqual(filter, { exclude: [] });
+});
+
+test('run-local --feature runs only that feature’s tag with its own runner, reading no build request', async () => {
+  const projectRoot = tmpProject();
+  mkdirSync(join(projectRoot, '.unitbob', 'behavioral', 'features'), { recursive: true });
+  writeTestsRequest(projectRoot, 12, testsRequest(projectRoot, 12));
+  const ran: string[] = [];
+  const { out, stdout } = collect();
+
+  const code = await runLocal(config(projectRoot), ['--feature', '12'], {
+    runBehavioral: async (_root, runner, mainPath, f) => { ran.push(`${runner}:${mainPath}:${JSON.stringify(f)}`); return runnerResult({ code: 1, report: RED_FEATURE }); },
+    runStructural: async () => { ran.push('structural'); return runnerResult(); },
+    validateStack: () => okStack, stdout,
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(ran, ['cucumber:.unitbob/behavioral/features/feature_12.feature:{"only":"unitbob_feature_12"}']);
+  assert.match(out.join(''), /── feature 12 ──/);
+  assert.match(out.join(''), /ran: bundle exec rspec/);
+  assert.match(out.join(''), /1 case failed/);
+});
+
+test('run-local --feature says what is missing when the feature was never prepared', async () => {
+  await assert.rejects(
+    () => runLocal(config(tmpProject()), ['--feature', '12'], { validateStack: () => okStack, stdout: collect().stdout }),
+    /tests-request\.json not found — run `npx unitbob tests-prepare 12` first/,
+  );
+});
+
+// One red scenario of the feature, as cucumber reports it.
+const RED_FEATURE = [
+  JSON.stringify({ pickle: { id: 'p1', name: 'A reader comments', tags: [{ name: '@ubc_0123456789ab' }, { name: '@unitbob_feature_12' }], steps: [] } }),
+  JSON.stringify({ testCase: { id: 'tc1', pickleId: 'p1', testSteps: [{ id: 'ts1' }] } }),
+  JSON.stringify({ testCaseStarted: { id: 'tcs1', testCaseId: 'tc1' } }),
+  JSON.stringify({ testStepFinished: { testCaseStartedId: 'tcs1', testStepId: 'ts1', testStepResult: { status: 'FAILED', message: 'no comment' } } }),
+  JSON.stringify({ testCaseFinished: { testCaseStartedId: 'tcs1' } }),
+].join('\n');

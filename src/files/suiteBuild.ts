@@ -48,6 +48,10 @@ export interface SuiteBuildRequest {
   output_path: string;
   branches: SuiteBuildBranch[];
   known_defect_context: KnownDefectContext;
+  // The tags of every red feature's checks at prepare time (spec 52-3, AC
+  // 3.2): the behavioral run of this build leaves them out, and asks no server
+  // to learn them. Empty on a request written before the field existed.
+  exclude_feature_tags: string[];
 }
 
 export type KnownDefectContext =
@@ -527,12 +531,14 @@ export function writeSuiteBuildRequest(
   projectRoot: string,
   branches: SuiteBuildBranch[],
   knownDefectContext: KnownDefectContext = { status: 'not_supplied' },
+  excludeFeatureTags: string[] = [],
 ): SuiteBuildRequest {
   const request: SuiteBuildRequest = {
     project_root: projectRoot,
     output_path: outputPath(projectRoot),
     branches,
     known_defect_context: knownDefectContext,
+    exclude_feature_tags: excludeFeatureTags,
   };
 
   const path = requestPath(projectRoot);
@@ -585,6 +591,9 @@ export function readSuiteBuildRequest(projectRoot: string): SuiteBuildRequest {
   return {
     ...(request as unknown as SuiteBuildRequest),
     known_defect_context: readKnownDefectContext(request.known_defect_context, path),
+    exclude_feature_tags: Array.isArray(request.exclude_feature_tags)
+      ? request.exclude_feature_tags.filter((tag): tag is string => typeof tag === 'string')
+      : [],
   };
 }
 
@@ -728,7 +737,10 @@ interface EnvelopeFile {
 // file already under that path is the answer". Re-serializing a whole suite into
 // this JSON on every rebuild was the single largest cost in the build loop, and
 // the copy was never more trustworthy than the file that was actually executed.
-function resolveSuiteFile(
+//
+// Exported for a feature's answer (spec 52-3), which is one branch of the same
+// shape read from its own file.
+export function resolveSuiteFile(
   file: unknown,
   root: string,
   path: string,

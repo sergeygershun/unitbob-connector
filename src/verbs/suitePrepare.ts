@@ -35,11 +35,14 @@ import { ensureRunner, ensureStructuralRunner, type ProvisionResult } from '../r
 import { ToolchainUnavailableError } from '../runner/toolchain.ts';
 import { canPrepareBeforeImports, setupFileOf, STRUCTURAL_SETUP_FILE } from '../runner/vitest.ts';
 import { probeBehavioralWorld, type WorldProbeResult } from '../runner/worldProbe.ts';
-import { Wire, type Recipe, type SuitePacket } from '../wire.ts';
+import { Wire, type Recipe, type SuiteIndex, type SuitePacket } from '../wire.ts';
 
 interface SuitePrepareDeps {
   getRecipe: (name: string) => Promise<Recipe>;
   getSuitePacketsBatch: () => Promise<SuitePacket[]>;
+  // The checks of every red feature (spec 52-3): their tags go into the
+  // request, so the runs this build makes leave them out.
+  getSuiteIndex: () => Promise<SuiteIndex>;
   precheck: (projectRoot: string) => { ok: boolean; message?: string; runner?: string };
   confirmRunner: (projectRoot: string, runner: string) => { ok: boolean; message?: string };
   bootCheck: (projectRoot: string, runner: string | null, sourceFiles: string[]) => Promise<BootCheck>;
@@ -108,6 +111,7 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
   const actual: SuitePrepareDeps = {
     getRecipe: (name) => wire.getRecipe(name),
     getSuitePacketsBatch: () => wire.getSuitePacketsBatch(),
+    getSuiteIndex: () => wire.getSuiteIndex(),
     precheck: anyStackPrecheck,
     confirmRunner: (projectRoot, runner) => runnerReadyPrecheck(projectRoot, runner),
     bootCheck: (projectRoot, runner, sourceFiles) => bootCheck(projectRoot, runner, sourceFiles),
@@ -377,7 +381,8 @@ export async function suitePrepare(config: Config, args: string[] = [], deps?: P
     );
   }
 
-  const request = writeSuiteBuildRequest(config.projectRoot, branches, defectContext);
+  const excludeFeatureTags = (await actual.getSuiteIndex()).feature_suites.map((item) => item.feature_tag);
+  const request = writeSuiteBuildRequest(config.projectRoot, branches, defectContext, excludeFeatureTags);
 
   // Spec 37-1. The assignment names entrypoints; the packets are the files
   // behind them, resolved from this machine's own graph and copied where a

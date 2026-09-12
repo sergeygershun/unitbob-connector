@@ -1,17 +1,17 @@
 import type { Config } from '../config.ts';
 import { materializeGuardrails } from '../files/guardrails.ts';
-import { materializeBehavioral } from '../files/behavioral.ts';
+import { materializeBehavioralUnion } from '../files/behavioral.ts';
 import { placeProblem } from '../runner/place.ts';
 import { runnerEnvironmentPlaceProblem } from '../runner/placeEnvironment.ts';
 import { validateStack, type PrecheckResult } from '../runner/precheck.ts';
 import { runRspecSuite } from '../runner/rspec.ts';
 import { runVitestSuite, testPathsOf } from '../runner/vitest.ts';
 import { runPytestSuite } from '../runner/pytest.ts';
-import { runBddSuite } from '../runner/bdd.ts';
+import { runBddSuite, type TagFilter } from '../runner/bdd.ts';
 import type { RunnerResult } from '../runner/types.ts';
 import { enterUrl } from '../links.ts';
 import { boundReport } from '../runner/boundReport.ts';
-import { Wire, type RunResultItem, type SuiteArtifact, type SuiteListItem } from '../wire.ts';
+import { Wire, type RunResultItem, type SuiteArtifact, type SuiteIndex, type SuiteListItem } from '../wire.ts';
 
 const OUTPUT_TAIL_CHARS = 2000;
 
@@ -25,13 +25,18 @@ const OUTPUT_TAIL_CHARS = 2000;
 // Two entry points share all of that and differ only in which suites they select:
 // `run` takes every ready peer, and `runOnly` takes exactly the identities
 // `put-suite-build` just published (spec 32-4).
+//
+// The checks of every red feature (spec 52-3) come down in the same index and
+// go onto the disk in the same pass as the main suite, as one union; the main
+// suite then runs with their tags excluded. `check` does not run them — that
+// is 52-4's — so the map never sees a scenario of a feature not built.
 interface Deps {
-  getSuites: () => Promise<SuiteListItem[]>;
+  getSuiteIndex: () => Promise<SuiteIndex>;
   postRunsBatch: (runs: unknown[]) => Promise<{ results: RunResultItem[]; map_url: string }>;
   materializeStructural: (projectRoot: string, item: SuiteListItem) => void;
-  materializeBehavioral: (projectRoot: string, item: SuiteListItem) => string;
+  materializeBehavioral: (projectRoot: string, index: SuiteIndex) => { mainPath: string; excludeTags: string[] };
   runStructural: (projectRoot: string, runner: string, suitePaths: string[]) => Promise<RunnerResult>;
-  runBehavioral: (projectRoot: string, runner: string, mainPath: string) => Promise<RunnerResult>;
+  runBehavioral: (projectRoot: string, runner: string, mainPath: string, filter?: TagFilter) => Promise<RunnerResult>;
   validateStack: (projectRoot: string, runner: string) => PrecheckResult;
   stdout: { write: (chunk: string) => unknown };
 }
@@ -54,7 +59,7 @@ export async function runOnly(config: Config, digests: string[], deps?: Partial<
 function resolve(config: Config, deps?: Partial<Deps>): Deps {
   const wire = new Wire(config);
   return {
-    getSuites: () => wire.getSuites(),
+    getSuiteIndex: () => wire.getSuiteIndex(),
     postRunsBatch: (runs) => wire.postRunsBatch(runs),
     // The whole envelope, support files and all: a branch is a set of files
     // since spec one-place-per-rule, §6, and picking `path` and `content` out of it here was
@@ -65,8 +70,12 @@ function resolve(config: Config, deps?: Partial<Deps>): Deps {
         suite_file: item.suite_file!,
         runner_manifest: item.runner_manifest!,
       }),
-    materializeBehavioral: (projectRoot, item) =>
-      materializeBehavioral(projectRoot, item.suite_file!, item.runner_manifest!.runner).mainPath,
+    // The union is never empty here: the caller only asks once the behavioral
+    // peer is ready, so the main suite is in it.
+    materializeBehavioral: (projectRoot, index) => {
+      const main = index.suites.find((item) => item.suite_kind === 'behavioral')!;
+      return materializeBehavioralUnion(projectRoot, index, main.runner_manifest!.runner)!;
+    },
     runStructural: runStructuralByRunner,
     runBehavioral: runBddSuite,
     validateStack,
@@ -82,8 +91,8 @@ async function execute(config: Config, d: Deps, only: string[] | null): Promise<
   const unusable = placeProblem(config.projectRoot) ?? runnerEnvironmentPlaceProblem(config.projectRoot);
   if (unusable) throw new Error(`${unusable}\nNothing was run and no results were filed.`);
 
-  const suites = await d.getSuites();
-  const ready = suites.filter((item) => item.status === 'ready');
+  const index = await d.getSuiteIndex();
+  const ready = index.suites.filter((item) => item.status === 'ready');
   const selected = only === null ? ready : select(ready, only);
 
   if (selected.length === 0) {
@@ -93,7 +102,7 @@ async function execute(config: Config, d: Deps, only: string[] | null): Promise<
 
   const runs: unknown[] = [];
   for (const item of selected) {
-    runs.push(await buildRunPayload(config, d, item));
+    runs.push(await buildRunPayload(config, d, item, index));
   }
 
   const { results, map_url } = await d.postRunsBatch(runs);
@@ -127,7 +136,7 @@ function select(ready: SuiteListItem[], wanted: string[]): SuiteListItem[] {
 // that produced no report all become this branch's structured suite error — the
 // peer branch is unaffected. This connector never installs anything: a missing
 // or broken runner surfaces here as a suite error, not an install.
-async function buildRunPayload(config: Config, d: Deps, item: SuiteListItem): Promise<unknown> {
+async function buildRunPayload(config: Config, d: Deps, item: SuiteListItem, index: SuiteIndex): Promise<unknown> {
   const runner = item.runner_manifest!.runner;
   const behavioral = item.suite_kind === 'behavioral';
 
@@ -142,8 +151,8 @@ async function buildRunPayload(config: Config, d: Deps, item: SuiteListItem): Pr
   let result: RunnerResult;
   try {
     if (behavioral) {
-      const mainPath = d.materializeBehavioral(config.projectRoot, item);
-      result = await d.runBehavioral(config.projectRoot, runner, mainPath);
+      const { mainPath, excludeTags } = d.materializeBehavioral(config.projectRoot, index);
+      result = await d.runBehavioral(config.projectRoot, runner, mainPath, { exclude: excludeTags });
     } else {
       d.materializeStructural(config.projectRoot, item);
       result = await d.runStructural(config.projectRoot, runner, artifactPaths(item.suite_file!));

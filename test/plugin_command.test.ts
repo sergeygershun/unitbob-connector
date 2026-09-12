@@ -26,7 +26,7 @@ const connectorVersion = JSON.parse(readFileSync(packageJsonPath, 'utf8')).versi
 const unitbob = `npx -y --loglevel=error unitbob@${connectorVersion}`;
 const unitbobPattern = unitbob.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const WORKFLOWS = ['map', 'suite', 'check', 'show', 'fix', 'feature', 'knowledge'];
+const WORKFLOWS = ['map', 'suite', 'check', 'show', 'fix', 'feature', 'knowledge', 'tests'];
 
 test('the skill can run every workflow without a slash command', () => {
   for (const name of WORKFLOWS) {
@@ -47,7 +47,7 @@ test('no workflow sends anyone to a slash command', () => {
   for (const name of WORKFLOWS) {
     assert.doesNotMatch(
       workflow(name),
-      /\/unitbob[: ](map|suite|check|show|fix|feature|knowledge)\b/,
+      /\/unitbob[: ](map|suite|check|show|fix|feature|knowledge|tests)\b/,
       `${name}.md must point at a sibling workflow or ask in plain words`,
     );
   }
@@ -232,4 +232,25 @@ test('the knowledge workflow finds the feature, asks by the recipe, and uploads 
   assert.match(text, /not.*start implementing/i);
   assert.match(text, /expected:.*got:/);
   assert.match(skill, /Talk a feature through/);
+  // Spec 52-3: it does not end on the link — it offers the checks, once.
+  assert.match(text, /write\s+the\s+checks\s+now/i);
+  assert.match(text, /workflows\/tests\.md/);
+});
+
+// Spec 52-3. The tests workflow writes wiring around sealed text, iterates on
+// the feature's own local run until every scenario is red, and lets put-tests
+// take the run that proves it. No code, no reviewer.
+test('the tests workflow prepares, writes the wiring, runs the feature alone, and uploads', () => {
+  const text = workflow('tests');
+
+  assert.match(text, new RegExp(`${unitbobPattern} tests-prepare <id>`));
+  assert.match(text, new RegExp(`${unitbobPattern} run-local --feature <id>`));
+  assert.match(text, new RegExp(`${unitbobPattern} put-tests <id>`));
+  assert.match(text, /tests-request\.json/);
+  assert.match(text, /tests-output\.json/);
+  assert.match(text, /word for word/i);
+  assert.match(text, /every scenario fails/i);
+  assert.match(text, /not.*implement/i);
+  assert.match(text, /expected:.*got:/);
+  assert.match(skill, /Write the checks for a feature/);
 });

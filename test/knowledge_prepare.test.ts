@@ -40,12 +40,14 @@ test('knowledge-prepare without an argument lists the features that can be talke
     listFeatures: listOf([
       { feature_id: 12, title: 'Refunds', status: 'intent', created_at: 'x' },
       { feature_id: 11, title: 'Comments', status: 'knowledge', created_at: 'x' },
+      { feature_id: 10, title: 'Likes', status: 'red', created_at: 'x' },
+      { feature_id: 9, title: 'Done thing', status: 'done', created_at: 'x' },
       { feature_id: 10, title: 'Old one', status: 'done', created_at: 'x' },
     ]),
     stdout: { write: (chunk) => out.push(String(chunk)) },
   });
 
-  assert.equal(out.join(''), '12  Refunds (intent)\n11  Comments (knowledge)\n');
+  assert.equal(out.join(''), '12  Refunds (intent)\n11  Comments (knowledge)\n10  Likes (red)\n');
   assert.equal(existsSync(join(projectRoot, '.unitbob', 'features')), false);
 });
 

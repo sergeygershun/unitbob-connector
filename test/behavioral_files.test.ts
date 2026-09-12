@@ -10,8 +10,9 @@ import {
   behavioralWorldFor,
   filesLostOnMaterialize,
   materializeBehavioral,
+  materializeBehavioralUnion,
 } from '../src/files/behavioral.ts';
-import type { SuiteArtifact } from '../src/wire.ts';
+import type { FeatureSuiteItem, SuiteArtifact, SuiteIndex } from '../src/wire.ts';
 
 function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'unitbob-behavioral-'));
@@ -285,4 +286,88 @@ test('the harness is restored for every runner that has one, and never supplied 
     // And it is never reported to the user as a file of theirs about to be lost.
     assert.equal(filesLostOnMaterialize(projectRoot, artifact(), runner).includes(world.path), false, runner);
   }
+});
+
+// Spec 52-3, AC 3.1. A feature's checks are materialised beside the main
+// suite, as one union: one clearing, then every artifact's files; what is in
+// none of them is gone.
+function checks(id: number): SuiteArtifact {
+  return {
+    path: `.unitbob/behavioral/features/feature_${id}.feature`,
+    content: `Feature: feature ${id}\n`,
+    support_files: [{ path: `.unitbob/behavioral/step_definitions/feature_${id}_steps.rb`, content: `# ${id}\n` }],
+  };
+}
+
+function featureSuite(id: number): FeatureSuiteItem {
+  return { feature_id: id, feature_tag: `unitbob_feature_${id}`, suite_digest: `d${id}`, suite_file: checks(id), runner_manifest: { runner: 'cucumber' } };
+}
+
+test('materializes the main artifact and every extra in one pass, clearing once', () => {
+  const projectRoot = tmpProject();
+  const stale = join(projectRoot, BEHAVIORAL_DIR, 'features', 'stale.feature');
+  mkdirSync(join(projectRoot, BEHAVIORAL_DIR, 'features'), { recursive: true });
+  writeFileSync(stale, 'Feature: stale\n');
+
+  const { mainPath } = materializeBehavioral(projectRoot, artifact(), 'cucumber', [checks(12), checks(15)]);
+
+  assert.ok(mainPath.endsWith('surface_contracts.feature'));
+  assert.ok(existsSync(join(projectRoot, BEHAVIORAL_DIR, 'step_definitions', 'surface_steps.rb')));
+  assert.equal(readFileSync(join(projectRoot, BEHAVIORAL_DIR, 'features', 'feature_12.feature'), 'utf8'), 'Feature: feature 12\n');
+  assert.equal(readFileSync(join(projectRoot, BEHAVIORAL_DIR, 'step_definitions', 'feature_15_steps.rb'), 'utf8'), '# 15\n');
+  assert.ok(!existsSync(stale), 'what no artifact lists is gone');
+});
+
+test('refuses a path two artifacts of the union both hold, naming it, before writing anything', () => {
+  const projectRoot = tmpProject();
+  const clash = checks(12);
+  clash.support_files = [{ path: '.unitbob/behavioral/step_definitions/surface_steps.rb', content: 'x' }];
+
+  assert.throws(() => materializeBehavioral(projectRoot, artifact(), 'cucumber', [clash]), /surface_steps\.rb.*twice/);
+  assert.ok(!existsSync(join(projectRoot, BEHAVIORAL_DIR, 'features', 'surface_contracts.feature')));
+});
+
+test('the lost-file warning counts the extras as listed', () => {
+  const projectRoot = tmpProject();
+  materializeBehavioral(projectRoot, artifact(), 'cucumber', [checks(12)]);
+
+  assert.deepEqual(filesLostOnMaterialize(projectRoot, artifact(), 'cucumber', [checks(12)]), []);
+  assert.deepEqual(filesLostOnMaterialize(projectRoot, artifact(), 'cucumber'), [
+    '.unitbob/behavioral/features/feature_12.feature',
+    '.unitbob/behavioral/step_definitions/feature_12_steps.rb',
+  ]);
+});
+
+test('the union of a ready main suite and the feature suites runs the main file and excludes every feature tag', () => {
+  const projectRoot = tmpProject();
+  const index: SuiteIndex = {
+    suites: [{ suite_kind: 'structural', status: 'not_built' }, { suite_kind: 'behavioral', status: 'ready', suite_digest: 'm', suite_file: artifact(), runner_manifest: { runner: 'cucumber' } }],
+    feature_suites: [featureSuite(12), featureSuite(15)],
+  };
+
+  const union = materializeBehavioralUnion(projectRoot, index, 'cucumber');
+
+  assert.ok(union);
+  assert.ok(union.mainPath.endsWith('surface_contracts.feature'));
+  assert.deepEqual(union.excludeTags, ['unitbob_feature_12', 'unitbob_feature_15']);
+  assert.ok(existsSync(join(projectRoot, BEHAVIORAL_DIR, 'features', 'feature_15.feature')));
+});
+
+test('the union of feature suites alone is legal: the first is the main file', () => {
+  const projectRoot = tmpProject();
+  const index: SuiteIndex = { suites: [{ suite_kind: 'behavioral', status: 'not_built' }], feature_suites: [featureSuite(12)] };
+
+  const union = materializeBehavioralUnion(projectRoot, index, 'cucumber');
+
+  assert.ok(union);
+  assert.ok(union.mainPath.endsWith('feature_12.feature'));
+  assert.deepEqual(union.excludeTags, ['unitbob_feature_12']);
+});
+
+test('the union of nothing materializes nothing', () => {
+  const projectRoot = tmpProject();
+  const index: SuiteIndex = { suites: [{ suite_kind: 'behavioral', status: 'not_built' }], feature_suites: [] };
+
+  assert.equal(materializeBehavioralUnion(projectRoot, index, 'cucumber'), null);
+  assert.ok(!existsSync(join(projectRoot, BEHAVIORAL_DIR, 'features')));
 });

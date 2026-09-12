@@ -45,6 +45,12 @@ const ALLOWED_BY_FILE: Record<string, RegExp[]> = {
   [join('verbs', 'run.ts')]: [/manifest/i],
   [join('verbs', 'suitePrepare.ts')]: [/manifest/i],
   [join('verbs', 'validateBuild.ts')]: [/manifest/i],
+  // Spec 52-3. A feature's checks travel in the same envelope: `tests-prepare`
+  // selects it and adds the installed version exactly as `suite-prepare` does,
+  // `put-tests` relays it, and the request file stores it. Transport, as above.
+  [join('files', 'features.ts')]: [/manifest/i],
+  [join('verbs', 'testsPrepare.ts')]: [/manifest/i],
+  [join('verbs', 'putTests.ts')]: [/manifest/i],
 
   // a2time, 2026-08-17. `validate-worker-checkpoints` gates the shape of a local
   // scratch file that passes from a worker to the coordinator, and that file now

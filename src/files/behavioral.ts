@@ -2,7 +2,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFil
 import { dirname, join } from 'node:path';
 import { assertUnitbobPath } from './artifactPath.ts';
 import { BDD_RUN_ARTIFACTS } from '../runner/bdd.ts';
-import type { SuiteArtifact } from '../wire.ts';
+import type { SuiteArtifact, SuiteIndex } from '../wire.ts';
 
 // The behavioral suite lives under its own root: the main `.feature` plus its
 // step definitions and any helper files, all under `.unitbob/behavioral/`
@@ -304,16 +304,30 @@ export function materializeBehavioralWorld(projectRoot: string, runner = 'cucumb
 // behavioral root, after checking every path is safe. Stale suite artifacts are
 // removed while the separately provisioned runner environment is preserved.
 // Returns the absolute path of the materialized main file.
+//
+// `extras` are further envelopes written in the same pass (spec 52-3, AC 3.1):
+// the checks of every red feature, beside the main suite. One clearing, then
+// every file of every envelope; a path two envelopes both hold is refused by
+// name before anything is written — the server does not issue such a union,
+// and the disk could not carry it if it did.
 export function materializeBehavioral(
   projectRoot: string,
   artifact: SuiteArtifact,
   runner: string,
+  extras: readonly SuiteArtifact[] = [],
 ): { mainPath: string } {
-  const files = [artifact, ...(artifact.support_files ?? [])];
+  const files = [artifact, ...extras].flatMap((envelope) => [envelope, ...(envelope.support_files ?? [])]);
   for (const file of files) assertUnitbobPath(file.path, BEHAVIORAL_DIR);
   const world = behavioralWorldFor(runner);
   if (world && files.some((file) => file.path === world.path)) {
     throw new Error(`${world.path} is the connector-owned World and cannot be supplied by the host artifact.`);
+  }
+  const seen = new Set<string>();
+  for (const file of files) {
+    if (seen.has(file.path)) {
+      throw new Error(`${file.path} is listed twice across the suites to materialize — one path, one file.`);
+    }
+    seen.add(file.path);
   }
 
   const behavioralRoot = join(projectRoot, BEHAVIORAL_DIR);
@@ -338,6 +352,25 @@ export function materializeBehavioral(
   return { mainPath };
 }
 
+// The main suite and the checks of every red feature, as one union on disk
+// (spec 52-3, AC 3.1), and the tags the ordinary run leaves out (3.2). The
+// main file is the main suite's when it is built, else the first feature's —
+// a union of checks alone, on a machine where the main suite is not built, is
+// legal. Null when there is nothing at all to write.
+export function materializeBehavioralUnion(
+  projectRoot: string,
+  index: SuiteIndex,
+  runner: string,
+): { mainPath: string; excludeTags: string[] } | null {
+  const main = index.suites.find((item) => item.suite_kind === 'behavioral' && item.status === 'ready' && item.suite_file);
+  const envelopes = [...(main?.suite_file ? [main.suite_file] : []), ...index.feature_suites.map((item) => item.suite_file)];
+  if (envelopes.length === 0) return null;
+
+  const [first, ...rest] = envelopes;
+  const { mainPath } = materializeBehavioral(projectRoot, first, runner, rest);
+  return { mainPath, excludeTags: index.feature_suites.map((item) => item.feature_tag) };
+}
+
 // Everything under the behavioral root that the next materialization will
 // delete: it wipes every top-level entry outside the runner environment and
 // writes back only the files the answer listed, so a step file the answer forgot
@@ -348,11 +381,18 @@ export function materializeBehavioral(
 // The whole root is walked, not just the directories the answer happens to use:
 // the file most likely to be forgotten is the one in a directory the answer
 // never mentions — `features/support/env.rb` is exactly that shape.
-export function filesLostOnMaterialize(projectRoot: string, artifact: SuiteArtifact, runner: string): string[] {
+export function filesLostOnMaterialize(
+  projectRoot: string,
+  artifact: SuiteArtifact,
+  runner: string,
+  extras: readonly SuiteArtifact[] = [],
+): string[] {
   const behavioralRoot = join(projectRoot, BEHAVIORAL_DIR);
   if (!existsSync(behavioralRoot)) return [];
 
-  const listed = new Set([artifact.path, ...(artifact.support_files ?? []).map((file) => file.path)]);
+  const listed = new Set(
+    [artifact, ...extras].flatMap((envelope) => [envelope.path, ...(envelope.support_files ?? []).map((file) => file.path)]),
+  );
   const kept = behavioralKeptByConnector(runner);
 
   return readdirSync(behavioralRoot)

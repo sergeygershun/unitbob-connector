@@ -19,7 +19,8 @@ import { placeProblem } from '../runner/place.ts';
 import { placeAdvice } from '../runner/placeAdvice.ts';
 import { runnerEnvironmentPlaceProblem } from '../runner/placeEnvironment.ts';
 import { validateStack } from '../runner/precheck.ts';
-import { runBddSuite } from '../runner/bdd.ts';
+import { runBddSuite, type TagFilter } from '../runner/bdd.ts';
+import { parseFeatureId, readTestsRequest } from '../files/features.ts';
 import { testPathsOf } from '../runner/vitest.ts';
 import { runStructuralByRunner } from './run.ts';
 import type { RunnerResult } from '../runner/types.ts';
@@ -48,9 +49,15 @@ const OUTPUT_TAIL_CHARS = 4000;
 // exit code, where the machine-readable report landed, and the tail of what the
 // process said. Joining results to the map stays the server's job — this exists
 // so that when the recipe says "iterate", there is something to iterate on.
+//
+// `--feature <id>` (spec 52-3, AC 3.3) runs one feature's checks the same way:
+// only the scenarios carrying its tag, with the runner its request names, on
+// the files as they lie. Without the flag the behavioral branch leaves every
+// red feature's tag out, as the build request recorded them (3.2) — this verb
+// asks no server either way.
 export interface RunLocalDeps {
   runStructural: (projectRoot: string, runner: string, suitePaths: string[]) => Promise<RunnerResult>;
-  runBehavioral: (projectRoot: string, runner: string, mainPath: string) => Promise<RunnerResult>;
+  runBehavioral: (projectRoot: string, runner: string, mainPath: string, filter?: TagFilter) => Promise<RunnerResult>;
   validateStack: typeof validateStack;
   stdout: { write: (chunk: string) => unknown };
 }
@@ -75,6 +82,11 @@ export async function runLocal(
   const unusable = placeProblem(config.projectRoot) ?? runnerEnvironmentPlaceProblem(config.projectRoot);
   if (unusable) throw new Error(unusable);
 
+  const featureFlag = args.indexOf('--feature');
+  if (featureFlag !== -1) {
+    return runFeature(config, d, parseFeatureId(args[featureFlag + 1], 'run-local --feature'));
+  }
+
   const request = readSuiteBuildRequest(config.projectRoot);
   const { outputs, unreadable } = readHostSuiteOutputsPerBranch(request.output_path, request);
   const wanted = selectBranches(request, args);
@@ -94,7 +106,8 @@ export async function runLocal(
       continue;
     }
 
-    const ran = await runOneBranch(config, d, suiteKind, outputs.find((entry) => entry.suite_kind === suiteKind));
+    const ran = await runOneBranch(config, d, suiteKind, outputs.find((entry) => entry.suite_kind === suiteKind),
+                                   { exclude: request.exclude_feature_tags });
 
     // A branch with no entry written yet, or one the stack cannot execute,
     // produced nothing to compare: it is the ordinary state halfway through a
@@ -104,6 +117,34 @@ export async function runLocal(
   }
 
   return stuck ? 1 : 0;
+}
+
+// One feature's checks, by their tag (spec 52-3, AC 3.3). No stall comparison:
+// the loop here ends on "every scenario red", which the person reads off the
+// failures printed, and the server's proof of red is the connector's own run
+// in `put-tests`, not this one.
+async function runFeature(config: Config, d: RunLocalDeps, featureId: number): Promise<number> {
+  const request = readTestsRequest(config.projectRoot, featureId);
+  d.stdout.write(`\n── feature ${featureId} ──\n`);
+
+  const check = d.validateStack(config.projectRoot, request.runner);
+  if (!check.ok) {
+    d.stdout.write(`Cannot run the checks: ${check.message ?? `this project does not match "${request.runner}".`}\n`);
+    return 1;
+  }
+
+  let result: RunnerResult;
+  try {
+    result = await d.runBehavioral(config.projectRoot, request.runner, request.feature_path, { only: request.feature_tag });
+  } catch (err) {
+    const advice = placeAdvice(config.projectRoot);
+    d.stdout.write(`The runner could not start: ${(err as Error).message}\n${advice ? `\n${advice}\n` : ''}`);
+    return 1;
+  }
+
+  d.stdout.write(report(result));
+  d.stdout.write(failureLines(request.runner, result));
+  return 0;
 }
 
 // Spec 34-6, criterion 3. The whole stop condition, and it stops the branch
@@ -178,6 +219,7 @@ async function runOneBranch(
   d: RunLocalDeps,
   suiteKind: string,
   output: HostBranchOutput | undefined,
+  filter: TagFilter,
 ): Promise<BranchRun | null> {
   // Nothing written for this branch yet. That is the ordinary state halfway
   // through a build, not an error — say what is missing and move to the peer.
@@ -214,7 +256,7 @@ async function runOneBranch(
   try {
     result =
       suiteKind === 'behavioral'
-        ? await d.runBehavioral(config.projectRoot, runner, suitePaths[0])
+        ? await d.runBehavioral(config.projectRoot, runner, suitePaths[0], filter)
         : await d.runStructural(config.projectRoot, runner, suitePaths);
   } catch (err) {
     // The second and last dead end (spec 36, §7.1). This one does not throw —

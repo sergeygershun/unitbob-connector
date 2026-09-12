@@ -10,8 +10,9 @@ interface KnowledgePrepareDeps {
 }
 
 // The statuses a feature can be talked through in: not yet talked through,
-// or talked through and open to a second talk (spec 52-2, AC 2.1).
-const TALKABLE = new Set(['intent', 'knowledge']);
+// talked through and open to a second talk (spec 52-2, AC 2.1), or its checks
+// written — a talk then withdraws them, out loud (spec 52-3, AC 2.9).
+const TALKABLE = new Set(['intent', 'knowledge', 'red']);
 
 // Two forms (spec 52-2, AC 2.1). Without an id, the list: one line per feature
 // the talk can start on, so the host finds the one the person means by its

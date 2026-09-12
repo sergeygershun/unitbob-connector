@@ -32,6 +32,16 @@ test('--help exposes knowledge-prepare and put-knowledge (spec 52-2)', () => {
   assert.match(text, /put-knowledge\s+Internal: send the feature's knowledge\.md/);
 });
 
+// Spec 52-3: the pair that writes a feature's checks, and the feature flag
+// of run-local that runs them alone.
+test('--help exposes tests-prepare, put-tests and run-local --feature (spec 52-3)', () => {
+  const text = help();
+
+  assert.match(text, /tests-prepare <id>\s+Internal: fetch the feature's assignment and the recipe/);
+  assert.match(text, /put-tests <id>\s+Internal: run the feature's checks, send them with that run as the proof/);
+  assert.match(text, /run-local \[branch\] \| --feature <id>/);
+});
+
 // Spec 52-1: the pair that records an intent before the change is made.
 test('--help exposes feature-prepare and put-feature', () => {
   const text = help();

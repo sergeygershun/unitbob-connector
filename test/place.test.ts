@@ -283,7 +283,7 @@ test('a command that installs nothing refuses an environment built somewhere els
   let asked = false;
   await assert.rejects(
     () => run({ server: 'https://host', repoId: 1, projectRoot }, [], {
-      getSuites: async () => { asked = true; return []; },
+      getSuiteIndex: async () => { asked = true; return { suites: [], feature_suites: [] }; },
       stdout: { write: () => true },
     }),
     /built for this machine.*suite-prepare/s,

@@ -7,6 +7,13 @@
 //
 // It only records — it never reconciles markers or aggregates capabilities. It
 // is connector-owned and never part of the LLM-generated step definitions.
+//
+// A step with no definition is recorded too (spec 52-3, AC 3.7): pytest-bdd
+// calls `pytest_bdd_step_func_lookup_error` for it and never `after_step`, so
+// without this hook the scenario went into the report as `passed` with no
+// steps — and a feature's checks, which have to prove they are red, could
+// have passed that proof on wiring nobody wrote. The server's parser refuses
+// an `undefined` step as a broken suite, which is the honest answer.
 export const PYTEST_BDD_PLUGIN = `# Written by the unitbob connector — do not edit.
 import json
 import os
@@ -60,6 +67,14 @@ def pytest_bdd_step_error(request, feature, scenario, step, step_func, step_func
         entry["status"] = "failed"
         entry["failure"] = "{}: {}".format(type(exception).__name__, exception)
     _record_step(scenario, step, "failed")
+
+
+def pytest_bdd_step_func_lookup_error(request, feature, scenario, step, exception):
+    entry = _UNITBOB_CURRENT.get(id(scenario))
+    if entry is not None:
+        entry["status"] = "failed"
+        entry["failure"] = "{}: {}".format(type(exception).__name__, exception)
+    _record_step(scenario, step, "undefined")
 
 
 def pytest_bdd_after_scenario(request, feature, scenario):
