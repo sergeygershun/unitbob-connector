@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { run, runOnly } from '../src/verbs/run.ts';
-import { materializeBehavioral } from '../src/files/behavioral.ts';
+import { FeatureFilesChangedError, materializeBehavioralUnion } from '../src/files/behavioral.ts';
 import { runBddSuite } from '../src/runner/bdd.ts';
 import type { Config } from '../src/config.ts';
 import type { RunnerResult } from '../src/runner/types.ts';
@@ -63,7 +63,7 @@ function batchDeps(over: Partial<RunDeps> = {}): Partial<RunDeps> {
   return {
     postRunsBatch: async () => ({ results: [], map_url: 'https://host/repos/3/map' }),
     materializeStructural: () => {},
-    materializeBehavioral: () => '.unitbob/behavioral/features/surface_contracts.feature',
+    materializeBehavioral: () => ({ mainPath: '.unitbob/behavioral/features/surface_contracts.feature', excludeTags: [] }),
     runStructural: async () => runnerResult({ report: '{"examples":[]}' }),
     runBehavioral: async () => runnerResult({ report: '{"testCaseStarted":{}}\n' }),
     validateStack: okStack,
@@ -77,10 +77,10 @@ test('no ready suites prints a no-suite message and runs nothing', async () => {
   let output = '';
 
   await run(config(tmpProject()), [], batchDeps({
-    getSuites: async () => [
+    getSuiteIndex: async () => ({ suites: [
       { suite_kind: 'structural', status: 'not_built' },
       { suite_kind: 'behavioral', status: 'not_built' },
-    ],
+    ], feature_suites: [] }),
     runStructural: async () => { ran = true; return runnerResult({}); },
     stdout: { write: (chunk: string) => { output += chunk; return true; } },
   }));
@@ -96,9 +96,9 @@ test('runs both peer suites and ships one batch of two run_results', async () =>
   let output = '';
 
   await run(config(projectRoot), [], batchDeps({
-    getSuites: async () => [structuralSuite(), behavioralSuite()],
+    getSuiteIndex: async () => ({ suites: [structuralSuite(), behavioralSuite()], feature_suites: [] }),
     materializeStructural: (_root, item) => { calls.push(`mat-struct:${item.suite_kind}`); },
-    materializeBehavioral: (_root, item) => { calls.push(`mat-behav:${item.suite_kind}`); return 'main.feature'; },
+    materializeBehavioral: (_root, index) => { calls.push(`mat-behav:${index.suites[1].suite_kind}`); return { mainPath: 'main.feature', excludeTags: [] }; },
     runStructural: async () => runnerResult({ report: '{"examples":[]}' }),
     runBehavioral: async () =>
       runnerResult({ report: '{"testCaseStarted":{}}\n', resultPath: '.unitbob/behavioral/cucumber_messages.ndjson' }),
@@ -141,7 +141,7 @@ test('the shared setup file comes back with the branch but is never run as a tes
   ];
 
   await run(config(tmpProject()), [], batchDeps({
-    getSuites: async () => [published],
+    getSuiteIndex: async () => ({ suites: [published], feature_suites: [] }),
     runStructural: async (_root, _runner, suitePaths) => { given = suitePaths; return runnerResult({ report: '{}' }); },
   }));
 
@@ -156,7 +156,7 @@ test('a structural stack mismatch becomes that branch suite_error; the behaviora
   let structuralMaterialized = false;
 
   await run(config(tmpProject()), [], batchDeps({
-    getSuites: async () => [structuralSuite('vitest'), behavioralSuite()],
+    getSuiteIndex: async () => ({ suites: [structuralSuite('vitest'), behavioralSuite()], feature_suites: [] }),
     // Both branches route through the precheck; only the structural (vitest) one
     // fails here.
     validateStack: (_root, runner) =>
@@ -181,13 +181,13 @@ test('a behavioral stack mismatch becomes that branch suite_error; the structura
   let behavioralMaterialized = false;
 
   await run(config(tmpProject()), [], batchDeps({
-    getSuites: async () => [structuralSuite(), behavioralSuite()],
+    getSuiteIndex: async () => ({ suites: [structuralSuite(), behavioralSuite()], feature_suites: [] }),
     // Only the behavioral (cucumber) branch fails its language check.
     validateStack: (_root, runner) =>
       runner === 'cucumber'
         ? { ok: false, message: 'The behavioral (Gherkin) suite selected the Ruby stack, but this project does not look like Rails.' }
         : { ok: true },
-    materializeBehavioral: () => { behavioralMaterialized = true; return 'main.feature'; },
+    materializeBehavioral: () => { behavioralMaterialized = true; return { mainPath: 'main.feature', excludeTags: [] }; },
     runStructural: async () => runnerResult({ report: '{"examples":[]}' }),
     postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
   }));
@@ -204,7 +204,7 @@ test('a run that produced no report becomes a structured suite_error, never per-
   let uploaded: Array<Record<string, unknown>> = [];
 
   await run(config(tmpProject()), [], batchDeps({
-    getSuites: async () => [structuralSuite('vitest')],
+    getSuiteIndex: async () => ({ suites: [structuralSuite('vitest')], feature_suites: [] }),
     runStructural: async () =>
       runnerResult({
         stderr: "Error: Cannot find module 'vitest'", code: 1, command: 'npx',
@@ -226,7 +226,7 @@ test('a behavioral runner that produced no report becomes a suite_error without 
   let uploaded: Array<Record<string, unknown>> = [];
 
   await run(config(tmpProject()), [], batchDeps({
-    getSuites: async () => [behavioralSuite()],
+    getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [] }),
     runBehavioral: async () =>
       runnerResult({
         stderr: 'cucumber: command not found', code: 127, command: 'bundle',
@@ -247,9 +247,9 @@ test('the public run flow preserves the provisioned behavioral sidecar while ref
   writeFileSync(sidecarGemfile, 'gem "cucumber"\n');
 
   await run(config(projectRoot), [], batchDeps({
-    getSuites: async () => [behavioralSuite()],
-    materializeBehavioral: (root, item) =>
-      materializeBehavioral(root, item.suite_file!, item.runner_manifest!.runner).mainPath,
+    getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [] }),
+    materializeBehavioral: (root, index) =>
+      materializeBehavioralUnion(root, index, 'cucumber')!,
     runBehavioral: async () => {
       assert.equal(existsSync(sidecarGemfile), true);
       return runnerResult({ report: '{"testCaseStarted":{}}\n' });
@@ -284,7 +284,7 @@ test('run default assembly preserves and uses the provisioned behavioral sidecar
   process.env.PATH = [fakeBin, originalPath].filter(Boolean).join(delimiter);
   try {
     await run(config(projectRoot), [], {
-      getSuites: async () => [behavioralSuite()],
+      getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [] }),
       postRunsBatch: async (runs) => {
         uploaded = runs as Array<Record<string, unknown>>;
         return { results: [], map_url: '' };
@@ -315,7 +315,7 @@ test('the filtered run executes only the identities it was given', async () => {
   let uploaded: Array<Record<string, unknown>> = [];
 
   await runOnly(config(tmpProject()), ['behav-d1'], batchDeps({
-    getSuites: async () => [structuralSuite(), behavioralSuite()],
+    getSuiteIndex: async () => ({ suites: [structuralSuite(), behavioralSuite()], feature_suites: [] }),
     postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
   }));
 
@@ -332,7 +332,7 @@ test('the filtered run refuses the whole batch when one requested identity is go
   await assert.rejects(
     () =>
       runOnly(config(tmpProject()), ['struct-d1', 'behav-d1'], batchDeps({
-        getSuites: async () => [structuralSuite()],
+        getSuiteIndex: async () => ({ suites: [structuralSuite()], feature_suites: [] }),
         runStructural: async () => { ran = true; return runnerResult({ report: '{"examples":[]}' }); },
         postRunsBatch: async () => { posted = true; return { results: [], map_url: '' }; },
       })),
@@ -348,7 +348,7 @@ test('the filtered run refuses an identity the server no longer reports as ready
   await assert.rejects(
     () =>
       runOnly(config(tmpProject()), ['struct-d1'], batchDeps({
-        getSuites: async () => [{ ...structuralSuite(), status: 'not_built' }],
+        getSuiteIndex: async () => ({ suites: [{ ...structuralSuite(), status: 'not_built' }], feature_suites: [] }),
         postRunsBatch: async () => { throw new Error('must not upload'); },
       })),
     /no longer the current one/,
@@ -361,7 +361,7 @@ test('the standalone run is unfiltered and still runs every ready peer', async (
   let uploaded: Array<Record<string, unknown>> = [];
 
   await run(config(tmpProject()), [], batchDeps({
-    getSuites: async () => [structuralSuite(), behavioralSuite()],
+    getSuiteIndex: async () => ({ suites: [structuralSuite(), behavioralSuite()], feature_suites: [] }),
     postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
   }));
 
@@ -372,9 +372,9 @@ test('the public run flow reports a missing behavioral sidecar without invoking 
   let uploaded: Array<Record<string, unknown>> = [];
 
   await run(config(tmpProject()), [], batchDeps({
-    getSuites: async () => [behavioralSuite()],
-    materializeBehavioral: (root, item) =>
-      materializeBehavioral(root, item.suite_file!, item.runner_manifest!.runner).mainPath,
+    getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [] }),
+    materializeBehavioral: (root, index) =>
+      materializeBehavioralUnion(root, index, 'cucumber')!,
     runBehavioral: runBddSuite,
     postRunsBatch: async (runs) => {
       uploaded = runs as Array<Record<string, unknown>>;
@@ -386,4 +386,204 @@ test('the public run flow reports a missing behavioral sidecar without invoking 
     String((uploaded[0].suite_error as Record<string, unknown>).output_tail),
     /Behavioral runner missing.*suite-prepare/,
   );
+});
+
+// Spec 52-3, AC 3.1 and 3.2. The checks of every red feature come down with
+// the suites, are materialised beside the main suite as one union, and the
+// main suite runs with their tags excluded. Since spec 52-4 (AC 1.1) the
+// checks themselves run too, each by its own tag after the main suite, into
+// the same batch; without any, nothing changes.
+function featureSuite(id: number) {
+  return {
+    feature_id: id,
+    title: `Feature ${id}`,
+    feature_tag: `unitbob_feature_${id}`,
+    suite_digest: `feat-${id}`,
+    suite_file: {
+      path: `.unitbob/behavioral/features/feature_${id}.feature`,
+      content: `Feature: ${id}\n`,
+      support_files: [{ path: `.unitbob/behavioral/step_definitions/feature_${id}_steps.rb`, content: '# f\n' }],
+    },
+    runner_manifest: { runner: 'cucumber', result_format: 'cucumber_messages' },
+  };
+}
+
+test('materializes the union once, runs the main suite with every feature tag excluded, then each feature by its tag', async () => {
+  const projectRoot = tmpProject();
+  let uploaded: unknown[] = [];
+  const filters: unknown[] = [];
+  let materialized = 0;
+  let output = '';
+
+  await run(config(projectRoot), [], batchDeps({
+    getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [featureSuite(12), featureSuite(15)] }),
+    materializeBehavioral: (_root, index) => { materialized += index.feature_suites.length; return { mainPath: 'main.feature', excludeTags: ['unitbob_feature_12', 'unitbob_feature_15'] }; },
+    runBehavioral: async (_root, _runner, mainPath, f) => {
+      filters.push([mainPath, f]);
+      return runnerResult({ report: `{"run":${filters.length}}\n` });
+    },
+    postRunsBatch: async (runs) => {
+      uploaded = runs;
+      return {
+        results: [
+          { suite_kind: 'behavioral', suite_digest: 'behav-d1', status: 'ok', summary: 'Product behaviour checks passed.' },
+          { suite_kind: 'behavioral', feature_id: 12, suite_digest: 'feat-12', status: 'failed', summary: 'Feature 12: 1 of 2 checks pass.', lamps: null },
+          { suite_kind: 'behavioral', feature_id: 15, suite_digest: 'feat-15', status: 'ok', summary: 'Feature 15: all 2 checks pass — review them to unlock Finish.', lamps: null },
+        ],
+        map_url: 'https://host/repos/3/map',
+      };
+    },
+    stdout: { write: (chunk: string) => { output += chunk; return true; } },
+  }));
+
+  assert.equal(materialized, 2, 'one union, written once');
+  assert.deepEqual(filters, [
+    ['main.feature', { exclude: ['unitbob_feature_12', 'unitbob_feature_15'] }],
+    ['main.feature', { only: 'unitbob_feature_12' }],
+    ['main.feature', { only: 'unitbob_feature_15' }],
+  ]);
+  assert.deepEqual(uploaded, [
+    { suite_digest: 'behav-d1', run_result: '{"run":1}\n' },
+    { suite_digest: 'feat-12', run_result: '{"run":2}\n' },
+    { suite_digest: 'feat-15', run_result: '{"run":3}\n' },
+  ]);
+  // The server's line per feature, as it is — the wording is the server's.
+  assert.match(output, /Product behaviour checks passed\.\nFeature 12: 1 of 2 checks pass\.\nFeature 15: all 2 checks pass — review them to unlock Finish\.\n/);
+});
+
+test('a feature whose runner fails files its own suite_error and stops neither the main suite nor the other feature', async () => {
+  let uploaded: Array<Record<string, unknown>> = [];
+
+  await run(config(tmpProject()), [], batchDeps({
+    getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [featureSuite(12), featureSuite(15)] }),
+    runBehavioral: async (_root, _runner, _main, f) => {
+      if (f && 'only' in f && f.only === 'unitbob_feature_12') throw new Error('step file feature_12_steps.rb raised NameError at load');
+      return runnerResult({ report: '{"testCaseStarted":{}}\n' });
+    },
+    postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
+  }));
+
+  assert.deepEqual(uploaded.map((entry) => entry.suite_digest), ['behav-d1', 'feat-12', 'feat-15']);
+  assert.equal('run_result' in uploaded[0], true);
+  assert.match(String((uploaded[1].suite_error as Record<string, unknown>).output_tail), /NameError at load/);
+  assert.equal('run_result' in uploaded[2], true);
+});
+
+test('a feature run that produced no report is that feature’s structured suite_error', async () => {
+  let uploaded: Array<Record<string, unknown>> = [];
+
+  await run(config(tmpProject()), [], batchDeps({
+    getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [featureSuite(12)] }),
+    runBehavioral: async (_root, _runner, _main, f) =>
+      f && 'only' in f
+        ? runnerResult({ stderr: 'undefined method', code: 2, command: 'bundle', args: ['exec', 'cucumber', '--tags', '@unitbob_feature_12'], report: '' })
+        : runnerResult({ report: '{"testCaseStarted":{}}\n' }),
+    postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
+  }));
+
+  const error = uploaded[1].suite_error as Record<string, unknown>;
+  assert.equal(uploaded[1].suite_digest, 'feat-12');
+  assert.equal(error.command, 'bundle exec cucumber --tags @unitbob_feature_12');
+  assert.equal(error.exit_code, 2);
+  assert.match(String(error.output_tail), /undefined method/);
+});
+
+test('a behavioral stack mismatch is filed for the main suite and for every feature, and nothing is materialized', async () => {
+  let uploaded: Array<Record<string, unknown>> = [];
+  let materialized = false;
+
+  await run(config(tmpProject()), [], batchDeps({
+    getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [featureSuite(12)] }),
+    validateStack: () => ({ ok: false, message: 'this project does not look like Rails' }),
+    materializeBehavioral: () => { materialized = true; return { mainPath: 'main.feature', excludeTags: [] }; },
+    postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
+  }));
+
+  assert.equal(materialized, false);
+  assert.deepEqual(uploaded.map((entry) => entry.suite_digest), ['behav-d1', 'feat-12']);
+  assert.match(String((uploaded[1].suite_error as Record<string, unknown>).output_tail), /does not look like Rails/);
+});
+
+// A feature can have checks before the main suite is built (spec 52-3: the
+// union of checks alone is legal). They still run, on the union of themselves.
+test('feature checks run even when the main behavioral suite is not built', async () => {
+  let uploaded: Array<Record<string, unknown>> = [];
+  let runner: unknown = null;
+
+  await run(config(tmpProject()), [], batchDeps({
+    getSuiteIndex: async () => ({ suites: [{ suite_kind: 'structural', status: 'not_built' }, { suite_kind: 'behavioral', status: 'not_built' }], feature_suites: [featureSuite(12)] }),
+    materializeBehavioral: (_root, _index, r) => { runner = r; return { mainPath: 'feature_12.feature', excludeTags: ['unitbob_feature_12'] }; },
+    runBehavioral: async () => runnerResult({ report: '{"testCaseStarted":{}}\n' }),
+    postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
+  }));
+
+  assert.equal(runner, 'cucumber');
+  assert.deepEqual(uploaded.map((entry) => entry.suite_digest), ['feat-12']);
+});
+
+// The first run after publishing (spec 32-4) runs the features too, but only
+// when the behavioral branch was published: structural alone has no union.
+test('the filtered run runs the features after a published behavioral branch, and not after structural alone', async () => {
+  let uploaded: Array<Record<string, unknown>> = [];
+  const deps = batchDeps({
+    getSuiteIndex: async () => ({ suites: [structuralSuite(), behavioralSuite()], feature_suites: [featureSuite(12)] }),
+    postRunsBatch: async (runs) => { uploaded = runs as Array<Record<string, unknown>>; return { results: [], map_url: '' }; },
+  });
+
+  await runOnly(config(tmpProject()), ['behav-d1'], deps);
+  assert.deepEqual(uploaded.map((entry) => entry.suite_digest), ['behav-d1', 'feat-12']);
+
+  await runOnly(config(tmpProject()), ['struct-d1'], deps);
+  assert.deepEqual(uploaded.map((entry) => entry.suite_digest), ['struct-d1']);
+});
+
+test('without feature suites the behavioral run carries an empty exclusion', async () => {
+  let filter: unknown = 'unset';
+
+  await run(config(tmpProject()), [], batchDeps({
+    getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [] }),
+    runBehavioral: async (_root, _runner, _main, f) => { filter = f; return runnerResult({ report: '{"testCaseStarted":{}}\n' }); },
+  }));
+
+  assert.deepEqual(filter, { exclude: [] });
+});
+
+test('the real union writes the feature files beside the main suite and wipes what neither lists', async () => {
+  const projectRoot = tmpProject();
+  const stale = join(projectRoot, '.unitbob', 'behavioral', 'features', 'stale.feature');
+  mkdirSync(join(projectRoot, '.unitbob', 'behavioral', 'features'), { recursive: true });
+  writeFileSync(stale, 'Feature: stale\n');
+
+  await run(config(projectRoot), [], batchDeps({
+    getSuiteIndex: async () => ({ suites: [behavioralSuite()], feature_suites: [featureSuite(12)] }),
+    materializeBehavioral: (root, index) => materializeBehavioralUnion(root, index, 'cucumber')!,
+  }));
+
+  assert.ok(existsSync(join(projectRoot, '.unitbob', 'behavioral', 'features', 'feature_12.feature')));
+  assert.ok(existsSync(join(projectRoot, '.unitbob', 'behavioral', 'features', 'surface_contracts.feature')));
+  assert.ok(!existsSync(stale));
+});
+
+// Spec 52-4, AC 1.8. A feature file rewired on disk and not saved stops the
+// whole run before the disk is touched: this is not one branch's suite error
+// to file and move past, it is the connector refusing to wipe work. The
+// sentence reaches the terminal through the shared catch in `cli.ts`.
+test('a feature file changed on disk stops the run before anything is cleared or posted', async () => {
+  const projectRoot = tmpProject();
+  materializeBehavioralUnion(projectRoot, { suites: [behavioralSuite()], feature_suites: [featureSuite(12)] }, 'cucumber');
+  const rewired = join(projectRoot, '.unitbob', 'behavioral', 'step_definitions', 'feature_12_steps.rb');
+  writeFileSync(rewired, '# rewired against the real code\n');
+  let posted = false;
+
+  await assert.rejects(
+    () => run(config(projectRoot), [], batchDeps({
+      getSuiteIndex: async () => ({ suites: [structuralSuite(), behavioralSuite()], feature_suites: [featureSuite(12)] }),
+      materializeBehavioral: (root, index) => materializeBehavioralUnion(root, index, 'cucumber')!,
+      postRunsBatch: async () => { posted = true; return { results: [], map_url: '' }; },
+    })),
+    (err: unknown) => err instanceof FeatureFilesChangedError && /The checks for “Feature 12” changed on disk/.test(err.message),
+  );
+
+  assert.equal(posted, false);
+  assert.equal(readFileSync(rewired, 'utf8'), '# rewired against the real code\n');
 });

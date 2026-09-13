@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { main } from '../src/cli.ts';
@@ -40,16 +42,26 @@ test('the CLI production assembly runs and binds the behavioral review candidate
   };
   writeFileSync(outputPath(projectRoot), JSON.stringify({ branches: [behavioral] }));
 
+  // The candidate goes on disk as the union with every red feature's checks
+  // (spec 52-4, AC 1.8), which the server lists; here there are none.
+  const server = createServer((_req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ suites: [], feature_suites: [] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const { port } = server.address() as AddressInfo;
+
   const previousPath = process.env.PATH;
   process.env.PATH = [fakeBin, previousPath].filter(Boolean).join(delimiter);
   try {
     const exitCode = await main(['suite-review-prepare'], {
-      ensureLinked: async () => ({ server: 'https://host', repoId: 3, projectRoot }),
+      ensureLinked: async () => ({ server: `http://127.0.0.1:${port}`, repoId: 3, token: 't', projectRoot }),
     });
     assert.equal(exitCode, 0);
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
+    server.close();
   }
 
   // With no known defect there is nothing for the reviewer to read a run for, so

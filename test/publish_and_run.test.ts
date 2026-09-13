@@ -195,7 +195,7 @@ test('a structured suite error still exits 0 once the server accepts it', async 
   const code = await publishAndRun(config(), [], deps([ok('structural', 'struct-d1')], seen, {
     runOnly: (cfg, digests) =>
       runOnly(cfg, digests, {
-        getSuites: async () => [suite],
+        getSuiteIndex: async () => ({ suites: [suite], feature_suites: [] }),
         materializeStructural: () => {},
         validateStack: () => ({ ok: false, message: 'Ruby guardrails require RSpec, which was not found.' }),
         postRunsBatch: async (runs) => {

@@ -183,6 +183,170 @@ test('getFixPacket surfaces a 422 (non-failed) as a WireError', async () => {
   );
 });
 
+test('postFeature POSTs the feature and returns its id, page and sentence (spec 52-1)', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 201, {
+        feature_id: 7,
+        url: '/repos/3/features/7',
+        message: 'Feature recorded: "Comments on posts". 1 capability to watch.',
+      }),
+    async (config, hits) => {
+      const recorded = await new Wire(config).postFeature({
+        title: 'Comments on posts',
+        intent: 'I want to add comments to posts',
+        affected: [{ id: 'posts', why: 'A comment lives on the post page.' }],
+      });
+      assert.equal(recorded.feature_id, 7);
+      assert.equal(recorded.url, '/repos/3/features/7');
+      assert.equal(hits[0].method, 'POST');
+      assert.equal(hits[0].url, '/repos/3/features');
+      assert.deepEqual(JSON.parse(hits[0].body), {
+        title: 'Comments on posts',
+        intent: 'I want to add comments to posts',
+        affected: [{ id: 'posts', why: 'A comment lives on the post page.' }],
+      });
+    },
+  );
+});
+
+// Both sides of the join travel in the error text, whole: the host reads what
+// it sent and what the map knows, and corrects its file. A map of forty
+// capabilities is longer than the 500 characters every other refusal keeps.
+test('postFeature surfaces a 422 with both id lists complete, however long the map', async () => {
+  const known = Array.from({ length: 40 }, (_, i) => `capability_number_${i}_with_a_long_name`);
+  await withServer(
+    (_hit, res) =>
+      json(res, 422, {
+        error: 'These capabilities are not on the current map.',
+        unknown_ids: ['comments'],
+        known_ids: known,
+      }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).postFeature({ title: 'x', intent: 'y', affected: [{ id: 'comments', why: '' }] }),
+        (err: unknown) => {
+          assert.ok(err instanceof WireError);
+          const message = (err as Error).message;
+          assert.match(message, /not on the current map/);
+          assert.match(message, /unknown_ids: \["comments"\]/);
+          assert.ok(message.includes(`known_ids: ${JSON.stringify(known)}`));
+          return true;
+        },
+      );
+    },
+  );
+});
+
+test('postFeature keeps the ordinary refusal for a 422 without the two lists', async () => {
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'The feature could not be recorded.', details: ["Title can't be blank"] }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).postFeature({ title: '', intent: 'y', affected: [] }),
+        (err: unknown) => err instanceof WireError && /422/.test((err as Error).message) && /Title can't be blank/.test((err as Error).message),
+      );
+    },
+  );
+});
+
+// Spec 52-2: the three calls of the talk.
+test('listFeatures GETs /repos/:id/features and returns the rows and the empty-list words', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        features: [{ feature_id: 12, title: 'Refunds', status: 'intent', created_at: '2026-09-12T10:00:00Z' }],
+        empty_text: 'No feature to talk through yet — say what you want to build first.',
+      }),
+    async (config, hits) => {
+      const list = await new Wire(config).listFeatures();
+      assert.equal(list.features[0].title, 'Refunds');
+      assert.match(list.empty_text, /No feature to talk through yet/);
+      assert.equal(hits[0].method, 'GET');
+      assert.equal(hits[0].url, '/repos/3/features');
+    },
+  );
+});
+
+// Spec 52-4, AC 5.1: a row carries the feature's capability id and intent, so
+// `map-prepare` can tell the map recipe which capabilities already exist. A
+// server older than the fields sends the row without them, and the row still
+// reads.
+test('listFeatures relays capability_id and intent, and reads a row without them', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        features: [
+          { feature_id: 12, title: 'Refunds', status: 'done', created_at: 'x', capability_id: 'feature_12', intent: 'refunds for paid orders' },
+          { feature_id: 11, title: 'Comments', status: 'intent', created_at: 'x' },
+        ],
+        empty_text: '',
+      }),
+    async (config) => {
+      const { features } = await new Wire(config).listFeatures();
+      assert.equal(features[0].capability_id, 'feature_12');
+      assert.equal(features[0].intent, 'refunds for paid orders');
+      assert.equal(features[1].capability_id, undefined);
+    },
+  );
+});
+
+test('getKnowledgePacket GETs /repos/:id/features/:id/knowledge_packet', async () => {
+  await withServer(
+    (_hit, res) =>
+      json(res, 200, {
+        feature: { feature_id: 12, title: 'Refunds', intent: 'refunds', status: 'intent', created_at: 'x' },
+        affected: [],
+        knowledge: null,
+      }),
+    async (config, hits) => {
+      const packet = await new Wire(config).getKnowledgePacket(12);
+      assert.equal(packet.feature.feature_id, 12);
+      assert.equal(packet.knowledge, null);
+      assert.equal(hits[0].url, '/repos/3/features/12/knowledge_packet');
+    },
+  );
+});
+
+test('putKnowledge PUTs the text and returns the page and the sentence', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { url: '/repos/3/features/12', message: 'Feature talked through: "Refunds". 2 scenarios; every promise stays.' }),
+    async (config, hits) => {
+      const recorded = await new Wire(config).putKnowledge(12, '# Refunds\n');
+      assert.equal(recorded.url, '/repos/3/features/12');
+      assert.equal(hits[0].method, 'PUT');
+      assert.equal(hits[0].url, '/repos/3/features/12/knowledge');
+      assert.deepEqual(JSON.parse(hits[0].body), { knowledge: '# Refunds\n' });
+    },
+  );
+});
+
+// Every problem travels whole, both sides on their own lines: the host fixes
+// the file from them, and a long list must not be cut at the end.
+test('putKnowledge relays a 422 with one line per problem, both sides', async () => {
+  const problems = Array.from({ length: 12 }, (_, i) => ({
+    expected: `a decision on \`capability_${i}\` (stays, changes: <what>, or unrelated)`,
+    got: 'no line for it',
+  }));
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'knowledge.md does not have the expected shape.', problems }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putKnowledge(12, '# x'),
+        (err: unknown) => {
+          const message = (err as Error).message;
+          return (
+            err instanceof WireError &&
+            /422 — knowledge\.md does not have the expected shape\./.test(message) &&
+            /expected: a decision on `capability_11`/.test(message) &&
+            /got: no line for it/.test(message)
+          );
+        },
+      );
+    },
+  );
+});
+
 test('getRecipe hits GET /recipes/:name', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { name: 'decompose', version: 'v1', text: '# recipe' }),
@@ -294,23 +458,123 @@ test('putSuiteBuilds PUTs the batch and returns one result per kind', async () =
   );
 });
 
-test('getSuites returns the two peer suite items', async () => {
+test('getSuiteIndex returns the two peer suite items', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { suites: [{ suite_kind: 'structural', status: 'ready' }, { suite_kind: 'behavioral', status: 'not_built' }] }),
     async (config, hits) => {
-      const suites = await new Wire(config).getSuites();
+      const suites = (await new Wire(config).getSuiteIndex()).suites;
       assert.deepEqual(suites.map((s) => s.status), ['ready', 'not_built']);
       assert.equal(hits[0].url, '/repos/3/suites');
     },
   );
 });
 
+// Spec 52-3: the same answer carries the checks of every red feature; a server
+// older than the list sends none, which reads as an empty one.
+test('getSuiteIndex returns the peers and the feature suites, empty from an older server', async () => {
+  // `title` arrived with spec 52-4, for the connector's own sentence when the
+  // checks on disk moved; a server from 52-3 sends the item without it.
+  const item = { feature_id: 12, title: 'Refunds', feature_tag: 'unitbob_feature_12', suite_digest: 'd', suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' } };
+  await withServer(
+    (_hit, res) => json(res, 200, { suites: [{ suite_kind: 'structural', status: 'ready' }, { suite_kind: 'behavioral', status: 'not_built' }], feature_suites: [item] }),
+    async (config) => {
+      const index = await new Wire(config).getSuiteIndex();
+      assert.deepEqual(index.feature_suites, [item]);
+      assert.equal(index.suites.length, 2);
+    },
+  );
+  await withServer(
+    (_hit, res) => json(res, 200, { suites: [{ suite_kind: 'structural', status: 'ready' }, { suite_kind: 'behavioral', status: 'not_built' }] }),
+    async (config) => {
+      assert.deepEqual((await new Wire(config).getSuiteIndex()).feature_suites, []);
+    },
+  );
+});
+
+test('getTestsPacket GETs /repos/:id/features/:id/tests_packet and relays a 409 in the server’s words', async () => {
+  await withServer(
+    (_hit, res) => json(res, 200, { suite_kind: 'behavioral', feature: { feature_id: 12, title: 'Refunds', status: 'knowledge' }, feature_tag: 'unitbob_feature_12', main_suite: 'not_built' }),
+    async (config, hits) => {
+      const packet = await new Wire(config).getTestsPacket(12);
+      assert.equal(packet.feature_tag, 'unitbob_feature_12');
+      assert.equal(hits[0].url, '/repos/3/features/12/tests_packet');
+    },
+  );
+  await withServer(
+    (_hit, res) => json(res, 409, { error: 'Talk the feature through first — the checks are written from knowledge.md.' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).getTestsPacket(12),
+        (err: unknown) => err instanceof WireError && /Talk the feature through first/.test((err as Error).message),
+      );
+    },
+  );
+});
+
+test('putFeatureSuite PUTs the upload and returns the digest, the page and the sentence', async () => {
+  const upload = { suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' }, test_metadata: { capabilities: [] }, knowledge_digest: 'k' };
+  await withServer(
+    (_hit, res) => json(res, 200, { suite_digest: 'd', url: '/repos/3/features/12', message: 'Checks written for “Refunds”: 2 scenarios, all red, waiting for the code.' }),
+    async (config, hits) => {
+      const recorded = await new Wire(config).putFeatureSuite(12, upload);
+      assert.equal(recorded.suite_digest, 'd');
+      assert.equal(hits[0].method, 'PUT');
+      assert.equal(hits[0].url, '/repos/3/features/12/suite');
+      assert.deepEqual(JSON.parse(hits[0].body), upload);
+    },
+  );
+});
+
+test('putFeatureSuite relays a sealed 422 with one line per problem, both sides, and a 409 in words', async () => {
+  const upload = { suite_file: { path: 'f', content: 'c' }, runner_manifest: { runner: 'cucumber' }, test_metadata: {}, knowledge_digest: 'k' };
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'The scenarios are sealed; to change them, talk the feature through again.', problems: [{ expected: 'Scenario "Two" from knowledge.md', got: 'no such scenario in the .feature' }] }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putFeatureSuite(12, upload),
+        (err: unknown) => {
+          const message = (err as Error).message;
+          return err instanceof WireError && /422 — The scenarios are sealed/.test(message) && /expected: Scenario "Two"/.test(message) && /got: no such scenario/.test(message);
+        },
+      );
+    },
+  );
+  await withServer(
+    (_hit, res) => json(res, 422, { error: 'Scenario "Two" already passes — either the behaviour exists or the check proves nothing; talk it through before publishing' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putFeatureSuite(12, upload),
+        (err: unknown) => err instanceof WireError && /already passes/.test((err as Error).message),
+      );
+    },
+  );
+  await withServer(
+    (_hit, res) => json(res, 409, { error: 'knowledge.md changed after the talk — upload it again with put-knowledge, then write the checks.' }),
+    async (config) => {
+      await assert.rejects(
+        () => new Wire(config).putFeatureSuite(12, upload),
+        (err: unknown) => err instanceof WireError && /knowledge\.md changed after the talk/.test((err as Error).message),
+      );
+    },
+  );
+});
+
 test('postRunsBatch POSTs the runs and returns results + one map_url', async () => {
   await withServer(
-    (_hit, res) => json(res, 200, { results: [{ suite_kind: 'behavioral', status: 'ok', summary: 'ok' }], map_url: 'http://host/repos/3/map' }),
+    (_hit, res) => json(res, 200, {
+      results: [
+        { suite_kind: 'behavioral', status: 'ok', summary: 'ok' },
+        // A feature's checks answer under their own item (spec 52-4, AC 1.1):
+        // the feature named, no lamps, the server's line to print as it is.
+        { suite_kind: 'behavioral', feature_id: 12, suite_digest: 'f', status: 'failed', summary: 'Refunds: 2 of 5 checks pass.', lamps: null },
+      ],
+      map_url: 'http://host/repos/3/map',
+    }),
     async (config, hits) => {
-      const { results, map_url } = await new Wire(config).postRunsBatch([{ suite_digest: 'd', run_result: '{}' }]);
+      const { results, map_url } = await new Wire(config).postRunsBatch([{ suite_digest: 'd', run_result: '{}' }, { suite_digest: 'f', run_result: '{}' }]);
       assert.equal(results[0].suite_kind, 'behavioral');
+      assert.equal(results[1].feature_id, 12);
+      assert.equal(results[1].summary, 'Refunds: 2 of 5 checks pass.');
       assert.equal(map_url, 'http://host/repos/3/map');
       assert.equal(hits[0].method, 'POST');
       assert.equal(hits[0].url, '/repos/3/runs/batch');
@@ -336,7 +600,7 @@ test('a batch endpoint answering without its array is a WireError', async () => 
   await withServer(
     (_hit, res) => json(res, 200, { nope: true }),
     async (config) => {
-      await assert.rejects(() => new Wire(config).getSuites(), (err) => err instanceof WireError);
+      await assert.rejects(() => new Wire(config).getSuiteIndex(), (err) => err instanceof WireError);
     },
   );
 });
@@ -362,7 +626,7 @@ test('every wire call carries the project token', async () => {
   await withServer(
     (_hit, res) => json(res, 200, { suites: [] }),
     async (config, hits) => {
-      await new Wire(config).getSuites();
+      await new Wire(config).getSuiteIndex();
       assert.equal(hits[0].authorization, 'Bearer secret-token');
     },
   );
@@ -373,7 +637,7 @@ test('a 404 on the wire is explained, not shown as a bare status', async () => {
     (_hit, res) => json(res, 404, {}),
     async (config) => {
       await assert.rejects(
-        new Wire(config).getSuites(),
+        new Wire(config).getSuiteIndex(),
         (err: Error) =>
           err instanceof WireError &&
           /does not have/.test(err.message) &&
@@ -412,7 +676,7 @@ test('a 403 on the wire is named as an intermediary, not as the brain', async ()
     },
     async (config) => {
       await assert.rejects(
-        new Wire(config).getSuites(),
+        new Wire(config).getSuiteIndex(),
         (err: Error) =>
           err instanceof WireError &&
           /never answers 403/.test(err.message) &&
@@ -475,7 +739,7 @@ test('an ordinary rejection carries no proxy advice', async () => {
       (_hit, res) => json(res, 422, { error: 'surface: bad' }),
       async (config) => {
         await assert.rejects(
-          new Wire(config).getSuites(),
+          new Wire(config).getSuiteIndex(),
           (err: Error) => err instanceof WireError && !/NODE_USE_ENV_PROXY/.test(err.message),
         );
       },

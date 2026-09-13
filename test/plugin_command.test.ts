@@ -26,7 +26,7 @@ const connectorVersion = JSON.parse(readFileSync(packageJsonPath, 'utf8')).versi
 const unitbob = `npx -y --loglevel=error unitbob@${connectorVersion}`;
 const unitbobPattern = unitbob.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const WORKFLOWS = ['map', 'suite', 'check', 'show', 'fix'];
+const WORKFLOWS = ['map', 'suite', 'check', 'show', 'fix', 'feature', 'knowledge', 'tests', 'finish'];
 
 test('the skill can run every workflow without a slash command', () => {
   for (const name of WORKFLOWS) {
@@ -47,7 +47,7 @@ test('no workflow sends anyone to a slash command', () => {
   for (const name of WORKFLOWS) {
     assert.doesNotMatch(
       workflow(name),
-      /\/unitbob[: ](map|suite|check|show|fix)\b/,
+      /\/unitbob[: ](map|suite|check|show|fix|feature|knowledge|tests|finish)\b/,
       `${name}.md must point at a sibling workflow or ask in plain words`,
     );
   }
@@ -187,6 +187,12 @@ test('the check workflow stays the unfiltered standalone run', () => {
 test('fix workflow drives contract-prompt and covers both fix and accept on either map', () => {
   const text = workflow('fix');
 
+  // Spec 52-4, AC 1.3: the browser's "Fix the Unitbob guard feature_12" names
+  // a feature's checks; they have no digest to copy and no accept.
+  assert.match(text, /feature_<id>/);
+  assert.match(text, /feature:<id>/);
+  assert.match(text, /no accept/i);
+
   // Spec 32: one selector — suite_digest + test_id + intent — for both maps.
   assert.match(text, new RegExp(`${unitbobPattern} contract-prompt <suite_digest> <test_id>`));
   assert.match(text, /\.unitbob\/structural\//);
@@ -199,4 +205,100 @@ test('fix workflow drives contract-prompt and covers both fix and accept on eith
   assert.match(text, /application failures remain red/i);
   // `$ARGUMENTS` is a command-only substitution — inside a workflow it stays literal.
   assert.doesNotMatch(text, /\$ARGUMENTS/);
+});
+
+// Spec 52-1. The feature workflow is the one step that must not turn into a
+// conversation or into code: it records what was said and names what it may
+// touch, and everything else is another workflow's.
+test('the feature workflow records the intent without asking or implementing', () => {
+  const text = workflow('feature');
+
+  assert.match(text, new RegExp(`${unitbobPattern} feature-prepare`));
+  assert.match(text, new RegExp(`${unitbobPattern} put-feature`));
+  assert.match(text, /not.*ask questions/i);
+  assert.match(text, /not.*start implementing/i);
+  assert.match(text, /unknown_ids/);
+  assert.match(skill, /Start a feature safely/);
+  // Spec 52-2: it does not end on the link — it offers the talk, once.
+  assert.match(text, /talk\s+it\s+through\s+now/i);
+  assert.match(text, /workflows\/knowledge\.md/);
+});
+
+// Spec 52-2. The knowledge workflow is a conversation with one upload at the
+// end, and the upload waits for the user's word.
+test('the knowledge workflow finds the feature, asks by the recipe, and uploads only on yes', () => {
+  const text = workflow('knowledge');
+
+  assert.match(text, new RegExp(`${unitbobPattern} knowledge-prepare\\b`));
+  assert.match(text, new RegExp(`${unitbobPattern} knowledge-prepare <id>`));
+  assert.match(text, new RegExp(`${unitbobPattern} put-knowledge <id>`));
+  assert.match(text, /five questions a round and three\s+rounds/i);
+  assert.match(text, /Is this what done means\?/);
+  assert.match(text, /Only on an explicit "yes"/);
+  assert.match(text, /not.*start implementing/i);
+  assert.match(text, /expected:.*got:/);
+  assert.match(skill, /Talk a feature through/);
+  // Spec 52-3: it does not end on the link — it offers the checks, once.
+  assert.match(text, /write\s+the\s+checks\s+now/i);
+  assert.match(text, /workflows\/tests\.md/);
+});
+
+// Spec 52-3. The tests workflow writes wiring around sealed text, iterates on
+// the feature's own local run until every scenario is red, and lets put-tests
+// take the run that proves it. No code, no reviewer.
+test('the tests workflow prepares, writes the wiring, runs the feature alone, and uploads', () => {
+  const text = workflow('tests');
+
+  assert.match(text, new RegExp(`${unitbobPattern} tests-prepare <id>`));
+  assert.match(text, new RegExp(`${unitbobPattern} run-local --feature <id>`));
+  assert.match(text, new RegExp(`${unitbobPattern} put-tests <id>`));
+  assert.match(text, /tests-request\.json/);
+  assert.match(text, /tests-output\.json/);
+  assert.match(text, /word for word/i);
+  assert.match(text, /every scenario fails/i);
+  assert.match(text, /not.*implement/i);
+  assert.match(text, /expected:.*got:/);
+  assert.match(skill, /Write the checks for a feature/);
+});
+
+// Spec 52-4, AC 7.1. Wrapping a feature up is `check`, the review when the
+// server asks for it, and one line with the link to the page where the person
+// presses Finish. The workflow never finishes anything itself, and never talks
+// a red result away.
+test('the finish workflow runs the checks, gets the review through put-tests, and ends on the feature page', () => {
+  const text = workflow('finish');
+
+  assert.match(text, new RegExp(`${unitbobPattern} run`));
+  assert.match(text, /review them to unlock Finish/);
+  assert.match(text, new RegExp(`${unitbobPattern} tests-review-prepare <id>`));
+  assert.match(text, /suite-reviewer/);
+  assert.match(text, /tests-review-request\.json/);
+  assert.match(text, /tests-review-output\.json/);
+  assert.match(text, new RegExp(`${unitbobPattern} put-tests <id>`));
+  assert.match(text, /press Finish on the feature page/);
+  assert.match(text, /workflows\/fix\.md/);
+  // The feature's own brief is fetched, not read off the page: the page's
+  // "Fix this" prompt is the same brief, and the LLM has no page.
+  assert.match(text, new RegExp(`${unitbobPattern} contract-prompt feature:<id> feature_<id> fix`));
+  assert.doesNotMatch(text, /on (my|your) responsibility/i);
+  assert.match(skill, /Wrap up a feature/);
+  assert.match(skill, /workflows\/finish\.md/);
+});
+
+// Spec 52-4, AC 7.2. The feature's line is the server's; the one that says
+// the checks are ready for review is the cue to offer the finish, unasked.
+test('the check workflow relays the feature line as it is and offers the finish on its cue', () => {
+  const text = workflow('check');
+
+  assert.match(text, /review them to unlock Finish/);
+  assert.match(text, /workflows\/finish\.md/);
+});
+
+// Spec 52-4, AC 1.8. Harness edits made while building are saved by the same
+// verb that first uploaded them, and `check` stops until they are.
+test('the tests workflow says harness edits are saved with put-tests, and that check waits for it', () => {
+  const text = workflow('tests');
+
+  assert.match(text, /changed on disk since they were saved/);
+  assert.match(text, /put-tests <id>/);
 });

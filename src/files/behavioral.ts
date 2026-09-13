@@ -1,8 +1,8 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { assertUnitbobPath } from './artifactPath.ts';
 import { BDD_RUN_ARTIFACTS } from '../runner/bdd.ts';
-import type { SuiteArtifact } from '../wire.ts';
+import type { FeatureSuiteItem, SuiteArtifact, SuiteIndex } from '../wire.ts';
 
 // The behavioral suite lives under its own root: the main `.feature` plus its
 // step definitions and any helper files, all under `.unitbob/behavioral/`
@@ -304,16 +304,30 @@ export function materializeBehavioralWorld(projectRoot: string, runner = 'cucumb
 // behavioral root, after checking every path is safe. Stale suite artifacts are
 // removed while the separately provisioned runner environment is preserved.
 // Returns the absolute path of the materialized main file.
+//
+// `extras` are further envelopes written in the same pass (spec 52-3, AC 3.1):
+// the checks of every red feature, beside the main suite. One clearing, then
+// every file of every envelope; a path two envelopes both hold is refused by
+// name before anything is written — the server does not issue such a union,
+// and the disk could not carry it if it did.
 export function materializeBehavioral(
   projectRoot: string,
   artifact: SuiteArtifact,
   runner: string,
+  extras: readonly SuiteArtifact[] = [],
 ): { mainPath: string } {
-  const files = [artifact, ...(artifact.support_files ?? [])];
+  const files = [artifact, ...extras].flatMap((envelope) => [envelope, ...(envelope.support_files ?? [])]);
   for (const file of files) assertUnitbobPath(file.path, BEHAVIORAL_DIR);
   const world = behavioralWorldFor(runner);
   if (world && files.some((file) => file.path === world.path)) {
     throw new Error(`${world.path} is the connector-owned World and cannot be supplied by the host artifact.`);
+  }
+  const seen = new Set<string>();
+  for (const file of files) {
+    if (seen.has(file.path)) {
+      throw new Error(`${file.path} is listed twice across the suites to materialize — one path, one file.`);
+    }
+    seen.add(file.path);
   }
 
   const behavioralRoot = join(projectRoot, BEHAVIORAL_DIR);
@@ -338,6 +352,74 @@ export function materializeBehavioral(
   return { mainPath };
 }
 
+// The main suite and the checks of every red feature, as one union on disk
+// (spec 52-3, AC 3.1), and the tags the ordinary run leaves out (3.2). The
+// main file is the main suite's when it is built, else the first feature's —
+// a union of checks alone, on a machine where the main suite is not built, is
+// legal. Null when there is nothing at all to write.
+//
+// Before anything is cleared, the feature files on disk are compared with the
+// ones the server holds (spec 52-4, AC 1.8): while a feature is being built
+// the host rewires its steps against the real code, and a union that wrote
+// the saved version over that work would lose it without a word. A difference
+// stops here, disk untouched, with the one command that saves it.
+export function materializeBehavioralUnion(
+  projectRoot: string,
+  index: SuiteIndex,
+  runner: string,
+): { mainPath: string; excludeTags: string[] } | null {
+  const changed = changedFeatureFiles(projectRoot, index.feature_suites);
+  if (changed.length > 0) throw new FeatureFilesChangedError(changed[0].feature_id, changed[0].title);
+
+  const main = index.suites.find((item) => item.suite_kind === 'behavioral' && item.status === 'ready' && item.suite_file);
+  const envelopes = [...(main?.suite_file ? [main.suite_file] : []), ...index.feature_suites.map((item) => item.suite_file)];
+  if (envelopes.length === 0) return null;
+
+  const [first, ...rest] = envelopes;
+  const { mainPath } = materializeBehavioral(projectRoot, first, runner, rest);
+  return { mainPath, excludeTags: index.feature_suites.map((item) => item.feature_tag) };
+}
+
+// The features whose checks on disk differ from the saved ones, with the
+// paths that differ: every file of the feature's envelope that is on disk,
+// compared by content. A file that is not on disk is not a change — the union
+// writes it, as it always has — and a feature with nothing on disk is not
+// listed at all.
+export function changedFeatureFiles(
+  projectRoot: string,
+  items: readonly FeatureSuiteItem[],
+): { feature_id: number; title: string; paths: string[] }[] {
+  return items.flatMap((item) => {
+    const paths = [item.suite_file, ...(item.suite_file.support_files ?? [])]
+      .filter((file) => {
+        const onDisk = join(projectRoot, file.path);
+        return existsSync(onDisk) && readFileSync(onDisk, 'utf8') !== file.content;
+      })
+      .map((file) => file.path);
+    return paths.length > 0 ? [{ feature_id: item.feature_id, title: featureTitle(item), paths }] : [];
+  });
+}
+
+// The one sentence of AC 1.8, worded here and printed wherever the union is
+// materialised — `check`, `tests-prepare` — by the shared catch in `cli.ts`.
+export class FeatureFilesChangedError extends Error {
+  readonly featureId: number;
+
+  constructor(featureId: number, title: string) {
+    super(
+      `The checks for “${title}” changed on disk since they were saved. ` +
+        `Run \`npx unitbob put-tests ${featureId}\` to save them, then try again.`,
+    );
+    this.featureId = featureId;
+  }
+}
+
+// A server from spec 52-3 sends the item without a title; the id still names
+// the feature the command below takes.
+function featureTitle(item: FeatureSuiteItem): string {
+  return item.title ?? `feature ${item.feature_id}`;
+}
+
 // Everything under the behavioral root that the next materialization will
 // delete: it wipes every top-level entry outside the runner environment and
 // writes back only the files the answer listed, so a step file the answer forgot
@@ -348,11 +430,18 @@ export function materializeBehavioral(
 // The whole root is walked, not just the directories the answer happens to use:
 // the file most likely to be forgotten is the one in a directory the answer
 // never mentions — `features/support/env.rb` is exactly that shape.
-export function filesLostOnMaterialize(projectRoot: string, artifact: SuiteArtifact, runner: string): string[] {
+export function filesLostOnMaterialize(
+  projectRoot: string,
+  artifact: SuiteArtifact,
+  runner: string,
+  extras: readonly SuiteArtifact[] = [],
+): string[] {
   const behavioralRoot = join(projectRoot, BEHAVIORAL_DIR);
   if (!existsSync(behavioralRoot)) return [];
 
-  const listed = new Set([artifact.path, ...(artifact.support_files ?? []).map((file) => file.path)]);
+  const listed = new Set(
+    [artifact, ...extras].flatMap((envelope) => [envelope.path, ...(envelope.support_files ?? []).map((file) => file.path)]),
+  );
   const kept = behavioralKeptByConnector(runner);
 
   return readdirSync(behavioralRoot)

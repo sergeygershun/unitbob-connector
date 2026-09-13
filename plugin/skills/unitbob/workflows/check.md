@@ -1,7 +1,7 @@
 Run every Unitbob contract suite for this project and report the result.
 
 Do this:
-1. `npx -y --loglevel=error unitbob@0.7.8 run` — this fetches both current
+1. `npx -y --loglevel=error unitbob@0.7.12 run` — this fetches both current
    suites (structural and behavioral), runs each `ready` one locally with its own
    runner (RSpec/Vitest/pytest for structural; `cucumber`/`@cucumber/cucumber`/
    `pytest-bdd` for behavioral — the connector picks the command, nothing to
@@ -23,6 +23,18 @@ Then report both summaries to the user in plain business language: on each map,
 which subsystems are healthy (green) and which broke (red), and for a red one,
 what business behaviour the broken seam protected. Print the server's summaries
 as-is; do not re-interpret raw test output yourself.
+
+A feature being built has checks of its own, and `run` runs them after the
+application's suites and prints one line per feature from the server —
+"Refunds for paid orders: 2 of 5 checks pass." Relay that line to the user
+exactly as it is, beside the application's summaries; it paints no lamp on
+the map and is not a red lamp to fix. If the line says
+**"review them to unlock Finish"**, the feature is ready to be wrapped up:
+offer it in the same message, without asking anything first, and continue
+with `workflows/finish.md` next to this file when the user agrees. If `run`
+stops before running with "The checks for “…” changed on disk since they
+were saved", the feature's harness was edited and not saved: run the
+`put-tests <id>` it names, then run the checks again.
 
 If a summary begins with `Unitbob could not run the …:`, that is the server's own
 answer — the suite ran but its result could not be joined to the map (e.g. the

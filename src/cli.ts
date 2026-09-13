@@ -27,6 +27,13 @@ import { suitePrepare } from './verbs/suitePrepare.ts';
 import { classifyPublication, putSuiteBuild } from './verbs/putSuiteBuild.ts';
 import { validateBuild } from './verbs/validateBuild.ts';
 import { fixPrepare } from './verbs/fixPrepare.ts';
+import { featurePrepare } from './verbs/featurePrepare.ts';
+import { knowledgePrepare } from './verbs/knowledgePrepare.ts';
+import { putKnowledge } from './verbs/putKnowledge.ts';
+import { testsPrepare } from './verbs/testsPrepare.ts';
+import { putTests } from './verbs/putTests.ts';
+import { testsReviewPrepare } from './verbs/testsReviewPrepare.ts';
+import { putFeature } from './verbs/putFeature.ts';
 import { contractPrompt } from './verbs/contractPrompt.ts';
 import { suiteReviewPrepare } from './verbs/suiteReviewPrepare.ts';
 import { acceptWorkerPlan } from './verbs/acceptWorkerPlan.ts';
@@ -65,11 +72,28 @@ Verbs:
                        then run every branch it published and report the server's results. Name a branch
                        to publish that one alone, as soon as it is finished; with no argument both are
                        expected, and one the answer never mentions is reported.
-  run-local [branch]   Internal: run the suite you just wrote, before publishing it, with the same runner
-                       that will run it afterwards. No argument runs every branch the build asked for.
+  run-local [branch] | --feature <id>
+                       Internal: run the suite you just wrote, before publishing it, with the same runner
+                       that will run it afterwards. No argument runs every branch the build asked for;
+                       --feature runs one feature's checks alone, by their tag.
   fix-prepare <id>     Internal: fetch the per-capability repair packet for one red guard (by interface_id).
-  contract-prompt <digest> <test_id> [fix|accept]
-                       Internal: fetch the fix/accept brief for one red check on either map.
+  contract-prompt <digest>|feature:<id> <test_id> [fix|accept]
+                       Internal: fetch the fix/accept brief for one red check on either map — or, with
+                       feature:<id>, the fix brief for a feature's own failing checks.
+  feature-prepare      Internal: fetch the recipe and the product capabilities, write the host
+                       feature-start request — for naming what a change may touch, before it is made.
+  put-feature          Internal: record the host's feature answer and print the link to its page.
+  knowledge-prepare    Internal: without an id, list the features that can be talked through; with
+                       one, fetch the recipe and the feature's packet and write the host request.
+  put-knowledge        Internal: send the feature's knowledge.md and print the link to its page.
+  tests-prepare <id>   Internal: fetch the feature's assignment and the recipe, put the suites on disk,
+                       and write the host request for its checks.
+  put-tests <id>       Internal: run the feature's checks and save the harness with that run as its
+                       proof (all red at first); with a review file beside the answer — publishes the review.
+                       Files the run under the saved version and prints the link to its page.
+  tests-review-prepare <id>
+                       Internal: write the independent reviewer's request for the feature's checks, once
+                       they all pass; put-tests then publishes the review it writes.
   check                Run every Unitbob contract suite locally and report.
   run                  Alias for check.
 
@@ -148,6 +172,30 @@ export async function main(argv: string[], deps: CliDeps = { ensureLinked }): Pr
         return 0;
       case 'contract-prompt':
         await contractPrompt(await linked(), args);
+        return 0;
+      case 'feature-prepare':
+        await featurePrepare(await linked(), args);
+        return 0;
+      case 'put-feature':
+        await putFeature(await linked(), args);
+        return 0;
+      case 'knowledge-prepare':
+        await knowledgePrepare(await linked(), args);
+        return 0;
+      case 'put-knowledge':
+        await putKnowledge(await linked(), args);
+        return 0;
+      case 'tests-prepare':
+        await testsPrepare(await linked(), args);
+        return 0;
+      case 'put-tests':
+        // Non-zero when the runner could not start or produced no report:
+        // nothing was sent, and the host has to read why (spec 52-3, AC 3.5).
+        // And when a review lies beside a run that is not all green (spec
+        // 52-4, AC 1.10) — nothing was sent then either.
+        return await putTests(await linked(), args);
+      case 'tests-review-prepare':
+        await testsReviewPrepare(await linked(), args);
         return 0;
       case 'run-local':
         // The one verb whose non-zero exit is not an error: a branch that failed

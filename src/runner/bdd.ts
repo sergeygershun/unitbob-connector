@@ -91,8 +91,15 @@ const CUCUMBER_LOAD_ORDER =
   'loads before `shared`. Open each capability file with an explicit require of the shared one rather ' +
   'than trusting the alphabet.';
 
+// Which scenarios a run takes, by tag, without the `@` (spec 52-3). A
+// feature's checks sit in the same directory as the main suite and are told
+// apart by their tag: the ordinary run leaves every red feature's tag out, the
+// feature's own run takes only its tag. No filter, or an empty exclusion, is
+// the command line as it always was.
+export type TagFilter = { exclude: readonly string[] } | { only: string };
+
 interface BddStrategy {
-  run: (projectRoot: string, mainPath: string) => Promise<RunnerResult>;
+  run: (projectRoot: string, mainPath: string, filter?: TagFilter) => Promise<RunnerResult>;
   loading: BddStepLoading;
 }
 
@@ -105,7 +112,7 @@ interface BddStrategy {
 // fourth runner cannot be added with only half of itself stated.
 const BDD_STRATEGIES: Readonly<Record<string, BddStrategy>> = {
   cucumber: {
-    run: (projectRoot) => runCucumberRuby(projectRoot),
+    run: (projectRoot, _mainPath, filter) => runCucumberRuby(projectRoot, filter),
     loading: {
       step_files: '*.rb',
       requirements: [
@@ -117,7 +124,7 @@ const BDD_STRATEGIES: Readonly<Record<string, BddStrategy>> = {
     },
   },
   'cucumber-js': {
-    run: (projectRoot) => runCucumberJs(projectRoot),
+    run: (projectRoot, _mainPath, filter) => runCucumberJs(projectRoot, filter),
     loading: {
       step_files: '*.js',
       requirements: [
@@ -133,7 +140,7 @@ const BDD_STRATEGIES: Readonly<Record<string, BddStrategy>> = {
     },
   },
   'pytest-bdd': {
-    run: (projectRoot, mainPath) => runPytestBdd(projectRoot, mainPath),
+    run: (projectRoot, mainPath, filter) => runPytestBdd(projectRoot, mainPath, filter),
     loading: {
       step_files: 'test_*.py',
       requirements: [
@@ -150,12 +157,31 @@ const BDD_STRATEGIES: Readonly<Record<string, BddStrategy>> = {
   },
 };
 
-export function runBddSuite(projectRoot: string, runner: string, mainPath: string): Promise<RunnerResult> {
+export function runBddSuite(
+  projectRoot: string,
+  runner: string,
+  mainPath: string,
+  filter?: TagFilter,
+): Promise<RunnerResult> {
   const strategy = strategyFor(runner);
   if (!strategy) {
     return Promise.reject(new Error(`Unsupported BDD runner "${runner}" — rebuild the behavioral suite.`));
   }
-  return strategy.run(projectRoot, mainPath);
+  return strategy.run(projectRoot, mainPath, filter);
+}
+
+// The filter as a tag expression. Both Cucumbers read `@tag`; pytest-bdd turns
+// a tag into a marker of the same name and reads `-m`, where the `@` would be
+// a syntax error. Empty for no filter, so the caller adds no flag at all.
+function tagExpression(filter: TagFilter | undefined, prefix: string): string {
+  if (!filter) return '';
+  if ('only' in filter) return `${prefix}${filter.only}`;
+  return filter.exclude.map((tag) => `not ${prefix}${tag}`).join(' and ');
+}
+
+function tagArgs(filter: TagFilter | undefined, flag: string, prefix: string): string[] {
+  const expression = tagExpression(filter, prefix);
+  return expression ? [flag, expression] : [];
 }
 
 // How this runner loads step files, for whoever has to write one. Null for a
@@ -175,7 +201,7 @@ function strategyFor(runner: string): BddStrategy | null {
 // Ruby: `cucumber` with the built-in message formatter. The features and step
 // definitions both live under the behavioral root; --require points at the step
 // definitions so only the Unitbob bundle loads.
-async function runCucumberRuby(projectRoot: string): Promise<RunnerResult> {
+async function runCucumberRuby(projectRoot: string, filter?: TagFilter): Promise<RunnerResult> {
   const features = join(BEHAVIORAL_ROOT, 'features');
   const steps = join(BEHAVIORAL_ROOT, STEP_DEFINITIONS);
   const sidecarGemfile = join(projectRoot, BEHAVIORAL_GEMFILE);
@@ -184,7 +210,10 @@ async function runCucumberRuby(projectRoot: string): Promise<RunnerResult> {
   }
 
   const command = 'bundle';
-  const args = ['exec', 'cucumber', features, '--require', steps, '--format', 'message', '--out', CUCUMBER_REPORT];
+  const args = [
+    'exec', 'cucumber', features, '--require', steps, '--format', 'message', '--out', CUCUMBER_REPORT,
+    ...tagArgs(filter, '--tags', '@'),
+  ];
   const survivor = clearReport(join(projectRoot, CUCUMBER_REPORT));
 
   const run = await runInProject(projectRoot, command, args, {
@@ -207,7 +236,7 @@ function missingRunner(name: string): Error {
 
 // JS/TS: `@cucumber/cucumber` (cucumber-js) with the message formatter written
 // to a file.
-async function runCucumberJs(projectRoot: string): Promise<RunnerResult> {
+async function runCucumberJs(projectRoot: string, filter?: TagFilter): Promise<RunnerResult> {
   const features = join(BEHAVIORAL_ROOT, 'features');
   const steps = join(BEHAVIORAL_ROOT, STEP_DEFINITIONS, '**', '*');
   const command = `${BEHAVIORAL_ROOT}/node_modules/.bin/cucumber-js`;
@@ -221,6 +250,7 @@ async function runCucumberJs(projectRoot: string): Promise<RunnerResult> {
     steps,
     '--format',
     `message:${CUCUMBER_REPORT}`,
+    ...tagArgs(filter, '--tags', '@'),
   ];
   const survivor = clearReport(join(projectRoot, CUCUMBER_REPORT));
 
@@ -235,7 +265,7 @@ async function runCucumberJs(projectRoot: string): Promise<RunnerResult> {
 // Python: pytest driving pytest-bdd, with the connector's reporter plugin. The
 // plugin writes the JSON report; `-c` isolates the run from the project's own
 // addopts. The runner command is connector-owned.
-async function runPytestBdd(projectRoot: string, mainPath: string): Promise<RunnerResult> {
+async function runPytestBdd(projectRoot: string, mainPath: string, filter?: TagFilter): Promise<RunnerResult> {
   mkdirSync(join(projectRoot, BEHAVIORAL_ROOT), { recursive: true });
   writeFileSync(join(projectRoot, PYTEST_INI_FILE), PYTEST_INI);
   writeFileSync(join(projectRoot, PYTEST_BDD_PLUGIN_FILE), PYTEST_BDD_PLUGIN);
@@ -251,7 +281,15 @@ async function runPytestBdd(projectRoot: string, mainPath: string): Promise<Runn
   // `--rootdir .`, not the absolute root: the working directory is the project
   // root in every place, and an absolute host path would name a directory that
   // does not exist wherever the run actually happens.
-  const args = ['-m', 'pytest', '-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', '.'];
+  // The marker filter goes after `--rootdir`, so the two arguments the harness
+  // loading depends on keep their place at the end of the unfiltered command.
+  // pytest-bdd hangs a marker named after each tag on the scenario; the
+  // connector's ini registers none, and an unregistered marker is a warning,
+  // not an error (spec 52-3, non-goal).
+  const args = [
+    '-m', 'pytest', '-c', PYTEST_INI_FILE, '-p', 'no:cacheprovider', '-p', pluginModule(), stepsDir, '--rootdir', '.',
+    ...tagArgs(filter, '-m', ''),
+  ];
   const survivor = clearReport(join(projectRoot, PYTEST_BDD_REPORT));
 
   const run = await runInProject(projectRoot, command, args, {

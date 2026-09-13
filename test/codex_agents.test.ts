@@ -70,6 +70,17 @@ test('the reviewer role carries the review schema the upload actually requires',
   assert.match(claude, /never\s+downgrades anything/i);
 });
 
+// Spec 52-4, AC 1.11. The same reviewer reads a feature's checks; what each
+// scenario promises is written in `knowledge.md`, not in a capability
+// description, and the request says where that file is.
+test('the reviewer role reads a feature’s promises from knowledge.md when the request names it', () => {
+  const claude = readFileSync(`${root}/plugin/agents/suite-reviewer.md`, 'utf8');
+
+  assert.match(claude, /`knowledge_path`/);
+  assert.match(claude, /`Scenarios`/);
+  assert.match(claude, /tests-review-request\.json/);
+});
+
 test('Codex fact finder is cheap, read-only, and bounded', () => {
   const finder = codexAgent('fact-finder');
 

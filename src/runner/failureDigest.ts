@@ -69,6 +69,60 @@ export function reportedFailures(runner: string, report: string): ReportedFailur
   return extract(runner, report);
 }
 
+// Spec 52-4, AC 1.10. The same parse, read for a third question: how many of
+// a feature's scenarios passed and how many did not. `put-tests` decides from
+// it which proof to attach — all red is the red run, all green with a review
+// is the review, anything else is no proof — and whether a review may be sent
+// at all. The number reaches a sentence on this machine and the choice of a
+// field; the server checks whatever proof it is sent against the report
+// itself. Only the two behavioral shapes have scenarios to count; a report
+// that cannot be read is no tally, never a green one.
+export function scenarioTally(runner: string, report: string): { passed: number; failed: number } | null {
+  if (!report.trim()) return null;
+  const outcomes = scenarioOutcomes(runner, report);
+  if (outcomes === null) return null;
+  const failed = outcomes.filter((passed) => !passed).length;
+  return { passed: outcomes.length - failed, failed };
+}
+
+// One entry per scenario, true when it passed. Cucumber emits one
+// `testCaseStarted` per attempt when a scenario is retried, so the rows are
+// keyed by the test case and the last attempt is the one that counts — the
+// one the run ended on.
+function scenarioOutcomes(runner: string, report: string): boolean[] | null {
+  switch (runner) {
+    case 'cucumber':
+    case 'cucumber-js': {
+      const envelopes: Record<string, unknown>[] = [];
+      for (const line of report.split('\n')) {
+        if (!line.trim()) continue;
+        const parsed = parseObject(line);
+        if (!parsed) return null;
+        envelopes.push(parsed);
+      }
+      const failedRuns = new Set<string>();
+      for (const envelope of envelopes) {
+        const finished = envelope.testStepFinished as Record<string, unknown> | undefined;
+        const status = text((finished?.testStepResult as Record<string, unknown> | undefined)?.status);
+        if (finished && status !== 'PASSED' && status !== 'SKIPPED') failedRuns.add(text(finished.testCaseStartedId));
+      }
+      const lastAttempt = new Map<string, string>();
+      for (const envelope of envelopes) {
+        const started = envelope.testCaseStarted as Record<string, unknown> | undefined;
+        if (started) lastAttempt.set(text(started.testCaseId), text(started.id));
+      }
+      return [...lastAttempt.values()].map((startedId) => !failedRuns.has(startedId));
+    }
+    case 'pytest-bdd': {
+      const data = parseObject(report);
+      if (!Array.isArray(data?.scenarios)) return null;
+      return rows(data.scenarios).map((scenario) => text(scenario.status) === 'passed');
+    }
+    default:
+      return null;
+  }
+}
+
 // One hash for one set. Same set, same hash, on any machine and in any order.
 export function digestOf(failures: Failure[]): string {
   return createHash('sha256').update(JSON.stringify(failures)).digest('hex');

@@ -286,6 +286,7 @@ test('the pytest-bdd plugin hangs off the public pytest-bdd hooks and writes JSO
     'pytest_bdd_before_scenario',
     'pytest_bdd_after_step',
     'pytest_bdd_step_error',
+    'pytest_bdd_step_func_lookup_error',
     'pytest_bdd_after_scenario',
   ]) {
     assert.match(PYTEST_BDD_PLUGIN, new RegExp(`def ${hook}\\(`));
@@ -317,4 +318,57 @@ test('the pytest run keeps the two arguments that make the connector-owned conft
   // And the harness path stays below the rootdir and above the collected
   // directory — the only place pytest would pick it up from.
   assert.equal(behavioralWorldFor('pytest-bdd')?.path, '.unitbob/behavioral/conftest.py');
+});
+
+// Spec 52-3, AC 3.2 and 3.3. A feature's checks live in the same directory as
+// the main suite, told apart by a tag: the ordinary run leaves every red
+// feature's tag out, the feature's own run takes only its tag. Both Cucumbers
+// take `--tags`, pytest-bdd turns tags into markers and takes `-m`.
+test('cucumber runs with the feature tags excluded, or with one tag only', async () => {
+  const projectRoot = tmpProject();
+  writeFileSync(join(projectRoot, '.unitbob', 'behavioral', 'Gemfile'), 'gem "cucumber"\n');
+  const fakeBin = fakeBinDir('bundle', `mkdir -p .unitbob/behavioral; printf '{}' > .unitbob/behavioral/cucumber_messages.ndjson`);
+
+  await withPath(fakeBin, async () => {
+    const excluded = await runBddSuite(projectRoot, 'cucumber', 'x.feature', { exclude: ['unitbob_feature_12', 'unitbob_feature_15'] });
+    assert.deepEqual(excluded.args.slice(-2), ['--tags', 'not @unitbob_feature_12 and not @unitbob_feature_15']);
+
+    const only = await runBddSuite(projectRoot, 'cucumber', 'x.feature', { only: 'unitbob_feature_12' });
+    assert.deepEqual(only.args.slice(-2), ['--tags', '@unitbob_feature_12']);
+
+    const plain = await runBddSuite(projectRoot, 'cucumber', 'x.feature');
+    const empty = await runBddSuite(projectRoot, 'cucumber', 'x.feature', { exclude: [] });
+    assert.ok(!plain.args.includes('--tags'), 'no filter, no flag');
+    assert.deepEqual(empty.args, plain.args, 'an empty exclusion is no filter');
+  });
+});
+
+test('cucumber-js runs with the feature tags excluded, or with one tag only', async () => {
+  const projectRoot = tmpProject();
+  const sidecarBin = '.unitbob/behavioral/node_modules/.bin/cucumber-js';
+  writeExecutable(join(projectRoot, sidecarBin), `mkdir -p .unitbob/behavioral; printf '{}' > .unitbob/behavioral/cucumber_messages.ndjson`);
+
+  const excluded = await runBddSuite(projectRoot, 'cucumber-js', 'x.feature', { exclude: ['unitbob_feature_12'] });
+  assert.deepEqual(excluded.args.slice(-2), ['--tags', 'not @unitbob_feature_12']);
+
+  const only = await runBddSuite(projectRoot, 'cucumber-js', 'x.feature', { only: 'unitbob_feature_12' });
+  assert.deepEqual(only.args.slice(-2), ['--tags', '@unitbob_feature_12']);
+
+  const plain = await runBddSuite(projectRoot, 'cucumber-js', 'x.feature');
+  assert.ok(!plain.args.includes('--tags'));
+});
+
+test('pytest-bdd runs with the feature markers excluded, or with one marker only', async () => {
+  const projectRoot = tmpProject();
+  fakeSidecarVenv(projectRoot);
+
+  const excluded = await runBddSuite(projectRoot, 'pytest-bdd', 'x.feature', { exclude: ['unitbob_feature_12', 'unitbob_feature_15'] });
+  assert.deepEqual(excluded.args.slice(-2), ['-m', 'not unitbob_feature_12 and not unitbob_feature_15']);
+
+  const only = await runBddSuite(projectRoot, 'pytest-bdd', 'x.feature', { only: 'unitbob_feature_12' });
+  assert.deepEqual(only.args.slice(-2), ['-m', 'unitbob_feature_12']);
+
+  const plain = await runBddSuite(projectRoot, 'pytest-bdd', 'x.feature');
+  assert.ok(!plain.args.includes('-m') || plain.args.indexOf('-m') === 0, 'only the `-m pytest` of the command itself');
+  assert.deepEqual(plain.args.slice(-2), ['--rootdir', '.']);
 });

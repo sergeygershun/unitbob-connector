@@ -1,12 +1,12 @@
 import type { Config } from '../config.ts';
 import { ensureUnitbobIgnored, ignoreExclusions, requireGraphify, runGraphifyExtractKeyless } from '../proc.ts';
-import { readFreshGraph, writeMapBuildRequest } from '../files/mapBuild.ts';
+import { readFreshGraph, writeMapBuildRequest, type ExistingCapability } from '../files/mapBuild.ts';
 import {
   describeRouteInventory,
   extractRouteInventory,
   type RouteInventory,
 } from '../surfaces/routeInventory.ts';
-import { Wire, type Recipe } from '../wire.ts';
+import { Wire, WireError, type FeatureListItem, type Recipe } from '../wire.ts';
 
 interface MapPrepareDeps {
   requireGraphify: () => Promise<void>;
@@ -14,7 +14,9 @@ interface MapPrepareDeps {
   runGraphifyExtractKeyless: (projectRoot: string) => Promise<{ stdout: string; stderr: string; code: number | null }>;
   extractRouteInventory: (projectRoot: string) => Promise<RouteInventory>;
   getRecipe: (name: string) => Promise<Recipe>;
+  listFeatures: () => Promise<{ features: FeatureListItem[]; empty_text: string }>;
   stdout: { write: (chunk: string) => unknown };
+  stderr: { write: (chunk: string) => unknown };
 }
 
 export async function mapPrepare(config: Config, _args: string[] = [], deps?: Partial<MapPrepareDeps>): Promise<void> {
@@ -25,7 +27,9 @@ export async function mapPrepare(config: Config, _args: string[] = [], deps?: Pa
     runGraphifyExtractKeyless,
     extractRouteInventory,
     getRecipe: (name) => wire.getRecipe(name),
+    listFeatures: () => wire.listFeatures(),
     stdout: process.stdout,
+    stderr: process.stderr,
     ...deps,
   };
 
@@ -68,11 +72,12 @@ export async function mapPrepare(config: Config, _args: string[] = [], deps?: Pa
   actual.stdout.write('Asking this project for the addresses it declares (this boots the application)…\n');
   const inventory = await actual.extractRouteInventory(config.projectRoot);
 
-  const [decompose, relate, extractSurfaces, decomposeSurfaces] = await Promise.all([
+  const [decompose, relate, extractSurfaces, decomposeSurfaces, existing] = await Promise.all([
     actual.getRecipe('decompose'),
     actual.getRecipe('relate'),
     actual.getRecipe('extract_surfaces'),
     actual.getRecipe('decompose_surfaces'),
+    existingCapabilities(actual),
   ]);
   const packet = writeMapBuildRequest(
     config.projectRoot,
@@ -83,6 +88,7 @@ export async function mapPrepare(config: Config, _args: string[] = [], deps?: Pa
       decompose_surfaces: decomposeSurfaces,
     },
     inventory.status === 'written' ? inventory.path : undefined,
+    existing,
   );
 
   actual.stdout.write(`Map build request written to ${packet.project_root}/.unitbob/map-build/request.json\n`);
@@ -93,4 +99,27 @@ export async function mapPrepare(config: Config, _args: string[] = [], deps?: Pa
       `${packet.surface_output_path} (recipes.extract_surfaces → ${packet.surfaces_path}, then ` +
       'recipes.decompose_surfaces) — then run `unitbob put-map-build`.\n',
   );
+}
+
+// The capabilities finished features added to the map (spec 52-4, AC 5.1):
+// by id, title and the intent as said — no addresses, the recipe matches by
+// meaning. Only finished features: an open one is not on the map yet. A
+// server older than the fields sends rows without a capability id, and one
+// older than the route answers 404; both read as none, quietly, and the
+// recipe skips its paragraph (AC 7.3). Any other failure of the list is not
+// a reason to stop a map build either — but it is said, on stderr, because a
+// map built without the finished features' ids is one that may redraw them.
+async function existingCapabilities(d: MapPrepareDeps): Promise<ExistingCapability[]> {
+  let features: FeatureListItem[];
+  try {
+    features = (await d.listFeatures()).features;
+  } catch (err) {
+    if (!(err instanceof WireError && err.status === 404)) {
+      d.stderr.write(`Could not list finished features — the map is built without them: ${(err as Error).message}\n`);
+    }
+    return [];
+  }
+  return features
+    .filter((feature) => feature.status === 'done' && typeof feature.capability_id === 'string')
+    .map((feature) => ({ id: feature.capability_id!, title: feature.title, description: feature.intent ?? '' }));
 }

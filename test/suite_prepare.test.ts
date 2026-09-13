@@ -37,6 +37,7 @@ const suitePrepare = (cfg: Config, args: string[], deps?: Partial<SuitePrepareDe
     worldProbe: okWorld,
     ensureStructuralRunner: okRunner,
     confirmRunner: okConfirm,
+    getSuiteIndex: async () => ({ suites: [], feature_suites: [] }),
     ...deps,
   });
 
@@ -1399,4 +1400,33 @@ test('a first build on a machine moves a materialized suite, and names only the 
   assert.equal(existsSync(join(structural, 'st-accounts.test.ts')), false);
   assert.match(written.join(''), /The previous run's 2 structural files moved to/);
   assert.doesNotMatch(written.join(''), /behavioral files? moved/);
+});
+
+// Spec 52-3, AC 3.2. The tags of every red feature's checks go into the build
+// request, so `run-local` without a flag and the first run after
+// `put-suite-build` leave them out — neither asks the server.
+test('suite-prepare writes the feature tags to exclude into request.json, and none when there are none', async () => {
+  const projectRoot = tmpProject();
+  const deps = {
+    precheck: okPrecheck, bootCheck: okBoot, ensureRunner: okRunner, runnerEnvelope: okEnvelope,
+    getRecipe: async (name: string) => ({ name, version: 'v', text: 't' }),
+    getSuitePacketsBatch: async () => packets(),
+    stdout: { write: () => true },
+  };
+
+  await suitePrepare(config(projectRoot), ['--no-known-defect'], {
+    ...deps,
+    getSuiteIndex: async () => ({
+      suites: [],
+      feature_suites: [
+        { feature_id: 12, feature_tag: 'unitbob_feature_12', suite_digest: 'a', suite_file: { path: 'p', content: 'c' }, runner_manifest: { runner: 'cucumber' } },
+        { feature_id: 15, feature_tag: 'unitbob_feature_15', suite_digest: 'b', suite_file: { path: 'q', content: 'c' }, runner_manifest: { runner: 'cucumber' } },
+      ],
+    }),
+  });
+  assert.deepEqual(readSuiteBuildRequest(projectRoot).exclude_feature_tags, ['unitbob_feature_12', 'unitbob_feature_15']);
+
+  const bare = tmpProject();
+  await suitePrepare(config(bare), ['--no-known-defect'], deps);
+  assert.deepEqual(readSuiteBuildRequest(bare).exclude_feature_tags, []);
 });
