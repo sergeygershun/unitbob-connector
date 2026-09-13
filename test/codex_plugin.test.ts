@@ -9,6 +9,9 @@ const manifest = JSON.parse(
     'utf8',
   ),
 ) as Record<string, unknown>;
+const packageVersion = (
+  JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { version: string }
+).version;
 const skill = readFileSync(
   fileURLToPath(new URL('../plugin/skills/unitbob/SKILL.md', import.meta.url)),
   'utf8',
@@ -51,7 +54,9 @@ test('Codex asks before every run whose native per-agent ceiling is unavailable 
 test('Codex setup installs the shared plugin and the three discoverable roles', () => {
   assert.match(readme, /codex plugin marketplace add sergeygershun\/unitbob-connector/);
   assert.match(readme, /codex plugin add unitbob@unitbob/);
-  assert.match(readme, /npx -y unitbob@0\.4\.4 codex-install/);
+  // The README's one pin tracks the release like every plugin pin does; a
+  // literal here left it at 0.4.4 through eight bumps.
+  assert.ok(readme.includes(`npx -y unitbob@${packageVersion} codex-install`), `README pins codex-install to ${packageVersion}`);
   assert.match(readme, /start a new .*Codex thread/i);
   assert.match(readme, /version 0\.145\.0 accepts.*custom-agent TOML/is);
   assert.match(readme, /No Codex version is currently\s+qualified.*native per-agent ceiling/is);
